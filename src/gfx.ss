@@ -61,6 +61,29 @@
   (let-values ([(r g b a) (color-rgba c)])
     (rgb (exact (round (* r 255))) (exact (round (* g 255))) (exact (round (* b 255))))))
 
+;; Hue in degrees, saturation and lightness in [0, 1].
+(define (color->hsl c)
+  (let-values ([(r g b a) (color-rgba c)])
+    (let* ([hi (max r g b)] [lo (min r g b)] [l (/ (+ hi lo) 2)] [d (- hi lo)])
+      (if (< d 1e-9)
+          (values 0.0 0.0 l)
+          (values (cond [(= hi r) (* 60 (mod (/ (- g b) d) 6))]
+                        [(= hi g) (* 60 (+ (/ (- b r) d) 2))]
+                        [else (* 60 (+ (/ (- r g) d) 4))])
+                  (/ d (- 1 (abs (- (* 2 l) 1))))
+                  l)))))
+
+(define (hsl->color h s l)
+  (let* ([c (* (- 1 (abs (- (* 2 l) 1))) s)]
+         [hp (/ (mod h 360) 60)]
+         [x (* c (- 1 (abs (- (mod hp 2) 1))))]
+         [m (- l (/ c 2))])
+    (define (byte v) (clamp (exact (round (* 255 (+ v m)))) 0 255))
+    (let-values ([(r g b) (cond [(< hp 1) (values c x 0)] [(< hp 2) (values x c 0)]
+                                [(< hp 3) (values 0 c x)] [(< hp 4) (values 0 x c)]
+                                [(< hp 5) (values x 0 c)] [else (values c 0 x)])])
+      (rgb (byte r) (byte g) (byte b)))))
+
 ;; Blend two colours: t=0 gives c1, t=1 gives c2.
 (define (mix c1 c2 t)
   (let-values ([(r1 g1 b1 a1) (color-rgba c1)] [(r2 g2 b2 a2) (color-rgba c2)])
@@ -116,18 +139,22 @@
 (define (font-line-height f) (vector-ref (font-metrics f) 2))
 (define (font-char-width f) (vector-ref (font-metrics f) 3))
 
+;; The standard fonts, built from the theme's font keys.
 (define (install-default-fonts!)
-  (define-font! 'mono "monospace" 14)
-  (define-font! 'mono-small "monospace" 12)
-  (define-font! 'mono-bold "monospace" 14 'bold)
-  (define-font! 'ui "sans-serif" 13)
-  (define-font! 'ui-bold "sans-serif" 13 'bold)
-  (define-font! 'ui-small "sans-serif" 11)
-  (define-font! 'title "sans-serif" 13 'bold)
-  (define-font! 'big "sans-serif" 26 'bold)
-  (define-font! 'huge "serif" 360 'bold))
+  (let ([ui (theme 'ui-font)] [ui-size (theme 'ui-font-size)]
+        [mono (theme 'mono-font)] [mono-size (theme 'mono-font-size)])
+    (define-font! 'mono mono mono-size)
+    (define-font! 'mono-small mono (- mono-size 2))
+    (define-font! 'mono-bold mono mono-size 'bold)
+    (define-font! 'ui ui ui-size)
+    (define-font! 'ui-bold ui ui-size 'bold)
+    (define-font! 'ui-small ui (- ui-size 2))
+    (define-font! 'title ui ui-size 'bold)
+    (define-font! 'heading ui (+ ui-size 5) 'bold)
+    (define-font! 'big ui (* 2 ui-size) 'bold)
+    (define-font! 'huge "serif" 360 'bold)))
 
-(when (= 0 (hashtable-size *fonts*)) (install-default-fonts!))
+(unless (hashtable-contains? *fonts* 'heading) (install-default-fonts!))
 
 ;;; ------------------------------------------------------------------ text
 

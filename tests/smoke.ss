@@ -13,6 +13,10 @@
 (define out-dir
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
 
+;; Never touch the user's real theme file.
+(set! *theme-file* (string-append out-dir "/theme.ss"))
+(when (file-exists? *theme-file*) (delete-file *theme-file*))
+
 (define failures 0)
 
 (define-syntax check
@@ -35,10 +39,29 @@
   (map cdr (reverse (repl-lines (repl-of win)))))
 
 (define (wait-for pred)
-  (let loop ([i 0])
-    (cond [(pred) #t]
-          [(> i 400) #f]
-          [else (schevana-step! 5) (loop (+ i 1))])))
+  (let ([deadline (+ (now-ms) 3000)])
+    (let loop ()
+      (cond [(pred) #t]
+            [(> (now-ms) deadline) #f]
+            [else (schevana-step! 5) (loop)]))))
+
+;; Click (or drag across) a ui widget by its id, with real mouse events.
+(define (ui-point win id frac)
+  (let ([r (ui-find (window-ref win 'ui) id)])
+    (unless r (errorf 'ui-point "no widget ~s" id))
+    (let-values ([(cx cy cw ch) (content-rect win)])
+      (values (exact (round (+ cx (ui-region-x r) 8 (* frac (- (ui-region-w r) 16)))))
+              (exact (round (+ cy (ui-region-y r) (/ (ui-region-h r) 2))))))))
+
+(define (click-ui! win id)
+  (let-values ([(x y) (ui-point win id 0.5)])
+    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left))
+    (steps 2)))
+
+(define (drag-ui! win id frac)
+  (let-values ([(x0 y) (ui-point win id 0.5)] [(x1 y1) (ui-point win id frac)])
+    (inject! `(mouse-down ,x0 ,y left 1) `(mouse-move ,x1 ,y) `(mouse-up ,x1 ,y left))
+    (steps 2)))
 
 (schevana-boot! 'headless 1280 800)
 (clock)
@@ -142,6 +165,63 @@
 (steps 3)
 (screenshot (string-append out-dir "/tiled.png"))
 (reset-theme!)
+
+;; Settings: every control is a theme key; changes apply live and persist.
+(for-each close-window! (windows))
+(define s (settings))
+(steps 2)
+(check "settings opens" (and s (not (window-error s))))
+(check "settings is single-instance" (eq? s (settings)))
+(click-ui! s '(preset nord))
+(check "clicking a preset applies it" (and (= (theme 'accent) #x88c0d0) (eq? (theme 'preset) 'nord)))
+(screenshot (string-append out-dir "/settings-theme.png"))
+(click-ui! s '(accent orange))
+(check "accent swatch sets the accent" (= (theme 'accent) #xd08770))
+(click-ui! s '(tab colours))
+(click-ui! s '(colour accent))
+(click-ui! s 'hex)
+(type! "e06c75")
+(press! 'return)
+(steps 2)
+(check "typing a hex colour sets it" (= (theme 'accent) #xe06c75))
+(check "accent edits update derived keys" (= (theme 'window-border-focus) (mix (theme 'bg-3) #xe06c75 0.45)))
+(drag-ui! s 'lightness 0.25)
+(check "lightness slider darkens it"
+       (let-values ([(h sat l) (color->hsl (theme 'accent))]) (< (abs (- l 0.25)) 0.02)))
+(screenshot (string-append out-dir "/settings-colours.png"))
+(click-ui! s '(tab layout))
+(drag-ui! s '(metric corner-radius) 0)
+(check "layout slider sets a metric" (= 0 (theme 'corner-radius)))
+(drag-ui! s '(metric title-height) 1)
+(check "title bar height follows" (= 44 (theme 'title-height)))
+(screenshot (string-append out-dir "/settings-layout.png"))
+(click-ui! s '(tab fonts))
+(click-ui! s '(ui-font "serif"))
+(drag-ui! s '(metric mono-font-size) 1)
+(check "font settings rebuild fonts"
+       (and (equal? (font-family (get-font 'ui)) "serif") (= 22 (font-size (get-font 'mono)))))
+(screenshot (string-append out-dir "/settings-fonts.png"))
+(check "settings never crashed" (not (window-error s)))
+(check "changes are saved shortly after" (wait-for (lambda () (file-exists? *theme-file*))))
+(let ([saved-accent (theme 'accent)])
+  (reset-theme!)
+  (check "reset restores defaults" (= (theme 'corner-radius) (theme-default 'corner-radius)))
+  (load-saved-theme!)
+  (check "saved theme loads back"
+         (and (= (theme 'accent) saved-accent) (= 0 (theme 'corner-radius)) (eq? (theme 'preset) 'nord)
+              (equal? (theme 'ui-font) "serif"))))
+(apply-theme-preset! 'paper)
+(set-theme! 'title-height 30)
+(set-theme! 'mono-font-size 14)
+(set-theme! 'ui-font "sans-serif")
+(repl)
+(clock)
+(move-window! (find-window 'clock) 900 300)
+(click-ui! s '(tab theme))
+(steps 2)
+(screenshot (string-append out-dir "/paper.png"))
+(reset-theme!)
+(close-window! s)
 
 ;; Reloading the sources keeps the world's state.
 (let ([n (length (windows))])

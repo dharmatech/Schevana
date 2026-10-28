@@ -8,7 +8,8 @@
 
 (define *schevana-sources*
   '("src/ffi.ss" "src/base.ss" "src/theme.ss" "src/gfx.ss" "src/proc.ss"
-    "src/host.ss" "src/wm.ss" "src/shell.ss" "src/system.ss"
-    "apps/repl.ss" "apps/clock.ss" "apps/life.ss" "apps/sketch.ss" "apps/monitor.ss"))
+    "src/host.ss" "src/wm.ss" "src/shell.ss" "src/ui.ss" "src/system.ss"
+    "apps/repl.ss" "apps/clock.ss" "apps/life.ss" "apps/sketch.ss" "apps/monitor.ss"
+    "apps/settings.ss"))
 
 (for-each (lambda (f) (load (string-append *schevana-root* "/" f))) *schevana-sources*)

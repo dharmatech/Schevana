@@ -5,10 +5,15 @@
 
 (defvar *wallpaper* #f)   ; (layer . cache-key)
 
+;; Theme keys the wallpaper depends on. If your own draw-wallpaper uses
+;; other keys, add them here.
+(define wallpaper-theme-keys
+  '(desktop-top desktop-bottom accent accent-2 watermark ui-font ui-font-size))
+
 ;; The wallpaper is drawn once into a layer and re-blitted every frame.
-;; Redefining draw-wallpaper (or changing the theme) repaints it.
+;; Redefining draw-wallpaper (or changing its theme keys) repaints it.
 (define (draw-desktop)
-  (let ([key (list *canvas-w* *canvas-h* *scale* *theme-version* draw-wallpaper)])
+  (let ([key (list *canvas-w* *canvas-h* *scale* (map theme wallpaper-theme-keys) draw-wallpaper)])
     (unless (and *wallpaper* (equal? (cdr *wallpaper*) key))
       (when *wallpaper* (free-layer! (car *wallpaper*)))
       (let ([l (make-layer* *canvas-w* *canvas-h*)])

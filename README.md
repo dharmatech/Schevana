@@ -22,7 +22,9 @@ installed already on a Linux desktop).
 ./schevana --size 1600x1000 --eval '(life)'
 ```
 
-`~/.schevana.ss` is loaded at boot if it exists, like `.emacs`.
+`~/.schevana.ss` is loaded at boot if it exists, like `.emacs`. The look
+you choose in the Settings app is saved to `~/.schevana-theme.ss` (plain
+data, never evaluated) and loaded at boot too.
 
 | Key | Action |
 | --- | --- |
@@ -44,6 +46,8 @@ Ctrl+V pastes.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolour everything
+(apply-theme-preset! 'paper)               ; or: tokyo-night catppuccin nord gruvbox
+(set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
 (bind-key! '(ctrl shift #\l) life)
 (spawn "busy" (lambda () (let loop () (loop))))   ; watch it in (monitor); Ctrl+C or kill!
@@ -64,13 +68,15 @@ Define a new app and it appears in the launcher immediately:
 ## Architecture
 
 ```
-apps/        repl  clock  life  sketch  monitor      ← ordinary procedures
+apps/        repl  clock  life  sketch  monitor  settings   ← ordinary procedures
 src/system   main loop, timers, inject!, boot, reload!
+src/ui       immediate-mode widgets: button, slider, segmented, clickable area
 src/shell    wallpaper, top bar + status segments, taskbar, menus, toasts
 src/wm       window records, z-order, focus, hit testing, drag/resize, dispatch
 src/proc     processes + watchdog (Chez engines)
 src/host     SDL2 window ⇄ Scheme event lists   |  headless mode
 src/gfx      immediate-mode drawing API, colours, fonts, layers
+src/theme    colours, metrics and fonts as data; presets; save/load
 src/ffi      the only file that knows about C (SDL2 + Cairo)
 ```
 
@@ -96,6 +102,10 @@ Decisions worth keeping in mind for the real design:
   `(mouse-down 120 40 left 1)` and `(key-down #\w (ctrl shift))`.
   `(inject! ...)` feeds the same lists in, which is how the tests drive the
   world.
+- **Settings are theme keys.** Colours, sizes and fonts all live in one
+  table. The Settings app is only a front end to `set-theme!`, so anything
+  it does can be scripted from the REPL, and the saved file is just the
+  keys that differ from the defaults.
 - **Immediate-mode drawing, full redraw on change.** Anything can call
   `(invalidate!)`, and the next frame repaints everything into a Cairo image
   that becomes an SDL texture. The wallpaper is cached in a layer. A typical
@@ -109,7 +119,9 @@ scheme --script tests/smoke.ss /tmp
 
 This boots the world headlessly, types into the REPL, defines an app,
 crashes windows, runs away in loops, drags and resizes windows, uses the
-launcher, reloads the sources, and writes screenshots to the given folder.
+launcher, clicks and drags through every Settings tab (checking the theme
+file round-trips), reloads the sources, and writes screenshots to the given
+folder. It never touches your real `~/.schevana-theme.ss`.
 
 ## Known gaps and open questions
 
@@ -117,9 +129,10 @@ launcher, reloads the sources, and writes screenshots to the given folder.
   other yet. First-class environments (`copy-environment`) are an option.
 - Full-screen redraw and no damage tracking. Per-window layers would make
   the cost depend on what changed instead of on screen size.
-- No widget toolkit (buttons, text fields, lists, layout) yet. That is the
-  "stable GUI API" question: immediate-mode procedures like today, or
-  retained widget trees described as data?
+- Only a minimal widget kit (`src/ui.ss`, written for Settings): no text
+  fields, lists or layout yet. That is the "stable GUI API" question:
+  keep growing these immediate-mode procedures, or describe retained
+  widget trees as data?
 - REPL lacks selection and copy, and there is no text editor app yet.
 - No persistence. Windows and state vanish on exit (`fasl-write` of app
   state is a natural first step).

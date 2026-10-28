@@ -45,6 +45,9 @@
     [(eq? (car plist) key) (cadr plist)]
     [else (plist-ref (cddr plist) key default)]))
 
+(define (plist-keys plist)
+  (if (or (null? plist) (null? (cdr plist))) '() (cons (car plist) (plist-keys (cddr plist)))))
+
 (define (condition->string c)
   (call-with-string-output-port
    (lambda (p)

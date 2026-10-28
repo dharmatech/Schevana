@@ -19,6 +19,7 @@
   (cond
     [(null? args)
      (schevana-boot! mode (car size) (cdr size))
+     (load-saved-theme!)
      (load-user-init!)
      (let ([w (screen-w)])
        (clock)
