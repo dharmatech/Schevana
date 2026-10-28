@@ -206,13 +206,39 @@
                    (unless (= nv (theme key)) (settings-set! key nv)))))
     (draw-text (+ x 180 sw 18) (+ y 4) (format "~a px" v) 'text-dim 'ui)))
 
+(define (draw-style-card ui x y w h style selected?)
+  (let ([name (window-style-name style)] [label-h 28] [r 10])
+    (call-with-round-clip x y w h r
+      (lambda ()
+        (fill-gradient x y w h 'desktop-top 'desktop-bottom)
+        (draw-window-style-preview name x y w (- h label-h) 0.5)
+        (fill-rect x (- (+ y h) label-h) w label-h 'panel)
+        (draw-text (+ x 12) (+ (- (+ y h) label-h) (/ (- label-h (font-line-height 'ui)) 2))
+                   (window-style-title style) 'panel-text 'ui)))
+    (stroke-round-rect x y w h r
+                       (cond [selected? 'accent] [(ui-hover? ui x y w h) 'text-faint] [else 'window-border])
+                       (if selected? 2 1))))
+
 (define (settings-draw-layout ui x y w h)
-  (settings-heading x y "Layout" "Sizes of the window chrome and the panels.")
-  (let loop ([ms settings-metrics] [ry (+ y 72)])
-    (unless (null? ms)
-      (let ([m (car ms)])
-        (settings-slider-row ui x ry w (cadr m) (car m) (caddr m) (cadddr m))
-        (loop (cdr ms) (+ ry 46))))))
+  (settings-heading x y "Layout" "Window style, and the sizes of the chrome and the panels.")
+  (let* ([gap 12] [cw 180] [ch 116]
+         [cols (max 1 (quotient (+ w gap) (+ cw gap)))]
+         [y0 (+ y 66)]
+         [styles *window-styles*])
+    (let loop ([ss styles] [i 0])
+      (unless (null? ss)
+        (let* ([style (car ss)] [name (window-style-name style)]
+               [cx (+ x (* (mod i cols) (+ cw gap)))]
+               [cy (+ y0 (* (quotient i cols) (+ ch gap)))])
+          (draw-style-card ui cx cy cw ch style (eq? name (theme 'window-style)))
+          (ui-area ui (list 'style name) cx cy cw ch (lambda () (settings-set! 'window-style name)))
+          (loop (cdr ss) (+ i 1)))))
+    (let loop ([ms settings-metrics]
+               [ry (+ y0 (* (quotient (+ (length styles) cols -1) cols) (+ ch gap)) 14)])
+      (unless (null? ms)
+        (let ([m (car ms)])
+          (settings-slider-row ui x ry w (cadr m) (car m) (caddr m) (cadddr m))
+          (loop (cdr ms) (+ ry 44)))))))
 
 (define (settings-draw-fonts ui x y w h)
   (settings-heading x y "Fonts" "Interface text and code.")

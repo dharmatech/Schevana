@@ -29,7 +29,7 @@
 (define default-metrics
   '(title-height 30  corner-radius 9  topbar-height 28  taskbar-height 38  shadow 14
     ui-font "sans-serif"  ui-font-size 13  mono-font "monospace"  mono-font-size 14
-    preset tokyo-night))
+    window-style mac  preset tokyo-night))
 
 (define default-theme (append default-colors default-metrics))
 (define color-keys (plist-keys default-colors))
@@ -53,6 +53,7 @@
   (hashtable-set! *theme* key value)
   (when (memq key font-theme-keys) (install-default-fonts!))
   (when (memq key '(topbar-height taskbar-height)) (wm-screen-resized!))
+  (when (memq key '(window-style title-height)) (wm-chrome-changed!))
   (theme-changed!))
 
 (define (set-theme-plist! plist)
@@ -64,7 +65,7 @@
 (define (reset-theme!)
   (set-theme-plist! default-theme)
   (install-default-fonts!)
-  (wm-screen-resized!)
+  (wm-chrome-changed!)
   (theme-changed!))
 
 ;; Fill in keys that are missing, e.g. after (reload!) added new ones.
@@ -105,7 +106,14 @@
       text #x2b2a33 text-dim #x4f4d5a text-faint #x8b8794
       accent #x3b6fd8 accent-2 #x8a4fd0 red #xd43f4d orange #xc96a12 yellow #xa87b00
       green #x3d8a3a cyan #x1f88a8 teal #x238a7a magenta #xb0399a
-      desktop-top #xe9e5dd desktop-bottom #xc9d3e6 watermark #x000000 panel #xece9e3))))
+      desktop-top #xe9e5dd desktop-bottom #xc9d3e6 watermark #x000000 panel #xece9e3))
+    ;; Amiga Workbench 3.1's four pens: grey, black, white and blue.
+    (workbench "Workbench"
+     (bg-0 #xaaaaaa bg-1 #xaaaaaa bg-2 #xa0a0a0 bg-3 #x959595
+      text #x000000 text-dim #x1c1c1c text-faint #x4a4a4a
+      accent #x6688bb accent-2 #x5a3e8e red #x9a1c1c orange #x9a4400 yellow #x6a5400
+      green #x1c5a1c cyan #x0e4c6a teal #x0e564c magenta #x741c6a
+      desktop-top #xaaaaaa desktop-bottom #xaaaaaa watermark #x000000 panel #xffffff))))
 
 (define (preset-title name)
   (let ([p (assq name theme-presets)]) (if p (cadr p) (symbol->string name))))
@@ -205,5 +213,5 @@
                           (hashtable-set! *theme* (car kv) (cdr kv))))
                       data))
           (install-default-fonts!)
-          (wm-screen-resized!)
+          (wm-chrome-changed!)
           (theme-changed!))))))

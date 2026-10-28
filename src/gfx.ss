@@ -84,6 +84,11 @@
                                 [(< hp 5) (values x 0 c)] [else (values c 0 x)])])
       (rgb (byte r) (byte g) (byte b)))))
 
+;; Black or white, whichever reads better on colour c.
+(define (readable-on c)
+  (let-values ([(r g b a) (color-rgba c)])
+    (if (> (+ (* 0.299 r) (* 0.587 g) (* 0.114 b)) 0.45) #x111111 #xf4f4f4)))
+
 ;; Blend two colours: t=0 gives c1, t=1 gives c2.
 (define (mix c1 c2 t)
   (let-values ([(r1 g1 b1 a1) (color-rgba c1)] [(r2 g2 b2 a2) (color-rgba c2)])
@@ -341,6 +346,12 @@
 (define (call-with-translation dx dy thunk)
   (dynamic-wind
     (lambda () (cairo-save *cr*) (cairo-translate *cr* dx dy))
+    thunk
+    (lambda () (cairo-restore *cr*))))
+
+(define (call-with-scale s thunk)
+  (dynamic-wind
+    (lambda () (cairo-save *cr*) (cairo-scale *cr* s s))
     thunk
     (lambda () (cairo-restore *cr*))))
 

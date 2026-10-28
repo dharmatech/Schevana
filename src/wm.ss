@@ -13,6 +13,10 @@
 ;;;
 ;;; Handlers: open draw tick key text mouse-down mouse-up mouse-move wheel
 ;;;           resize focus blur close.
+;;;
+;;; The frame around the content (title bar, borders, buttons) belongs to
+;;; the window style, see styles.ss. Geometry here is the outer frame;
+;;; 'size and the w h passed to handlers are always the content size.
 ;;; Every handler runs under safe-call: errors and runaway loops crash only
 ;;; that window, which then shows the error and can be retried.
 
@@ -104,11 +108,10 @@
 ;;; ------------------------------------------------------------------ windows
 
 (define (open-window title . opts)
-  (let* ([th (title-height)]
-         [size (plist-ref opts 'size '(480 . 320))]
+  (let* ([size (plist-ref opts 'size '(480 . 320))]
          [min-size (plist-ref opts 'min-size '(160 . 80))]
          [win (make-window *next-window-id* (plist-ref opts 'app (current-app)) title
-                           0 0 (car size) (+ th (cdr size)) 'normal #f
+                           0 0 (car size) (cdr size) 'normal #f
                            (make-eq-hashtable) (make-eq-hashtable) #f
                            (car min-size) (cdr min-size))])
     (set! *next-window-id* (+ *next-window-id* 1))
@@ -120,6 +123,10 @@
           [(memq (car o) '(size min-size pos app)) (void)]
           [else (hashtable-set! (window-props win) (car o) (cadr o))])
         (loop (cddr o))))
+    ;; The frame depends on the style, which may come from the options.
+    (let-values ([(l t r b) (frame-insets win)])
+      (window-w-set! win (+ l r (car size)))
+      (window-h-set! win (+ t b (cdr size))))
     (place-window! win (plist-ref opts 'pos #f))
     (set! *windows* (cons win *windows*))
     (window-call win 'open)
@@ -140,6 +147,7 @@
 (define (windows) *windows*)
 (define (focused-window) *focus*)
 (define (visible? win) (not (eq? (window-state win) 'minimized)))
+(define (maximized? win) (eq? (window-state win) 'maximized))
 
 (define (find-window x)
   (find (lambda (w)
@@ -163,13 +171,27 @@
 
 (define (window-bg win) (window-ref win 'bg 'window-bg))
 
+;; The window's style: its own 'window-style property, else the theme's.
+(define (window-style-of win)
+  (or (find-window-style (or (window-ref win 'window-style) (theme 'window-style)))
+      (find-window-style 'mac)))
+
+;; Frame thickness around the content: (values left top right bottom).
+(define (frame-insets win)
+  ((window-style-insets (window-style-of win)) win))
+
 ;; Content area in screen coordinates.
 (define (content-rect win)
-  (let ([th (title-height)])
-    (values (window-x win) (+ (window-y win) th) (window-w win) (- (window-h win) th))))
+  (let-values ([(l t r b) (frame-insets win)])
+    (values (+ (window-x win) l) (+ (window-y win) t)
+            (- (window-w win) l r) (- (window-h win) t b))))
+
+(define (window-content-size win)
+  (let-values ([(x y w h) (content-rect win)]) (values w h)))
 
 (define (window-local win x y)
-  (values (- x (window-x win)) (- y (window-y win) (title-height))))
+  (let-values ([(l t r b) (frame-insets win)])
+    (values (- x (window-x win) l) (- y (window-y win) t))))
 
 ;; Calls one of the window's handlers under the watchdog.
 (define (window-call win kind . args)
@@ -201,8 +223,11 @@
 
 (define (focus-topmost!)
   (let ([w (find visible? *windows*)])
-    (set! *focus* #f)
-    (when w (focus-window! w))))
+    (if w
+        (focus-window! w)
+        (begin
+          (when (and *focus* (memq *focus* *windows*)) (window-call *focus* 'blur))
+          (set! *focus* #f)))))
 
 (define (close-window! win)
   (when (memq win *windows*)
@@ -214,22 +239,20 @@
 
 (define (minimize-window! win)
   (window-state-set! win 'minimized)
-  (when (eq? win *focus*)
-    (window-call win 'blur)
-    (focus-topmost!))
+  (when (eq? win *focus*) (focus-topmost!))
   (invalidate!))
 
 ;; Sets the outer geometry, enforcing minimum sizes, and tells the app.
 (define (set-geometry! win x y w h)
-  (let* ([th (title-height)]
-         [w (max (window-min-w win) (exact (round w)))]
-         [h (max (+ th (window-min-h win)) (exact (round h)))]
-         [resized? (not (and (= w (window-w win)) (= h (window-h win))))])
+  (let*-values ([(l t r b) (frame-insets win)]
+                [(w) (max (+ l r (window-min-w win)) (exact (round w)))]
+                [(h) (max (+ t b (window-min-h win)) (exact (round h)))]
+                [(resized?) (not (and (= w (window-w win)) (= h (window-h win))))])
     (window-x-set! win (exact (round x)))
     (window-y-set! win (exact (round y)))
     (window-w-set! win w)
     (window-h-set! win h)
-    (when resized? (window-call win 'resize w (- h th)))
+    (when resized? (window-call win 'resize (- w l r) (- h t b)))
     (invalidate!)))
 
 (define (move-window! win x y)
@@ -237,7 +260,18 @@
 
 ;; Resizes the content area to w x h.
 (define (resize-window! win w h)
-  (set-geometry! win (window-x win) (window-y win) w (+ h (title-height))))
+  (let-values ([(l t r b) (frame-insets win)])
+    (set-geometry! win (window-x win) (window-y win) (+ w l r) (+ h t b))))
+
+;; Amiga's depth gadget: send the front window to the back, or bring a
+;; window that is behind others to the front.
+(define (depth-window! win)
+  (if (eq? win (find visible? *windows*))
+      (begin
+        (set! *windows* (append (remq win *windows*) (list win)))
+        (focus-topmost!))
+      (focus-window! win))
+  (invalidate!))
 
 (define (maximize-window! win)
   (unless (eq? (window-state win) 'maximized)
@@ -298,6 +332,15 @@
   (for-each (lambda (w) (when (eq? (window-state w) 'maximized) (fit-maximized! w))) *windows*)
   (invalidate!))
 
+;; The window style or title height changed: frames keep their outer size,
+;; so tell every app its new content size.
+(define (wm-chrome-changed!)
+  (wm-screen-resized!)
+  (for-each (lambda (w)
+              (let-values ([(cw ch) (window-content-size w)])
+                (window-call w 'resize cw ch)))
+            *windows*))
+
 ;;; ------------------------------------------------------------------ hit testing
 
 (define (window-at x y)
@@ -306,30 +349,36 @@
                (point-in? x y (window-x w) (window-y w) (window-w w) (window-h w))))
         *windows*))
 
-(define title-buttons '((close . 18) (minimize . 38) (maximize . 58)))
+;; Button kinds that act on release. A style may also list a 'resize-br
+;; button (Amiga's size gadget), which starts a resize instead.
+(define window-button-kinds '(close minimize maximize depth))
 
-(define (title-button-at lx ly)
-  (let ([cy (/ (title-height) 2)])
-    (let loop ([bs title-buttons])
-      (cond
-        [(null? bs) #f]
-        [(< (+ (expt (- lx (cdar bs)) 2) (expt (- ly cy) 2)) 81) (caar bs)]
-        [else (loop (cdr bs))]))))
+;; The style's buttons: ((kind x y w h) ...) in window coordinates.
+(define (window-buttons win)
+  ((window-style-buttons (window-style-of win)) win))
+
+(define (window-button-at win lx ly)
+  (let ([b (find (lambda (b) (point-in? lx ly (list-ref b 1) (list-ref b 2) (list-ref b 3) (list-ref b 4)))
+                 (window-buttons win))])
+    (and b (car b))))
 
 ;; Which part of the window is at screen point (x, y)?
 (define (window-region win x y)
-  (let* ([lx (- x (window-x win))] [ly (- y (window-y win))]
-         [w (window-w win)] [h (window-h win)] [th (title-height)]
-         [edge 5] [corner 14]
-         [resizable? (not (eq? (window-state win) 'maximized))])
+  (let*-values ([(lx) (- x (window-x win))] [(ly) (- y (window-y win))]
+                [(w) (window-w win)] [(h) (window-h win)]
+                [(l t r b) (frame-insets win)]
+                [(edge corner) (values 5 14)]
+                [(resizable?) (not (eq? (window-state win) 'maximized))])
     (cond
+      [(window-button-at win lx ly)]
       [(and resizable? (>= ly (- h corner)) (>= lx (- w corner))) 'resize-br]
       [(and resizable? (>= ly (- h corner)) (< lx corner)) 'resize-bl]
       [(and resizable? (>= lx (- w edge)) (> ly edge)) 'resize-r]
-      [(and resizable? (< lx edge) (> ly th)) 'resize-l]
+      [(and resizable? (< lx edge) (> ly t)) 'resize-l]
       [(and resizable? (>= ly (- h edge))) 'resize-b]
-      [(< ly th) (or (title-button-at lx ly) 'title)]
-      [else 'content])))
+      [(< ly t) 'title]
+      [(and (>= lx l) (< lx (- w r)) (< ly (- h b))) 'content]
+      [else 'frame])))
 
 (define (region-cursor win region)
   (case region
@@ -383,18 +432,19 @@
         (when (> (+ (abs (- x (drag-mx d))) (abs (- y (drag-my d)))) 6)
           (let* ([frac (/ (- (drag-mx d) (window-x win)) (max 1 (window-w win)))])
             (restore-window! win)
-            (let ([nx (- x (* frac (window-w win)))] [ny (- y (/ (title-height) 2))])
+            (let-values ([(l t r b) (frame-insets win)])
+             (let ([nx (- x (* frac (window-w win)))] [ny (- y (/ t 2))])
               (move-window! win nx ny)
-              (set! *drag* (make-drag 'move win 'left x y (window-x win) (window-y win) 0 0)))))
+              (set! *drag* (make-drag 'move win 'left x y (window-x win) (window-y win) 0 0))))))
         (let-values ([(dx dy dw dh) (desktop-rect)])
           (move-window! win
                         (clamp (+ (drag-x d) (- x (drag-mx d))) (- 80 (window-w win)) (- dw 80))
-                        (clamp (+ (drag-y d) (- y (drag-my d))) dy (- (+ dy dh) (title-height))))))))
+                        (clamp (+ (drag-y d) (- y (drag-my d))) dy (- (+ dy dh) 20)))))))
 
 (define (drag-resize! d x y)
   (let* ([k (drag-kind d)] [win (drag-win d)]
          [dx (- x (drag-mx d))] [dy (- y (drag-my d))]
-         [min-w (window-min-w win)]
+         [min-w (let-values ([(l t r b) (frame-insets win)]) (+ l r (window-min-w win)))]
          [nw (case k
                [(resize-r resize-br) (+ (drag-w d) dx)]
                [(resize-l resize-bl) (- (drag-w d) dx)]
@@ -416,11 +466,13 @@
     [else (desktop-click x y button)]))
 
 (define (window-mouse-down win x y button clicks)
-  (focus-window! win)
   (let ([region (window-region win x y)])
+    ;; The depth gadget decides about raising on release.
+    (unless (eq? region 'depth) (focus-window! win))
     (case region
-      [(close minimize maximize)
+      [(close minimize maximize depth)
        (when (eq? button 'left) (set! *drag* (make-drag region win button x y 0 0 0 0)))]
+      [(frame) (void)]
       [(title)
        (cond
          [(eq? button 'right) (open-window-menu! win x y)]
@@ -446,7 +498,7 @@
     (when d
       (let ([win (drag-win d)] [kind (drag-kind d)])
         (case kind
-          [(close minimize maximize)
+          [(close minimize maximize depth)
            (set! *drag* #f)
            (when (and (memq win *windows*)
                       (eq? (window-at x y) win)
@@ -454,7 +506,8 @@
              (case kind
                [(close) (close-window! win)]
                [(minimize) (minimize-window! win)]
-               [(maximize) (toggle-maximize! win)]))]
+               [(maximize) (toggle-maximize! win)]
+               [(depth) (depth-window! win)]))]
           [(capture)
            (when (eq? button (drag-button d)) (set! *drag* #f))
            (let-values ([(lx ly) (window-local win x y)])
@@ -517,54 +570,28 @@
 
 ;;; ------------------------------------------------------------------ drawing
 
-(define (draw-window win)
-  (let* ([x (window-x win)] [y (window-y win)] [w (window-w win)] [h (window-h win)]
-         [th (title-height)]
-         [max? (eq? (window-state win) 'maximized)]
-         [r (if max? 0 (theme 'corner-radius))]
-         [focused? (eq? win *focus*)])
-    (unless max?
-      (draw-shadow x y w h r (if focused? (theme 'shadow) (quotient (theme 'shadow) 2))))
-    (fill-round-rect x y w h r (window-bg win))
-    (call-with-round-clip x y w h r
-      (lambda ()
-        ;; title bar
-        (fill-gradient x y w th
-                       (if focused? (mix 'title-bg-focus 'text 0.04) 'title-bg)
-                       (if focused? 'title-bg-focus 'title-bg))
-        (draw-line x (+ y th -0.5) (+ x w) (+ y th -0.5) (alpha #x000000 0.5))
-        (draw-title-buttons win x y focused?)
-        (let ([title (fit-text (window-title win) (- w 160) 'title)])
-          (draw-text-centered (+ x 70) y (- w 140) th title
-                              (if focused? 'title-text 'title-text-dim) 'title))
-        ;; content
-        (call-with-clip x (+ y th) w (- h th)
-          (lambda ()
-            (call-with-translation x (+ y th)
-              (lambda ()
-                (if (window-error win)
-                    (draw-crash-panel win w (- h th))
-                    (window-call win 'draw w (- h th)))))))))
-    (stroke-round-rect x y w h r (if focused? 'window-border-focus 'window-border))
-    (unless max? (draw-resize-grip (+ x w) (+ y h)))))
+;; The style draws the frame in two passes around the content.
+(define (draw-window win) (draw-window* win (eq? win *focus*)))
 
-(define (draw-title-buttons win x y focused?)
-  (let* ([cy (+ y (/ (title-height) 2))]
-         [hover? (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win)
-                      (memq (caddr *hover*) '(close minimize maximize)))])
-    (for-each
-     (lambda (b color glyph)
-       (let ([cx (+ x (cdr b))])
-         (fill-circle cx cy 6 (if (or focused? hover?) color 'button-idle))
-         (when hover?
-           (draw-text-centered (- cx 6) (- cy 7) 12 13 glyph (alpha #x000000 0.6) 'ui-bold))))
-     title-buttons
-     '(button-close button-min button-max)
-     '("×" "–" "+"))))
-
-(define (draw-resize-grip x y)
-  (for-each (lambda (d) (draw-line (- x d) (- y 3) (- x 3) (- y d) (alpha 'text 0.18) 1))
-            '(7 11)))
+(define (draw-window* win focused?)
+  (let* ([style (window-style-of win)]
+         [x (window-x win)] [y (window-y win)] [w (window-w win)] [h (window-h win)]
+         [hover (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win) (caddr *hover*))]
+         [pressed (and *drag* (eq? (drag-win *drag*) win) (drag-kind *drag*))]
+         [r ((window-style-radius style) win)])
+    ((window-style-draw-under style) win x y w h focused? hover pressed)
+    (let-values ([(cx cy cw ch) (content-rect win)])
+      (call-with-round-clip x y w h r
+        (lambda ()
+          (call-with-clip cx cy cw ch
+            (lambda ()
+              (call-with-translation cx cy
+                (lambda ()
+                  (fill-rect 0 0 cw ch (window-bg win))
+                  (if (window-error win)
+                      (draw-crash-panel win cw ch)
+                      (window-call win 'draw cw ch)))))))))
+    ((window-style-draw-over style) win x y w h focused? hover pressed)))
 
 (define (draw-crash-panel win w h)
   (let ([err (window-error win)])

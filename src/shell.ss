@@ -90,7 +90,7 @@
   (let* ([w (screen-w)] [h (theme 'topbar-height)]
          [ty (/ (- h (font-line-height 'ui)) 2)])
     (fill-rect 0 0 w h (alpha 'panel 0.92))
-    (draw-line 0 (- h 0.5) w (- h 0.5) (alpha #xffffff 0.06))
+    (draw-line 0 (- h 0.5) w (- h 0.5) (alpha 'panel-text 0.12))
     (let* ([label "λ  Schevana"]
            [bw (+ 24 (text-width label 'ui-bold))])
       (set! *topbar-launcher-w* (+ 6 bw))
@@ -124,7 +124,7 @@
          [hint-w (+ 24 (text-width hint 'ui-small))]
          [bw (if (zero? n) 0 (min 210 (/ (- w 16 hint-w (* 6 (- n 1))) n)))])
     (fill-rect 0 y0 w h (alpha 'panel 0.94))
-    (draw-line 0 (+ y0 0.5) w (+ y0 0.5) (alpha #xffffff 0.06))
+    (draw-line 0 (+ y0 0.5) w (+ y0 0.5) (alpha 'panel-text 0.12))
     (draw-text (- w hint-w) (+ y0 (/ (- h (font-line-height 'ui-small)) 2)) hint 'panel-dim 'ui-small)
     (let loop ([ws ws] [x 8] [items '()])
       (if (null? ws)

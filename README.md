@@ -46,7 +46,9 @@ Ctrl+V pastes.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolour everything
-(apply-theme-preset! 'paper)               ; or: tokyo-night catppuccin nord gruvbox
+(apply-theme-preset! 'paper)               ; or: tokyo-night catppuccin nord gruvbox workbench
+(set-theme! 'window-style 'amiga)          ; or: mac windows
+(open-window "Odd one out" 'window-style 'windows)   ; per-window override
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
 (bind-key! '(ctrl shift #\l) life)
@@ -72,6 +74,7 @@ apps/        repl  clock  life  sketch  monitor  settings   ← ordinary procedu
 src/system   main loop, timers, inject!, boot, reload!
 src/ui       immediate-mode widgets: button, slider, segmented, clickable area
 src/shell    wallpaper, top bar + status segments, taskbar, menus, toasts
+src/styles   window styles (Mac, Windows, Amiga): frame insets, buttons, drawing
 src/wm       window records, z-order, focus, hit testing, drag/resize, dispatch
 src/proc     processes + watchdog (Chez engines)
 src/host     SDL2 window ⇄ Scheme event lists   |  headless mode
@@ -106,6 +109,13 @@ Decisions worth keeping in mind for the real design:
   table. The Settings app is only a front end to `set-theme!`, so anything
   it does can be scripted from the REPL, and the saved file is just the
   keys that differ from the defaults.
+- **Window styles own the frame.** A style is a record of procedures:
+  frame insets, a list of buttons (`close`, `minimize`, `maximize`,
+  `depth`), and two drawing passes around the content. The window manager
+  only does geometry and dispatch, so `define-window-style!` at the REPL
+  adds a new look. Apps always get their content size, whatever the frame.
+  The Amiga style was matched against a real Workbench 3.1 screenshot, and
+  pairs with the `workbench` palette.
 - **Immediate-mode drawing, full redraw on change.** Anything can call
   `(invalidate!)`, and the next frame repaints everything into a Cairo image
   that becomes an SDL texture. The wallpaper is cached in a layer. A typical
@@ -119,8 +129,8 @@ scheme --script tests/smoke.ss /tmp
 
 This boots the world headlessly, types into the REPL, defines an app,
 crashes windows, runs away in loops, drags and resizes windows, uses the
-launcher, clicks and drags through every Settings tab (checking the theme
-file round-trips), reloads the sources, and writes screenshots to the given
+launcher, presses every button of each window style, clicks and drags
+through every Settings tab (checking the theme file round-trips), reloads the sources, and writes screenshots to the given
 folder. It never touches your real `~/.schevana-theme.ss`.
 
 ## Known gaps and open questions
