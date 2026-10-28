@@ -1,0 +1,3 @@
+#!/bin/sh
+# Launch Schevana OS.
+exec scheme --script "$(dirname "$0")/main.ss" "$@"
