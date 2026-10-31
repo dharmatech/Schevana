@@ -1,19 +1,23 @@
 ;;; styles/genera.ss — the Genera window style.
-;;; Symbolics Genera, the Lisp Machine system of the 1980s, as its manuals
-;;; describe it. Programming the User Interface (Genera 7, 1986): a pane's
-;;; default margins are "a 1-pixel-wide border and a margin between the
-;;; border and displayed output to the pane of 4 pixels", and its label
-;;; "appears ... in the lower, left-hand corner of the pane (directly
-;;; inside the border)" in the pane's default character style, a fixed-
-;;; width font. No title bar and no buttons: the label strip is what you
-;;; drag, and right-clicking it gives the window menu (Genera explained its
-;;; mouse clicks in the documentation line instead).
+;;; Symbolics Genera, the Lisp Machine system of the 1980s. Programming
+;;; the User Interface (Genera 7, 1986; the same in Genera 8) puts a pane's
+;;; label "in the lower, left-hand corner of the pane (directly inside the
+;;; border)", inside a 4-pixel white margin. Real Genera 8 screens, measured
+;;; in captures from 1998, 2004 and 2024, draw that border 2 pixels thick
+;;; (the manual's 1 is a bare pane's default) and the label in italic, in
+;;; normal video. No title bar, no buttons and no mark of the selected
+;;; window: Genera never had them (the buttons in some pictures belong to
+;;; the X or Mac window around the whole Genera screen). The label strip is
+;;; what you drag here, and right-clicking it gives the window menu; Genera
+;;; did both from its System menu instead. The research is in
+;;; .work/reports/ ("Symbolics Genera window appearance").
 
-(define genera-border 1)
+(define genera-border 2)
 (define genera-margin 4)
 
 (define (genera-label-height)
-  (exact (max 14 (- (title-height) 16) (round (+ (font-line-height 'mono) 2)))))
+  (exact (max 14 (- (title-height) 16)
+              (round (+ (font-line-height 'ui-italic) 2)))))
 
 (define (genera-insets win)
   (let ([m (+ genera-border genera-margin)])
@@ -33,11 +37,11 @@
       (lambda ()
         (draw-text (+ x b genera-margin)
                    (+ y (- h b lh)
-                      (floor (/ (- lh (font-line-height 'mono)) 2)))
+                      (floor (/ (- lh (font-line-height 'ui-italic)) 2)))
                    (fit-text (window-title win)
                              (- w (* 2 (+ b genera-margin)))
-                             'mono)
-                   'text 'mono)))))
+                             'ui-italic)
+                   'text 'ui-italic)))))
 
 (define-window-style genera "Genera"
   'insets genera-insets

@@ -144,7 +144,7 @@
 
 ;; Raise it deliberately: the core is what the desktop needs to boot and
 ;; run; everything else belongs in a folder.
-(define src-budget 4000)
+(define src-budget 4100)
 
 (let ([n (apply + (map (lambda (f) (length (file-lines f)))
                        (map (lambda (f) (string-append "src/" f))

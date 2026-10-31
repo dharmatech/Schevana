@@ -22,10 +22,13 @@
 ;;; Also a keystroke in S5's REPL (the clock still: the frame shows the
 ;;; new character), an idle step (30 paused Life windows, the clock
 ;;; standing still), a theme change on S30 (it paints the wallpaper
-;;; again), and a busy process's share of the main thread while S30T
-;;; animates at 200% (printed, not bounded). Fails (exit 1) unless every
-;;; measured step drew a frame, an idle step takes under 0.2 ms and
-;;; uploads nothing, and the busy process and the animation both go on.
+;;; again), the clock's second with no window and a keystroke in a REPL
+;;; alone (each step one of them, at 100% and 200%, and at 200% on a
+;;; 1920 × 1080 screen, a 4K one), and a busy process's share of the main
+;;; thread while S30T animates at 200% (printed, not bounded). Fails
+;;; (exit 1) unless every measured step drew a frame, an idle step takes
+;;; under 0.2 ms and uploads nothing, and the busy process and the
+;;; animation both go on.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -309,6 +312,68 @@
                        (main thread ~,1f ms)\n"
                       pct wall main)))
           '(100 200))
+
+;;; ------------------------------------------------------------------
+;;; the clock's second and a keystroke, on a quiet desktop
+
+;; The headless screen, w × h logical pixels at pct.
+(define (screen! w h pct)
+  (set! *headless-size* (cons w h))
+  (set-theme! 'scale pct)
+  (unless (and (= *canvas-w* w) (= *canvas-h* h))
+    (canvas-create! w h *host-scale*)
+    (wm-screen-resized!))
+  (steps 2 17))
+
+;; Steps that each draw the frame of one thing that changed (change!
+;; makes it change): (values main wall upload), the medians of the main
+;; thread's and the step's ms and the mean bytes uploaded.
+(define (frame-steps change!)
+  (steps 3 0)
+  (let ([u0 *upload-bytes*])
+    (let loop ([i 0] [walls '()] [mains '()])
+      (if (< i frames)
+          (let ([w0 (wall-ms)] [m0 (main-ms)] [n *frames-drawn*])
+            (change! i)
+            (schevana-step! 0)
+            (unless (= *frames-drawn* (+ n 1))
+              (errorf 'frame-steps "a change drew no frame"))
+            (loop (+ i 1)
+                  (cons (- (wall-ms) w0) walls)
+                  (cons (- (main-ms) m0) mains)))
+          (values (median mains) (median walls)
+                  (/ (- *upload-bytes* u0) frames 1.0))))))
+
+;; No window; the top bar's clock shows a new second at every step.
+(define (idle-ticks)
+  (clear-world!)
+  (let ([second 0])
+    (set! *status-segments* '())
+    (add-status-segment! 'clock
+      (lambda () (format "Thu 29 Oct   12:00:~2,'0d" (mod second 60))))
+    (frame-steps (lambda (i)
+                   (set! second (+ second 1))
+                   (set! *last-second* -1)))))
+
+;; A REPL alone, where it opens, typed into.
+(define (lone-keystrokes)
+  (clear-world!)
+  (fixed-status!)
+  (texted-repl!)
+  (frame-steps (lambda (i) (inject! (list 'text (if (even? i) "a" "b"))))))
+
+(for-each
+ (lambda (s)
+   (apply screen! s)
+   (let*-values ([(tick-main tick-wall tick-up) (idle-ticks)]
+                 [(key-main key-wall key-up) (lone-keystrokes)])
+     (printf "~ax~a at ~a%: the clock's second, no window: main ~,2f ms, \
+              wall ~,2f, ~,3f MiB uploaded; a keystroke in a lone REPL: \
+              main ~,2f ms, wall ~,2f, ~,3f MiB uploaded\n"
+             (car s) (cadr s) (caddr s) tick-main tick-wall
+             (/ tick-up 1048576.0) key-main key-wall (/ key-up 1048576.0))))
+ '((1280 800 100) (1280 800 200) (1920 1080 200)))
+(screen! 1280 800 100)
 
 ;;; ------------------------------------------------------------------
 ;;; a busy process

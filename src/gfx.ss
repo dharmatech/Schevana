@@ -27,8 +27,9 @@
 ;; A canvas pw × ph pixels big, drawn scale times bigger than the logical
 ;; pixels apps use; its logical size is the whole part of pw / scale.
 ;; *cr* only measures between frames. *back* is the second screen buffer
-;; (see frames, below). Interrupts are off, so no process is switched out
-;; halfway and no frame is drawn on a canvas half made.
+;; (see frames, below); both are new, so the next frame is the whole
+;; screen. Interrupts are off, so no process is switched out halfway and
+;; no frame is drawn on a canvas half made.
 (define (canvas-create-pixels! pw ph scale)
   (with-interrupts-disabled
     (unless (= (inexact scale) *scale*) (flush-shadow-tiles!))   ; shadow
@@ -41,7 +42,8 @@
     (set! *canvas-w* (exact (floor (/ pw scale))))
     (set! *canvas-h* (exact (floor (/ ph scale))))
     (set! *scale* (inexact scale))
-    (reset-measure-cr!)))
+    (reset-measure-cr!)
+    (request-frame!)))
 
 ;; A canvas of w × h logical pixels.
 (define (canvas-create! w h scale)
@@ -238,6 +240,7 @@
     (define-font! 'ui ui ui-size)
     (define-font! 'ui-bold ui ui-size 'bold)
     (define-font! 'ui-small ui (- ui-size 2))
+    (define-font! 'ui-italic ui ui-size 'italic)
     (define-font! 'title ui ui-size 'bold)
     ;; inside small fixed-size buttons
     (define-font! 'glyph ui (min ui-size 13) 'bold)
@@ -245,7 +248,8 @@
     (define-font! 'big ui (* 2 ui-size) 'bold)
     (define-font! 'huge "serif" 360 'bold)))
 
-(unless (hashtable-contains? *fonts* 'glyph) (install-default-fonts!))
+;; (keyed on the newest font, so a world reloaded from before it gets it)
+(unless (hashtable-contains? *fonts* 'ui-italic) (install-default-fonts!))
 
 ;;; ------------------------------------------------------------------ text
 
@@ -655,27 +659,31 @@
              (unlock-object bytes)))))]))
 
 ;;; ------------------------------------------------------------------ frames
-;;; A frame is drawn from scratch into *back*, the second screen buffer
-;;; (render-frame! in wm.ss). Then each of its rows is compared with the
-;;; screen's, the rows that changed are copied onto the screen, and the
-;;; host uploads only those. All of it runs on the main thread.
+;;; A frame is drawn from scratch into *back*, the second screen buffer,
+;;; clipped to a box around what changed (render-frame! in wm.ss). Then
+;;; each of the box's rows is compared with the screen's, the rows that
+;;; changed are copied onto the screen, and the host uploads only those.
+;;; All of it runs on the main thread.
 
 (defvar *frame-rows* 0)   ; how many rows the last frame changed
 
 ;; (a world reloaded from before the second buffer has none yet)
 (when (and (eqv? *back* 0) (not (eqv? *canvas* 0)))
   (set! *back* (cairo-image-surface-create CAIRO_FORMAT_ARGB32
-                                           *canvas-pw* *canvas-ph*)))
+                                           *canvas-pw* *canvas-ph*))
+  (request-frame!))
 
-;; Copies the rows of *back*, holding a new frame, that differ from the
-;; screen's onto the screen, which stays the same surface (swapping the
-;; buffers instead measured slower); returns their runs, ((y0 . y1) ...).
-(define (copy-changed-rows!)
+;; Copies the rows from y0 to y1 of *back*, holding a new frame, that
+;; differ from the screen's onto the screen, which stays the same surface
+;; (swapping the buffers instead measured slower); returns their runs,
+;; ((y0 . y1) ...). Whole rows: the frame left the other columns of
+;; *back* as they were, equal to the screen's.
+(define (copy-changed-rows! y0 y1)
   (cairo-surface-flush *canvas*)
   (let* ([b (cairo-image-surface-get-data *back*)]
          [c (cairo-image-surface-get-data *canvas*)]
          [stride (cairo-image-surface-get-stride *canvas*)]
-         [runs (changed-rows b c stride *canvas-ph*)])
+         [runs (changed-rows b c stride y0 y1)])
     (for-each (lambda (r)
                 (sdl-memcpy (+ c (* stride (car r))) (+ b (* stride (car r)))
                             (* stride (- (cdr r) (car r)))))
@@ -685,12 +693,12 @@
       (fold-left (lambda (n r) (+ n (- (cdr r) (car r)))) 0 runs))
     runs))
 
-;; Runs of rows where two buffers of h rows differ, ((y0 . y1) ...), top
-;; first; one memcmp a row, from the bottom up.
-(define (changed-rows pa pb stride h)
-  (let loop ([y (fx- h 1)] [end #f] [acc '()])   ; rows y+1 .. end-1 differ
+;; Runs of rows from y0 to y1 where two buffers differ, ((y0 . y1) ...),
+;; top first; one memcmp a row, from the bottom up.
+(define (changed-rows pa pb stride y0 y1)
+  (let loop ([y (fx- y1 1)] [end #f] [acc '()])   ; rows y+1 .. end-1 differ
     (cond
-      [(fx< y 0) (if end (cons (cons 0 end) acc) acc)]
+      [(fx< y y0) (if end (cons (cons y0 end) acc) acc)]
       [(fx= 0 (sdl-memcmp (+ pa (fx* y stride)) (+ pb (fx* y stride)) stride))
        (loop (fx- y 1) #f (if end (cons (cons (fx+ y 1) end) acc) acc))]
       [else (loop (fx- y 1) (or end (fx+ y 1)) acc)])))

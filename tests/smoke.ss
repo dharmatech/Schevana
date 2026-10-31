@@ -55,7 +55,19 @@
                                (* frac (- (ui-region-w r) 16)))))
               (exact (round (+ cy (ui-region-y r) (/ (ui-region-h r) 2))))))))
 
+;; Wheels a scrolling pane (Settings') until the area id is in view.
+(define (scroll-to-ui! win id)
+  (let loop ([n 0])
+    (let-values ([(x y) (ui-point win id 0.5)]
+                 [(cx cy cw ch) (content-rect win)])
+      (let ([dy (cond [(> y (+ cy ch -10)) -1] [(< y (+ cy 10)) 1] [else 0])])
+        (unless (or (zero? dy) (= n 40))
+          (inject! `(mouse-move ,(+ cx cw -20) ,(+ cy 100)) `(wheel 0 ,dy))
+          (steps 2)
+          (loop (+ n 1)))))))
+
 (define (click-ui! win id)
+  (scroll-to-ui! win id)
   (let-values ([(x y) (ui-point win id 0.5)])
     (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
              `(mouse-up ,x ,y left))
@@ -437,21 +449,6 @@
   (click-button! w 'close)
   (check "windows close button" (not (memq w (windows)))))
 
-(check "windows 98 style draws" (style-scene! 'win98))
-(let ([w (open-window "Beta" 'size '(300 . 150) 'pos '(200 . 140))])
-  (let-values ([(l t r b) (frame-insets w)] [(cx cy cw ch) (content-rect w)])
-    (check "windows 98 has a 4-pixel frame and an 18-pixel caption"
-           (and (= l 4) (= r 4) (= b 4) (= t 23) (= cx 204) (= cw 300)
-                (= (window-w w) 308))))
-  (check "and 16 by 14 buttons: close, maximize, minimize"
-         (equal? (map (lambda (b) (list (car b) (list-ref b 3) (list-ref b 4)))
-                      (window-buttons w))
-                 '((close 16 14) (maximize 16 14) (minimize 16 14))))
-  (click-button! w 'maximize)
-  (check "windows 98 maximize button" (maximized? w))
-  (click-button! w 'close)
-  (check "windows 98 close button" (not (memq w (windows)))))
-
 (check "interlisp style draws" (style-scene! 'interlisp))
 (let ([w (open-window "Gamma" 'size '(300 . 150) 'pos '(200 . 140))])
   (let-values ([(l t r b) (frame-insets w)])
@@ -469,9 +466,9 @@
 (check "genera style draws" (style-scene! 'genera))
 (let ([w (open-window "Delta" 'size '(300 . 150) 'pos '(200 . 140))])
   (let-values ([(l t r b) (frame-insets w)])
-    (check "genera has a 1-pixel border, a 4-pixel margin and the label at \
+    (check "genera has a 2-pixel border, a 4-pixel margin and the label at \
             the bottom"
-           (and (= l 5) (= t 5) (= r 5) (= b 23))))
+           (and (= l 6) (= t 6) (= r 6) (= b 23))))
   (let ([x 260] [y (+ 140 (window-h w) -10)])
     (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
              `(mouse-move ,(+ x 40) ,(- y 30))
@@ -557,9 +554,6 @@
   (set! *apps* apps0)
   (wm-chrome-changed!))
 
-(apply-theme-preset! 'win98)
-(style-scene! 'win98)
-(screenshot (string-append out-dir "/style-win98-palette.png"))
 (apply-theme-preset! 'interlisp)
 (style-scene! 'interlisp)
 (screenshot (string-append out-dir "/style-interlisp-palette.png"))
@@ -587,6 +581,13 @@
 (for-each close-window! (windows))
 (define s (settings))
 (steps 2)
+;; The Layout tab's sliders sit below the style cards, out of view once
+;; there are enough styles: scroll the pane to its end.
+(define (scroll-settings-down!)
+  (let-values ([(cx cy cw ch) (content-rect s)])
+    (apply inject! `(mouse-move ,(+ cx cw -20) ,(+ cy 100))
+           (make-list 30 '(wheel 0 -1)))
+    (steps 2)))
 (check "settings opens" (and s (not (window-error s))))
 (check "settings is single-instance" (eq? s (settings)))
 (click-ui! s '(preset nord))
@@ -613,9 +614,10 @@
 (click-ui! s '(style windows))
 (check "style card sets the window style" (eq? (theme 'window-style) 'windows))
 (screenshot (string-append out-dir "/settings-layout-windows.png"))
-(click-ui! s '(style win98))
-(check "and Windows 98" (eq? (theme 'window-style) 'win98))
+(click-ui! s '(style genera))
+(check "and Genera" (eq? (theme 'window-style) 'genera))
 (click-ui! s '(style mac))
+(scroll-settings-down!)
 (drag-ui! s '(metric corner-radius) 0)
 (check "layout slider sets a metric" (= 0 (theme 'corner-radius)))
 (drag-ui! s '(metric title-height) 1)
@@ -646,11 +648,7 @@
               (ui-find (window-ref s 'ui) 'pane-scrollbar))))
 (screenshot (string-append out-dir "/settings-fonts.png"))
 (click-ui! s '(tab layout))
-;; scroll the sliders into view
-(let-values ([(cx cy cw ch) (content-rect s)])
-  (apply inject! `(mouse-move ,(+ cx cw -20) ,(+ cy 100))
-         (make-list 10 '(wheel 0 -1)))
-  (steps 2))
+(scroll-settings-down!)
 (drag-ui! s '(metric title-height) 0.5)
 (check "chrome height sliders start at what the font needs"
        (and (> (theme 'title-height) (chrome-min-height 'title-height))
@@ -716,6 +714,7 @@
 ;; Reloading the sources keeps the world's state.
 (let ([n (length (windows))])
   (reload!)
+  (check "reload asks for the whole screen" (eq? *dirty* #t))
   (steps 2)
   (check "reload keeps windows" (= n (length (windows))))
   (check "windows still draw after reload"
@@ -839,27 +838,32 @@
              (and (= state 4) (for-all cdr shown)))))
   (close-window! w))
 
-(let* ([count 0] [seen -1]
+;; A window that changes by itself says so, and the next frame shows it
+;; (the frame the clock asks for once a second is the top bar's).
+(let* ([count 0]
        [w (open-window "Ticker" 'size '(260 . 120) 'pos '(400 . 100)
-                       'tick (lambda (win) (set! count (+ count 1)))
+                       'tick (lambda (win)
+                               (set! count (+ count 1))
+                               (invalidate! win))
                        'draw (lambda (win cw ch)
-                               (set! seen count)
-                               (draw-text 14 14 (number->string count)
-                                          'text 'big)))])
-  (steps 2)
-  (let ([first seen] [deadline (+ (now-ms) 1500)])
-    (let loop ()
-      (when (and (= seen first) (< (now-ms) deadline))
-        (schevana-step! 0)
-        (loop)))
-    (check "apps that never invalidate still update within a second"
-           (> seen first)))
+                               (fill-rect 0 0 cw ch (if (even? count)
+                                                        #xff0000
+                                                        #x0000ff))))])
+  (let-values ([(x y cw ch) (content-rect w)])
+    (define (red?) (> (canvas-pixels (device-box x y cw ch) #xffff0000) 0))
+    (steps 2)
+    (let* ([a (red?)] [b (begin (steps 1) (red?))]
+           [c (begin (steps 1) (red?))])
+      (check (format "a window that invalidates itself as it ticks shows \
+                      each tick on the next frame ~s" (list a b c))
+             (and (not (eq? a b)) (not (eq? b c))))))
   (close-window! w))
 
 ;; Steps that nothing asked a frame of draw and upload nothing. The frame
-;; the clock forces once a second draws every window once and uploads the
-;; rows it changed (the top bar's clock); (invalidate!) draws every window
-;; once too, and when nothing on screen changed it uploads nothing.
+;; the clock asks for once a second (the top bar's) calls every window's
+;; draw once, clipped away, and uploads the rows it changed (the top
+;; bar's clock); (invalidate!) draws every window once too, and when
+;; nothing on screen changed it uploads nothing.
 (let* ([a (plain-window "One" 100 100)] [b (plain-window "Two" 420 160)]
        [na (count-draws! a)] [nb (count-draws! b)] [row (* 4 *canvas-pw*)])
   (steps 2)
@@ -906,7 +910,7 @@
            (steps 2)
            (let ([device (- *upload-bytes* u0 exposed reset)]
                  [u1 *upload-bytes*])
-             (invalidate! w 10 10 30 20)   ; (the same as (invalidate! w))
+             (invalidate! w 10 10 30 20)   ; part of w's content
              (steps 1)
              (check "an expose uploads nothing; a lost texture goes up whole; \
                      a frame that changes nothing uploads nothing"

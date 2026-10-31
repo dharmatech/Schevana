@@ -101,9 +101,9 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolor everything
-; or: tokyo-night catppuccin nord gruvbox win98 interlisp genera
+; or: tokyo-night catppuccin nord gruvbox interlisp genera
 (apply-theme-preset! 'paper)
-(set-theme! 'window-style 'win98)          ; or: mac windows interlisp genera
+(set-theme! 'window-style 'genera)         ; or: mac windows interlisp
 (open-window "Odd one out" 'window-style 'windows)   ; per-window override
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
@@ -170,8 +170,8 @@ registered.
 apps/        repl  clock  life  sketch  monitor  settings  ← ordinary procedures
 wallpapers/  desktop fills: gradient  flat  shade
 themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
-             tokyo-night  win98
-styles/      window styles: genera  interlisp  mac  win98  windows
+             tokyo-night
+styles/      window styles: genera  interlisp  mac  windows
 kits/        ui: immediate-mode widgets (button, slider, segmented,
              clickable area)
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
@@ -252,45 +252,61 @@ Decisions worth keeping in mind for the real design:
   `depth`), and two drawing passes around the content. The window manager
   only does geometry and dispatch, so `define-window-style` at the REPL
   adds a new look. Apps always get their content size, whatever the frame.
-  The Windows 98 style matches real Windows 98 screenshots pixel for
-  pixel. The two 1980s Lisp environments were matched against real
-  screens: Interlisp (Interlisp-D/Medley, Xerox PARC) with its black title
-  bars, and Genera (Symbolics Lisp Machines), built to the margins its
-  1986 manuals specify, with the window's label in the bottom-left corner,
-  which is also where you drag it: a style can list any area as its
-  `'title`. Each pairs with the palette of the same name; the
-  Interlisp one brings back the dotted desktop shade (the
-  `desktop-pattern` theme key).
-- **Every frame is drawn from scratch.** The canvas is the exact
-  screen. When something asks for a frame (`(invalidate!)`,
-  `(invalidate! win)`, input to a window, any change the window manager
-  or the shell makes, and the clock once a second), the wallpaper, every
-  window from the bottom up, the panels, the menu and the toasts are
-  drawn again (`render-full-into!` in `src/wm.ss`). A step that nothing
-  asked a frame of draws, uploads and presents nothing. Nothing is
-  assumed about what a drawing procedure does, so redefining
-  `draw-window`, a window style or `draw-taskbar` at the REPL simply
-  changes the next frame. An app that changes what it shows says so with
-  `(invalidate! win)`; `(invalidate! win x y w h)`, from when only part
-  of a window was redone, means the same. The wallpaper is kept as a
-  picture, and it is a picture of its key: the screen's size and
-  scale, `draw-wallpaper` and the whole theme, whether changed by
-  `set-theme!` or behind its back. The next frame paints it again first
-  when one of those changes, and nothing else does: a `draw-wallpaper`
+  A window is drawn clipped to its extent, so a style that draws past its
+  frame (a glow, say) gives how far as its `'bleed`.
+  The two 1980s Lisp environments were matched against real screens:
+  Interlisp (Interlisp-D/Medley, Xerox PARC) with its black title bars, and
+  Genera (Symbolics Lisp Machines), built to the margins its 1986 manuals
+  specify, with the window's label in the bottom-left corner, which is
+  also where you drag it: a style can list any area as its `'title`. Each
+  pairs with the palette of the same name; the Interlisp one brings back
+  the dotted desktop shade (the `desktop-pattern` theme key).
+- **Every frame is drawn from scratch, where something changed.** The
+  canvas is the exact screen. A change says where it shows: input to a
+  window and `(invalidate! win)` ask for the window's extent (its frame
+  and what its style draws past it), and so does
+  `(invalidate! win x y w h)`, from when only part of a window was
+  redone; the hover for the window or bar it leaves and the one it
+  enters; moving or resizing a window for where it was and where it is;
+  the clock, once a second, for the top bar; `(invalidate!)` and the rest
+  of what the window manager or the shell changes, the menus and toasts
+  included, for the whole screen. The next frame draws the wallpaper,
+  every window from the bottom up (each clipped to its extent, so nothing
+  it draws lies outside what it asks for), the panels, the menu and the
+  toasts again (`render-full-into!` in `src/wm.ss`), clipped to one
+  rectangle: the bounding box of what was asked for, grown until it holds
+  whole every window and bar it touches (cairo draws what a clip cuts a
+  little differently), or the whole screen while a menu or a toast shows.
+  A step that nothing asked a frame of draws, uploads and presents
+  nothing.
+  Nothing is assumed about what a drawing procedure does inside its
+  window, so redefining `draw-window`, a window style or `draw-taskbar` at
+  the REPL changes the next frame: an evaluation asks for the whole screen
+  when it ends, and so does `(reload!)`. A window that changes by itself
+  over time says so with `(invalidate! win)`, as the Clock and Life do
+  when they tick; one whose change also shows outside it (its title, in
+  the bars) asks for the whole screen. The wallpaper is kept as a picture,
+  and it is a picture of its key: the screen's size and scale,
+  `draw-wallpaper` and the whole theme, whether changed by `set-theme!` or
+  behind its back. The next frame paints it again first when one of those
+  changes, and is the whole screen; nothing else does: a `draw-wallpaper`
   that reads the clock shows a still picture.
 - **Drawing is single-threaded.** Everything runs on the main thread,
   drawing included. A frame is drawn into a second screen buffer; then
-  each of its rows is compared with the screen's, and only the rows that
-  changed are copied onto the screen and uploaded, each run of them as
-  one full-width rectangle. A frame that changes nothing uploads and
+  each row of its rectangle is compared with the screen's, and only the
+  rows that changed are copied onto the screen and uploaded, each run of
+  them as one full-width rectangle. The other rows need no look: after
+  every frame the second buffer equals the screen, and a new canvas asks
+  for the whole screen. A frame that changes nothing uploads and
   presents nothing. Monitor shows the last frame's time (drawing it and
   comparing its rows) and the rows it uploaded. A process may be
   switched out at any call while frames go on, so typed in a REPL (or
-  called by a handler) `(render-frame!)` only asks for a frame, and
-  freeing the canvas or a cache of surfaces runs with interrupts off:
-  no frame sees it half done. Parallel rasterizing would come with step
-  6 of the renderer plan: every window drawn into its own image by a
-  crew of threads, and the images composed on the GPU.
+  called by a handler) `(render-frame!)` only asks for a frame, asking
+  for an area is atomic, and freeing the canvas or a cache of surfaces
+  runs with interrupts off: no frame sees it half done. Next on the
+  compositor plan: every window drawn into an image of its own when it
+  changes, and the images composed, on the CPU and then on the GPU;
+  threads only when measured.
 
 ## Tests
 
@@ -321,20 +337,30 @@ grid against one rectangle per cell, and the invalidation calls.
 scheme --script tests/frame.ss out
 ```
 
-This tests the renderer: once the frames asked for are drawn, the
-screen equals `render-full-into!` drawn directly, bit for bit, on
-several desktops, every window style, a menu and a toast, at 100, 125,
-150, 200 and 300%; a stand-in texture fed only the uploaded rows always
-equals the screen, and a frame that changes nothing uploads and
-presents nothing; with a stand-in window a boot, a resize or a rescale
-shows its own frame at once, never an empty screen; a process, switched
-out anywhere, may free surfaces, rescale and call `(render-frame!)`
-while frames go on; drawing that raises crashes only its window, or
-shows no frame; redefined `draw-window`, `draw-taskbar` and styles show
-at once and cost the same; a theme change (by `set-theme!` or behind
-its back) or a redefined `draw-wallpaper` paints the wallpaper again
-for the next frame; and each generation of 30 Life windows shows on the
-next frame.
+This tests the renderer: once the frames asked for are drawn, the screen
+equals `render-full-into!` drawn directly, bit for bit, on several
+desktops, every window style, a menu and a toast, at 100, 125, 150, 200
+and 300%; a stand-in texture fed only the uploaded rows always equals
+the screen, and a frame that changes nothing uploads and presents
+nothing; every way of asking for an area (the clock's second, a window
+or part of it, a window under another, hover across windows and both
+bars, a window dragged and resized, another moved, a process asking for
+areas while the main loop asks for others, one switched out after each
+area it asks for) shows that frame at 100, 150 and 200%, the clock's
+second comparing and uploading only the top bar's rows, a lone window
+only its extent's; every style, and one that glows past its frame with
+and without its `'bleed`, moved, resized and hovered, shows the
+reference, and drawn unclipped each registered style keeps to its
+extent; with a stand-in window a boot, a resize or a rescale shows
+its own frame at once, never an empty screen; a process, switched out
+anywhere, may free surfaces, rescale and call `(render-frame!)` while
+frames go on; drawing that raises crashes only its window, or shows no
+frame, and a `window-bleed` that raises is reported while frames and
+input go on; redefined `draw-window`, `draw-taskbar` and styles show at
+once and cost the same, and a REPL evaluation asks for the whole screen
+as it ends; a theme change (by `set-theme!` or behind its back) or a
+redefined `draw-wallpaper` paints the wallpaper again for the next
+frame; and each generation of 30 Life windows shows on the next frame.
 
 ```bash
 scheme --script tests/sources.ss
@@ -355,8 +381,10 @@ and those under a maximized REPL, with every Life window stepping every
 frame. For each it prints the main thread's time per frame (all the
 work: everything runs on it), the wall time, the bytes uploaded and the
 collections, then times a keystroke in the REPL, an idle step (it must
-stay under 0.2 ms and upload nothing) and a theme change, and prints
-how much of the main thread a busy REPL evaluation gets while 30 Life
+stay under 0.2 ms and upload nothing), a theme change, and the clock's
+second with no window and a keystroke in a REPL alone (at 100% and
+200%, and on a 1920 × 1080 screen at 200%, a 4K one), and prints how
+much of the main thread a busy REPL evaluation gets while 30 Life
 windows animate at 200%.
 
 ## Conventions
@@ -369,17 +397,26 @@ windows animate at 200%.
 
 - Apps all share one environment. REPLs can be private or pure, but apps
   can't yet be namespaced from each other the same way.
-- Every frame draws the whole screen on the main thread and compares it
-  with the screen row by row. With 30 animating Life windows that is
-  about 4.3 ms a frame at 100% and 10 ms at 200%; 30 overlapping windows
-  at 200% take about 40 ms a frame, and a keystroke shows about 10 ms
-  later at 200% (`tests/bench.ss`). Meanwhile a busy REPL evaluation
-  runs only between frames: with 30 Life windows animating at 200% it
-  gets about half of what it gets with them paused. Step 6 of the
-  renderer plan would draw each window into its own image, only when it
-  changes, with a crew of threads.
+- A frame draws everything under its rectangle on the main thread. The
+  rectangle is one bounding box (the top bar's clock and a window near
+  the bottom make a frame of all between them) and grows to hold whole
+  every window it touches, so overlapping windows are drawn again with
+  one another, and while a toast or a menu shows every frame is the
+  whole screen. Windows whose extent reaches into the top bar, as tiled
+  ones do, are drawn again with the clock every second: with 30 tiled
+  Life windows, paused, that frame takes about 3.4 ms at 100% and 7.5 ms
+  at 200% (0.7 ms cascaded). With 30 animating Life windows a frame takes
+  about 4.3 ms at 100% and 8.9 ms at 200%; 30 overlapping windows at 200%
+  take about 39 ms a frame, and a keystroke in a REPL among four other
+  windows shows about 9 ms later at 200%. A REPL alone shows it 2 ms
+  later (2.5 ms on a 4K screen), and the clock's second on an empty 4K
+  screen takes 0.1 ms (`tests/bench.ss`). Meanwhile a busy REPL
+  evaluation runs only between frames: with 30 Life windows animating
+  at 200% it gets about half of what it gets with them paused. Next on
+  the compositor plan: each window drawn into an image of its own, only
+  when it changes, and the images composed on the CPU, then on the GPU.
 - Every theme change paints the wallpaper again: a theme change takes
-  about 18 ms at 100% and 68 ms at 200% until its frame is drawn, so
+  about 18 ms at 100% and 67 ms at 200% until its frame is drawn, so
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
 - Only a minimal widget kit (`kits/ui.ss`, written for Settings): no text

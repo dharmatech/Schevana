@@ -87,9 +87,9 @@
   (safely 'procs (lambda () (run-procs! 10)))
   (unless (reload-holding?)
     (safely 'tick wm-tick!)
-    (let ([forced? *dirty*])
+    (let ([damage *dirty*])
       (set! *dirty* #f)
-      (safely 'render (lambda () (render-frame! forced?))))
+      (safely 'render (lambda () (render-frame! damage))))
     (safely 'present host-present-damage!)))
 
 (define (schevana-run!)

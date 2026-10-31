@@ -28,8 +28,9 @@
 ;; The wallpaper is a picture, painted once and blitted every frame. It is
 ;; a picture of its key: the screen's size and scale, draw-wallpaper, the
 ;; wallpapers registered and the whole theme, however it changed. When the
-;; key changes, the next frame paints it again first. Nothing else does,
-;; so a draw-wallpaper that reads the clock shows a still picture.
+;; key changes, the next frame paints it again first, and is the whole
+;; screen. Nothing else does, so a draw-wallpaper that reads the clock
+;; shows a still picture.
 
 (defvar *wallpaper* #f)   ; (layer key . theme): the picture, and what it is of
 
@@ -37,12 +38,18 @@
   (list *canvas-w* *canvas-h* *scale* draw-wallpaper *wallpapers*
         *theme-version*))
 
+;; Has the key changed since the picture was painted?
+(define (wallpaper-stale?)
+  (let ([old *wallpaper*])
+    (not (and old (equal? (cadr old) (wallpaper-key))
+              (theme-same? (cddr old))))))
+
 ;; The picture of the wallpaper as it is now, painted again if its key
 ;; changed. If draw-wallpaper raises, the error is reported once and the
 ;; old picture stays (none: a blank one) until the key changes again.
 (define (wallpaper-picture)
   (let ([key (wallpaper-key)] [old *wallpaper*])
-    (unless (and old (equal? (cadr old) key) (theme-same? (cddr old)))
+    (when (wallpaper-stale?)
       (let ([new (make-layer* *canvas-w* *canvas-h*)] [theme (theme-snapshot)])
         (if (guard (c [#t (report-error! 'desktop c) #f])
               (draw-into-layer! new

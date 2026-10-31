@@ -14,7 +14,16 @@
 ;;;   damage        a texture fed only the uploaded rows is the canvas after
 ;;;                 every step of this file; a frame that changes nothing
 ;;;                 uploads and presents nothing; the screen stays one
-;;;                 surface
+;;;                 surface; every way an area is asked for (the clock's
+;;;                 second, a window, part of it, a covered one, hover,
+;;;                 dragging, resizing, moving, a process, one switched
+;;;                 out after each area it asks for) leaves the reference
+;;;                 at 100, 150 and 200%, the clock comparing only the top
+;;;                 bar's rows, a lone window its extent's
+;;;   bleed         every style, and one glowing past its frame with and
+;;;                 without its 'bleed, moved, resized and hovered at 100
+;;;                 and 150%, leaves the reference; drawn unclipped, each
+;;;                 registered style keeps to its extent
 ;;;   the window    a fake window: boot, a resize, a drag, a rescale and a
 ;;;                 lost texture each show their own frame at once, never
 ;;;                 an empty new canvas
@@ -22,9 +31,11 @@
 ;;;                 owned surfaces, rescales and calls (render-frame!) while
 ;;;                 the main loop draws: frames stay whole
 ;;;   raising       a window's draw that raises crashes the window; a frame
-;;;                 whose drawing raises shows nothing
+;;;                 whose drawing raises shows nothing; a window-bleed that
+;;;                 raises is reported, and frames and input go on
 ;;;   redefinition  draw-window, draw-taskbar and a style, redefined: the
-;;;                 next frame shows them, is the reference, costs the same
+;;;                 next frame shows them, is the reference, costs the same;
+;;;                 a REPL evaluation asks for the whole screen as it ends
 ;;;   wallpaper     a theme change (raw or by set-theme!), a redefined
 ;;;                 draw-wallpaper or the wallpaper in use defined again
 ;;;                 paints it again for the next frame; a clock-reading
@@ -138,10 +149,9 @@
 
 (define shots 0)
 
-;; Does the canvas, once the frames asked for are drawn, equal the
-;; reference? label is printed with a count when it does not.
-(define (matches-reference? label)
-  (settle)
+;; Does the canvas equal the reference? label is printed with a count
+;; when it does not.
+(define (shows-reference? label)
   (let* ([ref (reference)] [n (differing *canvas* ref (monitor-mask))])
     (unless (= n 0)
       (set! shots (+ shots 1))
@@ -150,6 +160,11 @@
         (screenshot (format "~a/differs-~a.png" out-dir shots))))
     (cairo-surface-destroy ref)
     (= n 0)))
+
+;; The same, once the frames asked for are drawn.
+(define (matches-reference? label)
+  (settle)
+  (shows-reference? label))
 
 (define (pixel-of surface x y)   ; logical point
   (cairo-surface-flush surface)
@@ -267,7 +282,7 @@
 
 ;;; ------------------------------------------------------------------ identity
 
-(define styles '(mac windows win98 interlisp genera))
+(define styles '(mac windows interlisp genera))
 
 (for-each
  (lambda (pct)
@@ -338,6 +353,291 @@
                   (= (cadr typed) (* 4 *canvas-pw* (car typed)))
                   (= (caddr typed) 1)
                   (equal? kept '(#t #t)))))))
+
+;;; ------------------------------------------------------------------
+;;; damage paths
+;;; Every way an area is asked for, at 100, 150 and 200%, odd logical
+;;; coordinates giving fractional device ones: after each step the screen
+;;; is the reference. The clock's second compares (and so uploads) only
+;;; the top bar's rows; an invalidated window, alone, only its extent's.
+
+;; The rows the last frame compared, (y0 . y1), and the runs it changed.
+(define compared #f)
+(define compared-runs '())
+(let ([plain copy-changed-rows!])
+  (set! copy-changed-rows!
+    (lambda (y0 y1)
+      (let ([runs (plain y0 y1)])
+        (set! compared (cons y0 y1))
+        (set! compared-runs runs)
+        runs))))
+
+;; Did the step after u0 bytes compare just rows, change some of them and
+;; upload only those?
+(define (compared-only? rows u0)
+  (and (equal? compared rows) (pair? compared-runs)
+       (for-all (lambda (r) (<= (car rows) (car r) (cdr r) (cdr rows)))
+                compared-runs)
+       (= (- *upload-bytes* u0)
+          (* 4 *canvas-pw*
+             (apply + (map (lambda (r) (- (cdr r) (car r))) compared-runs))))))
+
+;; Styles that glow 5 pixels past their frame: glow-5 says so with 'bleed,
+;; glow does not, as one typed at the REPL might not.
+(define styles-before-glow *window-styles*)
+(define (glow-under win x y w h focused? hover pressed)
+  (fill-rect (- x 5) (- y 5) (+ w 10) (+ h 10) #xff00ff)
+  (fill-rect x y w (title-height) 'accent))
+(define-window-style glow-5 "Glow, 5" 'bleed (lambda (win) 5)
+  'draw-under glow-under)
+(define-window-style glow "Glow" 'draw-under glow-under)
+
+;; A window's extent, in device rows (y0 . y1).
+(define (extent-rows win)
+  (let-values ([(x y w h) (window-extent win)])
+    (cons (max 0 (exact (floor (* y *scale*))))
+          (min *canvas-ph* (exact (ceiling (* (+ y h) *scale*)))))))
+
+;; Where a style's button of that kind is, on screen.
+(define (button-point win kind)
+  (let ([b (assq kind (window-buttons win))])
+    (list (+ (window-x win) (cadr b) (quotient (cadddr b) 2))
+          (+ (window-y win) (caddr b) (quotient (list-ref b 4) 2)))))
+
+(define (taskbar-point win)
+  (let ([it (find (lambda (it) (eq? (caddr it) win)) *taskbar-items*)])
+    (list (+ (car it) 20) (- (screen-h) 10))))
+
+(define (damage-paths pct)
+  (set-theme! 'scale pct)
+  (clear-world!)
+  (let* ([tick 0] [asked 0] [a-ink #x3060a0] [b-ink #x40a060]
+         [c-ink #xa04060] [c-sub #xe0c040] [bad '()] [shown '()]
+         ;; part of a's drawing lies under b
+         [a (open-window "A" 'size '(301 . 201) 'pos '(201 . 151)
+              'draw (lambda (win w h) (fill-rect 151 101 141 91 a-ink)))]
+         [b (open-window "B" 'size '(301 . 201) 'pos '(401 . 251)
+              'draw (lambda (win w h) (fill-rect 21 21 61 41 b-ink)))]
+         ;; alone
+         [c (open-window "C" 'size '(201 . 151) 'pos '(901 . 401)
+              'draw (lambda (win w h)
+                      (fill-rect 0 0 w h c-ink)
+                      (fill-rect 11 13 47 29 c-sub)))])
+    (define (try! label)
+      (unless (matches-reference? (list pct label))
+        (set! bad (cons label bad))))
+    (define (step! label) (steps 1) (try! label))
+    (define (move! label x y) (inject! `(mouse-move ,x ,y)) (step! label))
+    (define (drag! label x y dx dy)   ; pressed at (x, y), moved 4 times
+      (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1))
+      (step! label)
+      (do ([i 1 (+ i 1)]) ((> i 4))
+        (move! (list label i) (+ x (* dx i)) (+ y (* dy i))))
+      (inject! `(mouse-up ,(+ x (* 4 dx)) ,(+ y (* 4 dy)) left))
+      (step! label))
+    (set! *status-segments* '())
+    (add-status-segment! 'tick (lambda () (format "tick ~a" tick)))
+    ;; new whenever asked, as the heap's size and the frame time are
+    (add-status-segment! 'asked (lambda () (set! asked (+ asked 1))
+                                  (format "asked ~a" asked)))
+    (steps 2)
+    ;; the clock's second
+    (set! tick 1)
+    (set! *last-second* -1)
+    (let ([u0 *upload-bytes*])
+      (steps 1)
+      (set! shown
+        (list (compared-only?
+               (cons 0 (exact (ceiling (* (topbar-height) *scale*)))) u0))))
+    (try! 'tick)
+    ;; (invalidate! win)
+    (set! c-ink #x60a040)
+    (invalidate! c)
+    (let ([u0 *upload-bytes*])
+      (steps 1)
+      (set! shown (append shown (list (compared-only? (extent-rows c) u0)))))
+    (try! 'invalidate)
+    (set! c-sub #x4040e0)
+    (invalidate! c 11 13 47 29)
+    (step! 'sub-rectangle)
+    (set! a-ink #xc08030)
+    (invalidate! a)
+    (step! 'covered)
+    ;; hover: buttons, content, title, the bars, the desktop
+    (apply move! 'a-close (button-point a 'close))
+    (move! 'b-content (+ (window-x b) 100) (+ (window-y b) 100))
+    (move! 'b-title (+ (window-x b) 150) (+ (window-y b) 10))
+    (move! 'launcher 20 10)
+    (apply move! 'taskbar-a (taskbar-point a))
+    (apply move! 'taskbar-c (taskbar-point c))
+    (move! 'desktop 1200 650)
+    (apply move! 'c-maximize (button-point c 'maximize))
+    (move! 'desktop-again 1200 650)
+    ;; a mac window, dragged by its title and resized
+    (drag! 'drag (+ (window-x a) 150) (+ (window-y a) 10) 37 23)
+    (drag! 'resize (+ (window-x a) (window-w a) -3)
+           (+ (window-y a) (window-h a) -3) -29 17)
+    ;; one that draws nothing past its frame, moved away from where it
+    ;; leaves half pixels at 150%
+    (set-theme! 'shadow 0)   ; shadow
+    (steps 1)
+    (move-window! c 1001 451)
+    (step! 'moved)
+    (set-theme! 'shadow (theme-default 'shadow))   ; shadow
+    ;; A process asks for areas around e, far from b and c, while main
+    ;; changes b and c by turns, compared at each step: none of main's
+    ;; areas may be lost, though the process is switched out anywhere.
+    (let* ([e (open-window "E" 'size '(81 . 61) 'pos '(41 . 601))]
+           [p (spawn "asks"
+                (lambda ()
+                  (let loop ()
+                    (invalidate! e)
+                    (invalidate! e 3 5 21 13)
+                    (request-frame! 141 621 11 11)
+                    (loop))))])
+      (fluid-let ([now-ms (lambda () (real-time))])
+        (do ([i 0 (+ i 1)]) ((= i 60))
+          (if (even? i)
+              (begin (set! b-ink (if (even? (quotient i 2)) #x6040a0 #x40a060))
+                     (invalidate! b))
+              (begin (set! c-ink (if (even? (quotient i 2)) #x2080c0 #x60a040))
+                     (invalidate! c)))
+          (schevana-step! 0)
+          (unless (shows-reference? (list pct 'process i))
+            (set! bad (cons (list 'process i) bad)))))
+      (kill! p)
+      (close-window! e))
+    (try! 'process-killed)
+    ;; A process moves, resizes and restyles d (to a style that reaches
+    ;; less far), switched out right after each area it asks for until
+    ;; main has drawn a frame (a timer may do that), then stays alive: d
+    ;; leaves nothing behind.
+    (set-theme! 'shadow 0)   ; shadow
+    (let ([d (open-window "D" 'size '(121 . 81) 'pos '(61 . 81)
+                          'window-style 'glow-5)]
+          [plain request-frame!] [done #f])
+      (steps 1)
+      (set! request-frame!
+        (case-lambda
+          [() (plain)]
+          [(x y w h)
+           (plain x y w h)
+           (when (in-engine?)
+             (let ([f *frames-drawn*])
+               (let spin ()
+                 (when (= f *frames-drawn*) (engine-block) (spin)))))]))
+      (let ([p (spawn "switched out"
+                 (lambda ()
+                   (move-window! d 301 97)
+                   (resize-window! d 61 41)
+                   (window-set! d 'window-style 'mac)
+                   (set! done #t)
+                   (let park () (sleep-ms 100000000) (park))))])
+        (fluid-let ([now-ms (lambda () (real-time))])
+          (do ([i 0 (+ i 1)]) ((or done (= i 100))) (schevana-step! 0))
+          (do ([i 0 (+ i 1)]) ((= i 2)) (schevana-step! 0)))
+        (set! request-frame! plain)
+        (unless (and done (shows-reference? (list pct 'switched-out)))
+          (set! bad (cons 'switched-out bad)))
+        (kill! p)
+        (close-window! d)))
+    (set-theme! 'shadow (theme-default 'shadow))   ; shadow
+    (for-each close-window! (list a b c))
+    (fixed-status!)
+    (steps 1)
+    (check (format "every way an area is asked for shows the reference at \
+                    ~a%~a; the clock's second compares and uploads only \
+                    the top bar's rows, an invalidated window only its \
+                    extent's ~s"
+                   pct (if (null? bad) "" (format " (not: ~s)" (reverse bad)))
+                   shown)
+           (and (null? bad) (equal? shown '(#t #t))))))
+
+(for-each damage-paths '(100 150 200))
+
+;;; ------------------------------------------------------------------ bleed
+;;; A window is drawn clipped to its extent. Every style, glow-5 and glow
+;;; (whose glow is clipped away) leave the reference when moved, resized
+;;; and hovered, at 100 and 150%, and glow-5's glow shows. Drawn alone and
+;;; unclipped, every registered style but glow keeps to its extent, focused
+;;; or not, as set up here and with the theme's defaults.
+
+;; How many pixels win, drawn alone and unclipped, puts outside its extent.
+(define (bleeding win focused?)
+  (let ([alone (canvas-image)] [blank (canvas-image)])
+    (let ([cr (cairo-create alone)])
+      (cairo-scale cr *scale* *scale*)
+      (fluid-let ([*cr* cr]) (draw-window* win focused?))
+      (cairo-destroy cr))
+    (let ([n (differing alone blank (extent-box win))])
+      (cairo-surface-destroy alone)
+      (cairo-surface-destroy blank)
+      n)))
+
+;; The registered styles that draw outside their extent.
+(define (styles-bleeding)
+  (let ([w (open-window "Alone" 'size '(201 . 121) 'pos '(301 . 201))])
+    (let ([out (filter (lambda (style)
+                         (window-set! w 'window-style style)
+                         (> (+ (bleeding w #t) (bleeding w #f)) 0))
+                       (window-styles))])
+      (close-window! w)
+      out)))
+
+(for-each
+ (lambda (pct)
+   (set-theme! 'scale pct)
+   (clear-world!)
+   (set-theme! 'shadow 0)   ; shadow
+   (steps 1)
+   (let ([bad '()] [glows '()])
+     (define (step! label)
+       (steps 1)
+       (unless (shows-reference? (list pct label))
+         (set! bad (cons label bad))))
+     (for-each
+      (lambda (style)
+        (let ([w (open-window "Styled" 'size '(201 . 121) 'pos '(301 . 201)
+                              'window-style style)])
+          (steps 1)
+          (do ([i 1 (+ i 1)]) ((> i 3))
+            (move-window! w (+ 301 (* i 37)) (+ 201 (* i 23)))
+            (step! (list style 'moved i)))
+          (do ([i 1 (+ i 1)]) ((> i 2))
+            (resize-window! w (- 201 (* i 29)) (+ 121 (* i 17)))
+            (step! (list style 'resized i)))
+          (for-each (lambda (b)
+                      (inject! `(mouse-move ,@(button-point w (car b))))
+                      (step! (list style 'hover (car b))))
+                    (window-buttons w))
+          (inject! '(mouse-move 1200 650))
+          (step! (list style 'left))
+          (set! glows (cons (cons style (pixel-of *canvas* (- (window-x w) 3)
+                                                  (+ (window-y w) 30)))
+                            glows))
+          (close-window! w)
+          (step! (list style 'closed))))
+      (window-styles))
+     (let ([glow-5 (cdr (assq 'glow-5 glows))] [glow (cdr (assq 'glow glows))]
+           [none (styles-bleeding)])
+       (set-theme! 'shadow (theme-default 'shadow))   ; shadow
+       (let ([default (styles-bleeding)])
+         (check (format "a window is drawn clipped to its extent: every \
+                         style, one glowing past its frame with its 'bleed \
+                         (#x~x) and one without (#x~x) leave the reference \
+                         when moved, resized and hovered at ~a%~a; \
+                         unclipped, the styles that draw outside their \
+                         extent are ~s, ~s with the theme's defaults"
+                        glow-5 glow pct
+                        (if (null? bad) "" (format " (not: ~s)" (reverse bad)))
+                        none default)
+                (and (null? bad) (= glow-5 #xffff00ff) (not (= glow #xffff00ff))
+                     (equal? none '(glow))
+                     (null? (remq 'glow default))))))))
+ '(100 150))
+(set! *window-styles* styles-before-glow)
+(set-theme! 'scale 100)
+(steps 1)
 
 ;;; ------------------------------------------------------------------
 ;;; the window
@@ -517,6 +817,32 @@
                (and crashed (window-error w) (not shown?)
                     (matches-reference? 'after-raise)))))))
 
+;; A window-bleed with a mistake, as typed at the REPL: it is reported,
+;; every window covers the whole screen meanwhile, and frames and input go
+;; on, so that it can be fixed.
+(let* ([keys 0] [plain window-bleed] [frames *frames-drawn*]
+       [w (open-window "Keys" 'size '(200 . 100) 'pos '(300 . 200)
+                       'key (lambda (win key mods) (set! keys (+ keys 1))))])
+  (steps 1)
+  (check "a window-bleed that raises is reported, and frames and input go on"
+         (guard (c [#t (set! window-bleed plain) (raise c)])
+           (set! window-bleed (lambda (win) (+ 1 'x)))
+           (parameterize ([console-error-port (open-output-string)])
+             (window-call w 'key #\a '())
+             (steps 1)
+             (move-window! w 320 210)
+             (steps 1))
+           (let ([drawn (- *frames-drawn* frames)]
+                 [same (shows-reference? 'bad-bleed)]
+                 [told (exists (lambda (t)
+                                 (string-contains-ci? (vector-ref t 1) "bleed"))
+                               *toasts*)])
+             (set! window-bleed plain)
+             (set! *toasts* '())
+             (close-window! w)
+             (and (= keys 1) (> drawn 1) same told
+                  (matches-reference? 'bleed-fixed))))))
+
 ;;; ------------------------------------------------------------------
 ;;; redefinition
 
@@ -565,6 +891,25 @@
            (and same (equal? shown '(#xffff0000 #xff0000ff #xff00ff00))
                 (< after (+ (* 2 before) 0.5))
                 (matches-reference? 'restored)))))
+
+;; A REPL evaluation asks for the whole screen when it ends: a drawing
+;; procedure it redefines shows on that frame.
+(let ([r (repl)] [plain draw-taskbar])
+  (steps 2)
+  (inject! '(text "(define (draw-taskbar) (fill-rect 0 30 50 50 #xff00ff))")
+           '(key-down return ()))
+  (steps 1)
+  (let ([whole (equal? compared (cons 0 *canvas-ph*))]
+        [shown (pixel-of *canvas* 10 40)]
+        [same (shows-reference? 'repl-redefined)])
+    (set! draw-taskbar plain)
+    (close-window! r)
+    (check (format "a REPL evaluation asks for the whole screen when it ends \
+                    (~a): a drawing procedure it redefines shows on that \
+                    frame (#x~x)" whole shown)
+           (and whole (= shown #xffff00ff) same (not (repl-proc
+                                                      (window-ref r 'state)))
+                (matches-reference? 'repl-restored)))))
 
 ;;; ------------------------------------------------------------------ wallpaper
 

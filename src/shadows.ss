@@ -8,6 +8,7 @@
 ;;;   (draw-shadow x y w h r size)            a soft shadow under a box
 ;;;   (window-shadow win x y w h r focused?)  a window's, for its style: the
 ;;;                                           theme key 'shadow, half unfocused
+;;;   (window-shadow-reach win)               how far past the frame that goes
 
 ;; A soft shadow under the box (x y w h) with corner radius r, spreading
 ;; size pixels, a little lower than the box.
@@ -272,3 +273,9 @@
   (unless (maximized? win)
     (draw-shadow x y w h r
                  (if focused? (theme 'shadow) (quotient (theme 'shadow) 2)))))
+
+;; How far past its frame a window's shadow may reach, in whole logical
+;; pixels: the focused size, and the third of it the shadow lies lower.
+(define (window-shadow-reach win)
+  (let ([size (theme 'shadow)])
+    (if (maximized? win) 0 (+ size (quotient (+ size 2) 3)))))

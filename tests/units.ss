@@ -187,8 +187,9 @@
 ;; Measuring never depends on *cr*. (Once the fonts were made again, the
 ;; first measurement of 'mono could happen in Settings' Genera preview,
 ;; drawn at half scale, and the REPL's characters overlapped from then on.)
-;; mono's char width and a text-width when 'mono is first measured inside
-;; (measure-in measure), on a fresh context scaled like the canvas.
+;; mono's char width and text-widths in 'mono and Genera's label font when
+;; first measured inside (measure-in measure), on a fresh context scaled
+;; like the canvas.
 (define (first-measured-in measure-in)
   (install-default-fonts!)
   (let* ([img (cairo-image-surface-create CAIRO_FORMAT_ARGB32 400 300)]
@@ -198,7 +199,8 @@
                (measure-in
                 (lambda ()
                   (list (font-char-width 'mono)
-                        (text-width "(set-theme! 'accent #xff9e64)" 'mono)))))])
+                        (text-width "(set-theme! 'accent #xff9e64)" 'mono)
+                        (text-width "Dynamic Lisp Listener" 'ui-italic)))))])
       (cairo-destroy cr)
       (cairo-surface-destroy img)
       v)))
@@ -212,7 +214,7 @@
                                     (lambda (measure) (measure)))]
                            [preview (first-measured-in
                                      (lambda (measure)
-                                       ;; its title is in 'mono
+                                       ;; its label is in 'ui-italic
                                        (draw-window-style-preview
                                         'genera 0 0 200 150 0.5)
                                        (call-with-scale 0.5 measure)))])
@@ -854,6 +856,38 @@
                               (lambda () (invalidate! w))
                               (lambda () (invalidate! w 1 2 3 4))
                               request-frame!)))
+  (let-values ([(ex ey ew eh) (window-extent w)])
+    (define (asked thunk) (set! *dirty* #f) (thunk) *dirty*)
+    (check "(invalidate! win) and (invalidate! win x y w h) ask for its \
+            extent; areas asked for make their bounding box, and the \
+            whole screen holds them all"
+           (and (equal? (asked (lambda () (invalidate! w)))
+                        (list ex ey (+ ex ew) (+ ey eh)))
+                (equal? (asked (lambda () (invalidate! w -5 10 30 500)))
+                        (list ex ey (+ ex ew) (+ ey eh)))
+                (equal? (asked (lambda ()
+                                 (request-frame! 10 20 30 40)
+                                 (request-frame! 100 5 10 10)))
+                        '(10 5 110 60))
+                (eq? (asked (lambda () (request-frame!) (invalidate! w)))
+                     #t))))
+  (let ([plain *window-styles*]
+        [bleed-of (lambda (w)   ; how far w's extent reaches past its frame
+                    (let-values ([(x y ew eh) (window-extent w)])
+                      (- (window-x w) x)))])
+    (define-window-style wide "Wide" 'bleed (lambda (win) 5))
+    (set-theme! 'shadow 0)   ; shadow
+    (window-set! w 'window-style 'wide)
+    (let ([wide (bleed-of w)])
+      (window-set! w 'window-style 'mac)
+      (set-theme! 'shadow -6)   ; shadow
+      (let ([narrow (bleed-of w)])
+        (set-theme! 'shadow (theme-default 'shadow))   ; shadow
+        (set! *window-styles* plain)
+        (check (format "a style's 'bleed widens its windows' extent (~a); \
+                        nothing makes it smaller than the frame (~a)"
+                       wide narrow)
+               (and (= wide 5) (= narrow 0))))))
   (window-call w 'key #\a '())   ; no key handler: nothing to see
   (window-on! w 'key (lambda (win key mods) (void)))
   (check "input to a handler asks for a frame"

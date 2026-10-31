@@ -46,6 +46,7 @@
 (defvar *windows* '())        ; z-order, topmost first
 (defvar *focus* #f)
 (defvar *next-window-id* 1)
+;; what the next frame draws: #f, #t (the whole screen) or (x0 y0 x1 y1)
 (defvar *dirty* #t)
 (defvar *drag* #f)            ; the current mouse interaction, see drag record
 (defvar *hover* #f)
@@ -59,27 +60,72 @@
 
 ;;; ------------------------------------------------------------------
 ;;; invalidation
-;;; *dirty* asks for a forced frame: everything on screen is drawn again
-;;; from scratch (render-full-into!), so every change only has to say that
-;;; something changed.
+;;; A change says where the screen may now look different. *dirty* holds
+;;; the bounding box of every area asked for since the last frame, or #t
+;;; for the whole screen. The next frame draws everything from scratch
+;;; (render-full-into!), clipped to that box grown to hold whole each
+;;; window and bar it touches (frame-box), each window clipped to its
+;;; extent, so nothing is assumed about what a drawing procedure does.
 ;;;
-;;;   (invalidate!)       anything may have changed
-;;;   (invalidate! win)   win's content changed (input to a window says so
-;;;                       by itself)
-;;;   (invalidate! win x y w h)   the same as (invalidate! win), for apps
-;;;                       written when only that part was drawn again
+;;;   (invalidate!)       anything may have changed: the whole screen
+;;;   (invalidate! win)   win's extent: its frame and what its style may
+;;;                       draw past it (input to a window says so by itself)
+;;;   (invalidate! win x y w h)   the same, for apps written when only
+;;;                       that part was drawn again (frames redraw whole
+;;;                       windows anyway)
+;;;   (request-frame!), (request-frame! x y w h)   the whole screen, or a
+;;;                       rectangle of it
+;;;
+;;; A window that changes by itself over time (a clock, an animation) says
+;;; so with invalidate!; one whose change also shows outside it (its title
+;;; in the bars, say) asks for the whole screen. Of the rest, only the top
+;;; bar, with its status segments, is drawn again once a second.
 
 ;; the window whose handler is running
 (defvar current-window (make-thread-parameter #f))
 
-(define invalidate!
+;; The bounding box of two boxes (x0 y0 x1 y1).
+(define (box-union a b)
+  (list (min (car a) (car b)) (min (cadr a) (cadr b))
+        (max (caddr a) (caddr b)) (max (cadddr a) (cadddr b))))
+
+;; Interrupts off: a process switched out between reading and writing
+;; *dirty* would lose any area asked for meanwhile.
+(define request-frame!
   (case-lambda
     [() (set! *dirty* #t)]
-    [(win) (set! *dirty* #t)]
+    [(x y w h)
+     (when (and (> w 0) (> h 0))
+       (let ([r (list x y (+ x w) (+ y h))])
+         (with-interrupts-disabled
+           (let ([d *dirty*])
+             (set! *dirty* (if (pair? d) (box-union d r) (or d r)))))))]))
+
+(define invalidate!
+  (case-lambda
+    [() (request-frame!)]
+    [(win)
+     (if win
+         (call-with-values (lambda () (window-extent win)) request-frame!)
+         (request-frame!))]
     [(win x y w h) (invalidate! win)]))
 
-;; The window manager's or the shell's state changed.
-(define (request-frame!) (set! *dirty* #t))
+;; How far past its frame a window may draw, never less than 0: its
+;; style's 'bleed. A style that strokes inside its frame needs none:
+;; anti-aliasing stays in the device pixels the frame touches.
+(define (window-bleed win)
+  (max 0
+       (window-shadow-reach win)   ; shadow
+       ((window-style-bleed (window-style-of win)) win)))
+
+;; What win may cover on screen, (values x y w h): its frame and bleed;
+;; the whole screen if the bleed raises (a mistake typed at the REPL), so
+;; that frames and input go on and it can be fixed.
+(define (window-extent win)
+  (guard (c [#t (report-error! 'bleed c) (values 0 0 (screen-w) (screen-h))])
+    (let ([b (window-bleed win)])
+      (values (- (window-x win) b) (- (window-y win) b)
+              (+ (window-w win) b b) (+ (window-h win) b b)))))
 
 (define (screen-w) *canvas-w*)
 (define (screen-h) *canvas-h*)
@@ -103,6 +149,11 @@
 (define (desktop-rect)
   (let ([top (topbar-height)] [bottom (taskbar-height)])
     (values 0 top (screen-w) (- (screen-h) top bottom))))
+
+(define (topbar-rect) (values 0 0 (screen-w) (topbar-height)))
+
+(define (taskbar-rect)
+  (let ([h (taskbar-height)]) (values 0 (- (screen-h) h) (screen-w) h)))
 
 (define (point-in? px py x y w h)
   (and (>= px x) (< px (+ x w)) (>= py y) (< py (+ y h))))
@@ -217,9 +268,13 @@
 (define (window-ref win key . default)
   (hashtable-ref (window-props win) key (if (null? default) #f (car default))))
 
+;; A property may change the extent ('window-style): asks for the old one
+;; and the new one, once changed (see set-geometry!).
 (define (window-set! win key val)
-  (hashtable-set! (window-props win) key val)
-  (invalidate! win))
+  (let-values ([(x y w h) (window-extent win)])
+    (hashtable-set! (window-props win) key val)
+    (request-frame! x y w h)
+    (invalidate! win)))
 
 (define (window-on! win kind proc)
   (hashtable-set! (window-handlers win) kind proc)
@@ -268,9 +323,11 @@
                      (lambda (c) (window-crash! win kind c) #f)))
         #f)))
 
+;; The whole screen: a handler stopped partway may have left shared state
+;; (focus, order, titles) half changed.
 (define (window-crash! win kind c)
   (window-error-set! win (cons kind c))
-  (invalidate! win))
+  (invalidate!))
 
 (define (focus-window! win)
   (unless (eq? win *focus*)
@@ -310,19 +367,24 @@
   (when (eq? win *focus*) (focus-topmost!))
   (request-frame!))
 
-;; Sets the outer geometry, enforcing minimum sizes, and tells the app.
+;; Sets the outer geometry, enforcing minimum sizes, and tells the app;
+;; then asks for the old extent and the new one. Asked for before the
+;; change, the old one could go to a frame drawn while a process is
+;; switched out, the window still there, and stay on screen.
 (define (set-geometry! win x y w h)
   (let*-values ([(l t r b) (frame-insets win)]
                 [(w) (max (+ l r (window-min-w win)) (exact (round w)))]
                 [(h) (max (+ t b (window-min-h win)) (exact (round h)))]
                 [(resized?)
-                 (not (and (= w (window-w win)) (= h (window-h win))))])
+                 (not (and (= w (window-w win)) (= h (window-h win))))]
+                [(ox oy ow oh) (window-extent win)])
     (window-x-set! win (exact (round x)))
     (window-y-set! win (exact (round y)))
     (window-w-set! win w)
     (window-h-set! win h)
     (when resized? (window-call win 'resize (- w l r) (- h t b)))
-    (request-frame!)))
+    (request-frame! ox oy ow oh)
+    (invalidate! win)))
 
 (define (move-window! win x y)
   (set-geometry! win x y (window-w win) (window-h win)))
@@ -347,7 +409,8 @@
     (window-restore-set! win (list (window-x win) (window-y win)
                                    (window-w win) (window-h win)))
     (window-state-set! win 'maximized)
-    (fit-maximized! win)))
+    (fit-maximized! win)
+    (request-frame!)))
 
 (define (fit-maximized! win)
   (let-values ([(x y w h) (desktop-rect)])
@@ -390,7 +453,8 @@
                 (set-geometry! win (+ dx gap (* cw (mod i cols)))
                                (+ dy gap (* ch (quotient i cols)))
                                (- cw gap) (- ch gap))
-                (loop (cdr ws) (+ i 1))))))))))
+                (loop (cdr ws) (+ i 1)))))))))
+  (request-frame!))
 
 (define (cascade-windows!)
   (set! *cascade* 0)
@@ -492,10 +556,21 @@
               => (lambda (w) (list 'window w (window-region w x y)))]
              [else '(desktop)])])
     (unless (equal? h *hover*)
+      (request-hover-frame! *hover*)
       (set! *hover* h)
-      (request-frame!))
+      (request-hover-frame! h))
     (host-set-cursor!
      (if (eq? (car h) 'window) (region-cursor (cadr h) (caddr h)) 'arrow))))
+
+;; Asks for what shows the hover h: a window's extent, a bar, nothing for
+;; the desktop; the whole screen for the menu or anything else.
+(define (request-hover-frame! h)
+  (case (and (pair? h) (car h))
+    [(window) (invalidate! (cadr h))]
+    [(topbar) (call-with-values topbar-rect request-frame!)]
+    [(taskbar) (call-with-values taskbar-rect request-frame!)]
+    [(desktop #f) (void)]
+    [else (request-frame!)]))
 
 (define (wm-mouse-move x y)
   (set! *mouse-x* x)
@@ -576,7 +651,8 @@
     (case region
       [(close minimize maximize depth)
        (when (eq? button 'left)
-         (set! *drag* (make-drag region win button x y 0 0 0 0)))]
+         (set! *drag* (make-drag region win button x y 0 0 0 0))
+         (invalidate! win))]   ; its style draws the button pressed
       [(frame) (void)]
       [(title)
        (cond
@@ -675,9 +751,9 @@
 (define (wm-tick!)
   (for-each (lambda (w) (window-call w 'tick)) *windows*)
   (let ([s (time-second (current-time))])
-    (unless (= s *last-second*)   ; a forced frame at least once a second
+    (unless (= s *last-second*)   ; the status segments, once a second
       (set! *last-second* s)
-      (request-frame!)))
+      (call-with-values topbar-rect request-frame!)))
   (expire-toasts!))
 
 ;;; ------------------------------------------------------------------ drawing
@@ -762,47 +838,112 @@
     (+ (* 1000.0 (time-second dt)) (/ (time-nanosecond dt) 1e6))))
 
 ;; The whole screen drawn from scratch onto surface, an image the
-;; canvas's size.
-(define (render-full-into! surface)
-  ;; A fresh cairo context, so a crashed draw can't leave the graphics
-  ;; state unbalanced. Outside it *cr* only measures.
-  (let ([cr (cairo-create surface)])
-    ;; every pixel, the last column at 150% too
-    (cairo-set-operator cr CAIRO_OPERATOR_SOURCE)
-    (cairo-set-source-rgba cr 0 0 0 1)
-    (cairo-paint cr)
-    (cairo-set-operator cr CAIRO_OPERATOR_OVER)
-    (cairo-scale cr *scale* *scale*)
-    (fluid-let ([*cr* cr])
-      (safely 'desktop draw-desktop)
-      (for-each (lambda (w)
-                  (when (visible? w)
-                    (safely 'window (lambda () (draw-window w)))))
-                (reverse *windows*))
-      (safely 'taskbar draw-taskbar)
-      (safely 'topbar draw-topbar)
-      (safely 'menu draw-menu)
-      (safely 'toasts draw-toasts))
-    (cairo-destroy cr)
-    (cairo-surface-flush surface)))
+;; canvas's size; or the same drawing clipped to the device pixels from
+;; (x0, y0) to (x1, y1). One rectangle: cairo 1.18.4 crashes on a clip
+;; of boxes with gaps between them.
+(define render-full-into!
+  (case-lambda
+    [(surface) (render-full-into! surface 0 0 *canvas-pw* *canvas-ph*)]
+    [(surface x0 y0 x1 y1)
+     ;; A fresh cairo context, so a crashed draw can't leave the graphics
+     ;; state unbalanced. Outside it *cr* only measures.
+     (let ([cr (cairo-create surface)])
+       (cairo-rectangle cr x0 y0 (- x1 x0) (- y1 y0))
+       (cairo-clip cr)
+       ;; every pixel, the last column at 150% too
+       (cairo-set-operator cr CAIRO_OPERATOR_SOURCE)
+       (cairo-set-source-rgba cr 0 0 0 1)
+       (cairo-paint cr)
+       (cairo-set-operator cr CAIRO_OPERATOR_OVER)
+       (cairo-scale cr *scale* *scale*)
+       (fluid-let ([*cr* cr])
+         (safely 'desktop draw-desktop)
+         (for-each (lambda (w)
+                     (when (visible? w)
+                       (safely 'window (lambda () (draw-window-clipped w)))))
+                   (reverse *windows*))
+         (safely 'taskbar draw-taskbar)
+         (safely 'topbar draw-topbar)
+         (safely 'menu draw-menu)
+         (safely 'toasts draw-toasts))
+       (cairo-destroy cr)
+       (cairo-surface-flush surface))]))
 
-;; One step's frame. If something asked for one (forced?, from *dirty*),
-;; the whole screen is drawn again from scratch into the second buffer,
-;; and the rows that changed are copied onto the screen (gfx.ss), where
-;; they wait for the host's upload. A process may be switched out at any
-;; call while the main loop draws on, so typed in a REPL (a process) or
-;; called by a handler, (render-frame!) only asks for a frame.
+;; A logical rectangle in device pixels, rounded outward and clamped to
+;; the canvas: (x0 y0 x1 y1).
+(define (pixel-box x y w h)
+  (define (px v whole n) (clamp (exact (whole (* v *scale*))) 0 n))
+  (list (px x floor *canvas-pw*) (px y floor *canvas-ph*)
+        (px (+ x w) ceiling *canvas-pw*) (px (+ y h) ceiling *canvas-ph*)))
+
+(define (extent-box win)
+  (call-with-values (lambda () (window-extent win)) pixel-box))
+
+;; win drawn clipped to its extent's device pixels: whatever its style or
+;; a redefined draw-window draws, it is drawn again when win changes or
+;; moves.
+(define (draw-window-clipped win)
+  (apply (lambda (x0 y0 x1 y1)
+           (let ([s *scale*])
+             (call-with-clip (/ x0 s) (/ y0 s) (/ (- x1 x0) s) (/ (- y1 y0) s)
+               (lambda () (draw-window win)))))
+         (extent-box win)))
+
+;; Does box a hold box b whole?
+(define (holds? a b)
+  (and (<= (car a) (car b)) (<= (cadr a) (cadr b))
+       (<= (caddr b) (caddr a)) (<= (cadddr b) (cadddr a))))
+
+;; Does box a overlap box b without holding it whole?
+(define (cuts? a b)
+  (and (< (car a) (caddr b)) (< (car b) (caddr a))
+       (< (cadr a) (cadddr b)) (< (cadr b) (cadddr a))
+       (not (holds? a b))))
+
+;; The frame's box: the area asked for (damage: #t, or (x0 y0 x1 y1)) in
+;; device pixels, grown until it cuts no window and no bar; the whole
+;; screen while a menu or a toast shows. Cairo draws what a clip cuts a
+;; little differently from the same drawing whole (another compositing
+;; path, pixman's spans started elsewhere), so a box that cut one would
+;; not show the whole screen's drawing there.
+(define (frame-box damage)
+  (if (or (eq? damage #t) (menu-open?) (pair? *toasts*))
+      (list 0 0 *canvas-pw* *canvas-ph*)
+      (let ([items (cons* (call-with-values topbar-rect pixel-box)
+                          (call-with-values taskbar-rect pixel-box)
+                          (map extent-box (filter visible? *windows*)))])
+        (let grow ([b (apply (lambda (x0 y0 x1 y1)
+                               (pixel-box x0 y0 (- x1 x0) (- y1 y0)))
+                             damage)])
+          (let ([i (find (lambda (i) (cuts? b i)) items)])
+            (if i (grow (box-union b i)) b))))))
+
+;; One step's frame, of the area asked for (damage, from *dirty*): drawn
+;; from scratch into the second buffer, clipped to its box; then only the
+;; box's rows are compared with the screen's, and those that changed are
+;; copied onto the screen (gfx.ss), where they wait for the host's upload.
+;; That is enough because after every frame the second buffer equals the
+;; screen; a new canvas or second buffer asks for the whole screen. So
+;; does a new picture of the wallpaper. A process may be switched out at
+;; any call while the main loop draws on, so typed in a REPL (a process)
+;; or called by a handler, (render-frame!) only asks for a frame.
 (define render-frame!
   (case-lambda
     [() (render-frame! #t)]
-    [(forced?)
+    [(damage)
      (cond
-       [(or (not forced?) (eqv? *canvas* 0)) (void)]
+       [(or (not damage) (eqv? *canvas* 0)) (void)]
        [(in-engine?) (request-frame!)]
        [else
-        (let ([t0 (current-time 'time-monotonic)])
-          (refresh-status!)
-          (render-full-into! *back*)
-          (set! *upload-rows* (append (copy-changed-rows!) *upload-rows*))
+        (let* ([t0 (current-time 'time-monotonic)]
+               [box (frame-box (or (wallpaper-stale?) damage))])
+          ;; the status changes only with the top bar that shows it
+          (when (holds? box (call-with-values topbar-rect pixel-box))
+            (refresh-status!))
+          (apply (lambda (x0 y0 x1 y1)
+                   (render-full-into! *back* x0 y0 x1 y1)
+                   (set! *upload-rows*
+                     (append (copy-changed-rows! y0 y1) *upload-rows*)))
+                 box)
           (set! *frame-ms* (ms-since t0))
           (set! *frames-drawn* (+ *frames-drawn* 1)))])]))

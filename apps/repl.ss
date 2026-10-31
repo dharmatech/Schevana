@@ -175,6 +175,7 @@
   (let ([port (repl-port r)] [width (max 20 (- (repl-cols r) 1))])
     (window-title-set! win (string-append (repl-title r)
                                           " — running · Ctrl+C to interrupt"))
+    (invalidate!)   ; the title shows in the bars too
     (repl-proc-set! r
       (spawn "repl"
              (lambda ()

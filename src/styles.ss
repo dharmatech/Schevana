@@ -5,7 +5,7 @@
 ;;; draw-over after it. The global style is the theme key 'window-style;
 ;;; one window can override it with its own 'window-style property.
 ;;;
-;;;   (set-theme! 'window-style 'win98)     ; or mac, windows, interlisp, genera
+;;;   (set-theme! 'window-style 'genera)    ; or mac, windows, interlisp
 ;;;   (open-window "Odd one out" 'window-style 'windows)
 ;;;
 ;;; Each style is a file in styles/. Add your own there, in
@@ -21,12 +21,20 @@
 ;;; whose title is not along the top lists its drag handle as a 'title
 ;;; area (Genera's label sits at the bottom).
 ;;; hover is the region under the mouse, pressed the drag in progress.
+;;;
+;;; A style that draws past its frame (a glow, say) gives how far, in
+;;; logical pixels, as 'bleed (lambda (win) 5). A window is drawn clipped
+;;; to its extent (window-extent in wm.ss), its frame and at least that
+;;; bleed: only that much is drawn again when it changes.
 
 (define-record-type window-style
-  (nongenerative schevana-window-style)
-  (fields name title insets radius buttons draw-under draw-over))
+  (nongenerative schevana-window-style-2)
+  (fields name title insets radius buttons draw-under draw-over bleed))
 
 (defvar *window-styles* '())   ; in registration order
+;; (a world reloaded from before 'bleed holds styles of the old record:
+;; their files register them again)
+(set! *window-styles* (filter window-style? *window-styles*))
 
 ;; A style from define-window-style's options. What they leave out is a
 ;; plain frame: a title bar's height on top, and nothing drawn.
@@ -37,7 +45,8 @@
    (plist-ref opts 'radius (lambda (win) 0))
    (plist-ref opts 'buttons (lambda (win) '()))
    (plist-ref opts 'draw-under (lambda args (void)))
-   (plist-ref opts 'draw-over (lambda args (void)))))
+   (plist-ref opts 'draw-over (lambda args (void)))
+   (plist-ref opts 'bleed (lambda (win) 0))))
 
 (define (register-window-style! name title . opts)
   (set! *window-styles*
