@@ -35,10 +35,13 @@
   (lambda (w p wr)
     (fprintf p "#<window ~a ~s ~ax~a+~a+~a~a>" (window-id w) (window-title w)
              (window-w w) (window-h w) (window-x w) (window-y w)
-             (if (eq? (window-state w) 'normal) "" (format " ~a" (window-state w))))))
+             (if (eq? (window-state w) 'normal)
+                 ""
+                 (format " ~a" (window-state w))))))
 
 (define handler-kinds
-  '(open draw tick key text mouse-down mouse-up mouse-move wheel resize focus blur close))
+  '(open draw tick key text mouse-down mouse-up mouse-move wheel resize focus
+    blur close))
 
 (defvar *windows* '())        ; z-order, topmost first
 (defvar *focus* #f)
@@ -54,7 +57,8 @@
   (nongenerative schevana-drag)
   (fields kind win button mx my x y w h))
 
-;;; ------------------------------------------------------------------ invalidation
+;;; ------------------------------------------------------------------
+;;; invalidation
 ;;; *dirty* asks for a forced frame: everything on screen is drawn again
 ;;; from scratch (render-full-into!), so every change only has to say that
 ;;; something changed.
@@ -65,7 +69,8 @@
 ;;;   (invalidate! win x y w h)   the same as (invalidate! win), for apps
 ;;;                       written when only that part was drawn again
 
-(defvar current-window (make-thread-parameter #f))   ; the window whose handler is running
+;; the window whose handler is running
+(defvar current-window (make-thread-parameter #f))
 
 (define invalidate!
   (case-lambda
@@ -87,9 +92,12 @@
                   [(topbar-height) (+ (font-line-height 'ui) 7)]
                   [(taskbar-height) (+ (font-line-height 'ui) 13)]
                   [else 0]))))
-(define (title-height) (max (theme 'title-height) (chrome-min-height 'title-height)))
-(define (topbar-height) (max (theme 'topbar-height) (chrome-min-height 'topbar-height)))
-(define (taskbar-height) (max (theme 'taskbar-height) (chrome-min-height 'taskbar-height)))
+(define (title-height)
+  (max (theme 'title-height) (chrome-min-height 'title-height)))
+(define (topbar-height)
+  (max (theme 'topbar-height) (chrome-min-height 'topbar-height)))
+(define (taskbar-height)
+  (max (theme 'taskbar-height) (chrome-min-height 'taskbar-height)))
 
 ;; The area between the top bar and the taskbar.
 (define (desktop-rect)
@@ -109,8 +117,7 @@
 (defvar current-app (make-parameter #f))
 
 (define (register-app! name title launch)
-  (set! *apps* (append (remp (lambda (a) (eq? (app-name a) name)) *apps*)
-                       (list (make-app name title launch))))
+  (set! *apps* (registry-add *apps* (make-app name title launch) app-name))
   (request-frame!))
 
 ;; (define-app (name) "Title" body ...) defines an ordinary procedure that
@@ -133,16 +140,19 @@
 (define (app-color name)
   (let ([s (symbol->string (or name 'unknown))])
     (list-ref app-colors
-              (mod (fold-left (lambda (h c) (+ (* h 31) (char->integer c))) 7 (string->list s))
+              (mod (fold-left (lambda (h c) (+ (* h 31) (char->integer c)))
+                              7 (string->list s))
                    (length app-colors)))))
 
 ;;; ------------------------------------------------------------------ windows
 
 (define (open-window title . opts)
-  (let* ([whole (lambda (p) (cons (exact (round (car p))) (exact (round (cdr p)))))]
+  (let* ([whole (lambda (p)
+                  (cons (exact (round (car p))) (exact (round (cdr p)))))]
          [size (whole (plist-ref opts 'size '(480 . 320)))]
          [min-size (whole (plist-ref opts 'min-size '(160 . 80)))]
-         [win (make-window *next-window-id* (plist-ref opts 'app (current-app)) title
+         [win (make-window *next-window-id*
+                           (plist-ref opts 'app (current-app)) title
                            0 0 (car size) (cdr size) 'normal #f
                            (make-eq-hashtable) (make-eq-hashtable) #f
                            (car min-size) (cdr min-size))])
@@ -151,7 +161,8 @@
     (let loop ([o opts])
       (when (and (pair? o) (pair? (cdr o)))
         (cond
-          [(memq (car o) handler-kinds) (hashtable-set! (window-handlers win) (car o) (cadr o))]
+          [(memq (car o) handler-kinds)
+           (hashtable-set! (window-handlers win) (car o) (cadr o))]
           [(memq (car o) '(size min-size pos app)) (void)]
           [else (hashtable-set! (window-props win) (car o) (cadr o))])
         (loop (cddr o))))
@@ -178,13 +189,17 @@
       [pos (window-x-set! win (car pos)) (window-y-set! win (cdr pos))]
       [(new-window-position)
        => (lambda (at)
-            (window-x-set! win (clamp (car at) dx (max dx (- (+ dx dw) (window-w win)))))
-            (window-y-set! win (clamp (cdr at) dy (max dy (- (+ dy dh) (window-h win))))))]
+            (window-x-set! win (clamp (car at) dx
+                                      (max dx (- (+ dx dw) (window-w win)))))
+            (window-y-set! win (clamp (cdr at) dy
+                                      (max dy (- (+ dy dh) (window-h win))))))]
       [else
         (let ([k (mod *cascade* 8)])
           (set! *cascade* (+ *cascade* 1))
-          (window-x-set! win (min (+ 60 (* 34 k)) (max 0 (- dw (window-w win)))))
-          (window-y-set! win (min (+ dy 24 (* 30 k)) (max dy (- (+ dy dh) (window-h win))))))])))
+          (window-x-set! win (min (+ 60 (* 34 k))
+                                  (max 0 (- dw (window-w win)))))
+          (window-y-set! win (min (+ dy 24 (* 30 k))
+                                  (max dy (- (+ dy dh) (window-h win))))))])))
 
 (define (windows) *windows*)
 (define (focused-window) *focus*)
@@ -214,9 +229,12 @@
 (define (window-bg win) (window-ref win 'bg 'window-bg))
 
 ;; The window's style: its own 'window-style property, else the theme's.
+;; A name that is not registered falls back to the first style registered,
+;; or with none to a bare frame.
 (define (window-style-of win)
-  (or (find-window-style (or (window-ref win 'window-style) (theme 'window-style)))
-      (find-window-style 'mac)))
+  (or (find-window-style (or (window-ref win 'window-style)
+                             (theme 'window-style)))
+      (if (pair? *window-styles*) (car *window-styles*) bare-window-style)))
 
 ;; Frame thickness around the content: (values left top right bottom).
 (define (frame-insets win)
@@ -242,8 +260,11 @@
   (let ([h (hashtable-ref (window-handlers win) kind #f)])
     (if (and h (not (window-error win)))
         (begin
-          (when (memq kind '(key text mouse-down mouse-up wheel)) (invalidate! win))
-          (safe-call kind (lambda () (parameterize ([current-window win]) (apply h win args)))
+          (when (memq kind '(key text mouse-down mouse-up wheel))
+            (invalidate! win))
+          (safe-call kind
+                     (lambda ()
+                       (parameterize ([current-window win]) (apply h win args)))
                      (lambda (c) (window-crash! win kind c) #f)))
         #f)))
 
@@ -272,7 +293,8 @@
     (if w
         (focus-window! w)
         (begin
-          (when (and *focus* (memq *focus* *windows*)) (window-call *focus* 'blur))
+          (when (and *focus* (memq *focus* *windows*))
+            (window-call *focus* 'blur))
           (set! *focus* #f)))))
 
 (define (close-window! win)
@@ -293,7 +315,8 @@
   (let*-values ([(l t r b) (frame-insets win)]
                 [(w) (max (+ l r (window-min-w win)) (exact (round w)))]
                 [(h) (max (+ t b (window-min-h win)) (exact (round h)))]
-                [(resized?) (not (and (= w (window-w win)) (= h (window-h win))))])
+                [(resized?)
+                 (not (and (= w (window-w win)) (= h (window-h win))))])
     (window-x-set! win (exact (round x)))
     (window-y-set! win (exact (round y)))
     (window-w-set! win w)
@@ -321,7 +344,8 @@
 
 (define (maximize-window! win)
   (unless (eq? (window-state win) 'maximized)
-    (window-restore-set! win (list (window-x win) (window-y win) (window-w win) (window-h win)))
+    (window-restore-set! win (list (window-x win) (window-y win)
+                                   (window-w win) (window-h win)))
     (window-state-set! win 'maximized)
     (fit-maximized! win)))
 
@@ -337,7 +361,9 @@
     (request-frame!)))
 
 (define (toggle-maximize! win)
-  (if (eq? (window-state win) 'maximized) (restore-window! win) (maximize-window! win)))
+  (if (eq? (window-state win) 'maximized)
+      (restore-window! win)
+      (maximize-window! win)))
 
 (define (cycle-windows!)
   (let ([ws (reverse *windows*)])
@@ -361,7 +387,8 @@
               (let ([win (car ws)])
                 (window-state-set! win 'normal)
                 (window-restore-set! win #f)
-                (set-geometry! win (+ dx gap (* cw (mod i cols))) (+ dy gap (* ch (quotient i cols)))
+                (set-geometry! win (+ dx gap (* cw (mod i cols)))
+                               (+ dy gap (* ch (quotient i cols)))
                                (- cw gap) (- ch gap))
                 (loop (cdr ws) (+ i 1))))))))))
 
@@ -377,14 +404,18 @@
 ;; The screen changed size (or scale): refit maximized windows, and pull
 ;; others back until their title bar can be reached.
 (define (wm-screen-resized!)
-  (unless (null? *windows*)   ; (also called while loading, before there is a canvas to measure)
+  ;; (also called while loading, before there is a canvas to measure)
+  (unless (null? *windows*)
     (let-values ([(dx dy dw dh) (desktop-rect)])
       (for-each (lambda (w)
                   (if (eq? (window-state w) 'maximized)
                       (fit-maximized! w)
                       (begin
-                        (window-x-set! w (clamp (window-x w) (- (+ dx 80) (window-w w)) (max dx (- (+ dx dw) 80))))
-                        (window-y-set! w (clamp (window-y w) dy (max dy (- (+ dy dh) 30)))))))
+                        (window-x-set! w (clamp (window-x w)
+                                                (- (+ dx 80) (window-w w))
+                                                (max dx (- (+ dx dw) 80))))
+                        (window-y-set! w (clamp (window-y w) dy
+                                                (max dy (- (+ dy dh) 30)))))))
                 *windows*)))
   (invalidate!))
 
@@ -397,12 +428,14 @@
                 (window-call w 'resize cw ch)))
             *windows*))
 
-;;; ------------------------------------------------------------------ hit testing
+;;; ------------------------------------------------------------------
+;;; hit testing
 
 (define (window-at x y)
   (find (lambda (w)
           (and (visible? w)
-               (point-in? x y (window-x w) (window-y w) (window-w w) (window-h w))))
+               (point-in? x y (window-x w) (window-y w)
+                          (window-w w) (window-h w))))
         *windows*))
 
 ;; Button kinds that act on release. A style may also list a 'resize-br
@@ -414,7 +447,9 @@
   ((window-style-buttons (window-style-of win)) win))
 
 (define (window-button-at win lx ly)
-  (let ([b (find (lambda (b) (point-in? lx ly (list-ref b 1) (list-ref b 2) (list-ref b 3) (list-ref b 4)))
+  (let ([b (find (lambda (b)
+                   (point-in? lx ly (list-ref b 1) (list-ref b 2)
+                              (list-ref b 3) (list-ref b 4)))
                  (window-buttons win))])
     (and b (car b))))
 
@@ -451,8 +486,10 @@
   (let ([h (cond
              [(menu-open?) '(menu)]
              [(< y (topbar-height)) (list 'topbar (topbar-item-at x y))]
-             [(>= y (- (screen-h) (taskbar-height))) (list 'taskbar (taskbar-item-at x y))]
-             [(window-at x y) => (lambda (w) (list 'window w (window-region w x y)))]
+             [(>= y (- (screen-h) (taskbar-height)))
+              (list 'taskbar (taskbar-item-at x y))]
+             [(window-at x y)
+              => (lambda (w) (list 'window w (window-region w x y)))]
              [else '(desktop)])])
     (unless (equal? h *hover*)
       (set! *hover* h)
@@ -478,7 +515,8 @@
        (let ([win (drag-win d)])
          (let-values ([(lx ly) (window-local win x y)])
            (window-call win 'mouse-move lx ly)))]
-      [(memq (drag-kind d) '(resize-r resize-l resize-b resize-br resize-bl)) (drag-resize! d x y)]
+      [(memq (drag-kind d) '(resize-r resize-l resize-b resize-br resize-bl))
+       (drag-resize! d x y)]
       [else (update-hover! x y)])))
 
 (define (drag-move! d x y)
@@ -486,28 +524,37 @@
     (if (eq? (window-state win) 'maximized)
         ;; Tearing a maximized window off: restore it under the cursor.
         (when (> (+ (abs (- x (drag-mx d))) (abs (- y (drag-my d)))) 6)
-          (let* ([frac (/ (- (drag-mx d) (window-x win)) (max 1 (window-w win)))])
+          (let* ([frac (/ (- (drag-mx d) (window-x win))
+                          (max 1 (window-w win)))])
             (restore-window! win)
             (let-values ([(l t r b) (frame-insets win)])
              (let ([nx (- x (* frac (window-w win)))] [ny (- y (/ t 2))])
               (move-window! win nx ny)
-              (set! *drag* (make-drag 'move win 'left x y (window-x win) (window-y win) 0 0))))))
+              (set! *drag* (make-drag 'move win 'left x y
+                                      (window-x win) (window-y win) 0 0))))))
         (let-values ([(dx dy dw dh) (desktop-rect)])
           (move-window! win
-                        (clamp (+ (drag-x d) (- x (drag-mx d))) (- 80 (window-w win)) (- dw 80))
-                        (clamp (+ (drag-y d) (- y (drag-my d))) dy (- (+ dy dh) 20)))))))
+                        (clamp (+ (drag-x d) (- x (drag-mx d)))
+                               (- 80 (window-w win)) (- dw 80))
+                        (clamp (+ (drag-y d) (- y (drag-my d)))
+                               dy (- (+ dy dh) 20)))))))
 
 (define (drag-resize! d x y)
   (let* ([k (drag-kind d)] [win (drag-win d)]
          [dx (- x (drag-mx d))] [dy (- y (drag-my d))]
-         [min-w (let-values ([(l t r b) (frame-insets win)]) (+ l r (window-min-w win)))]
+         [min-w (let-values ([(l t r b) (frame-insets win)])
+                  (+ l r (window-min-w win)))]
          [nw (case k
                [(resize-r resize-br) (+ (drag-w d) dx)]
                [(resize-l resize-bl) (- (drag-w d) dx)]
                [else (drag-w d)])]
          [nw (max nw min-w)]
-         [nh (if (memq k '(resize-b resize-br resize-bl)) (+ (drag-h d) dy) (drag-h d))]
-         [nx (if (memq k '(resize-l resize-bl)) (- (+ (drag-x d) (drag-w d)) nw) (drag-x d))])
+         [nh (if (memq k '(resize-b resize-br resize-bl))
+                 (+ (drag-h d) dy)
+                 (drag-h d))]
+         [nx (if (memq k '(resize-l resize-bl))
+                 (- (+ (drag-x d) (drag-w d)) nw)
+                 (drag-x d))])
     (set-geometry! win nx (drag-y d) nw nh)))
 
 (define (wm-mouse-down x y button clicks)
@@ -518,7 +565,8 @@
      (if (point-in-menu? x y) (menu-mouse-down x y) (close-menu!))]
     [(< y (topbar-height)) (topbar-click x y button)]
     [(>= y (- (screen-h) (taskbar-height))) (taskbar-click x y button)]
-    [(window-at x y) => (lambda (win) (window-mouse-down win x y button clicks))]
+    [(window-at x y)
+     => (lambda (win) (window-mouse-down win x y button clicks))]
     [else (desktop-click x y button)]))
 
 (define (window-mouse-down win x y button clicks)
@@ -527,26 +575,31 @@
     (unless (eq? region 'depth) (focus-window! win))
     (case region
       [(close minimize maximize depth)
-       (when (eq? button 'left) (set! *drag* (make-drag region win button x y 0 0 0 0)))]
+       (when (eq? button 'left)
+         (set! *drag* (make-drag region win button x y 0 0 0 0)))]
       [(frame) (void)]
       [(title)
        (cond
          [(eq? button 'right) (open-window-menu! win x y)]
          [(and (eq? button 'left) (>= clicks 2)) (toggle-maximize! win)]
          [(eq? button 'left)
-          (set! *drag* (make-drag 'move win button x y (window-x win) (window-y win) 0 0))
+          (set! *drag* (make-drag 'move win button x y
+                                  (window-x win) (window-y win) 0 0))
           (host-set-cursor! 'move)])]
       [(content)
        (cond
          [(window-error win)
-          (when (eq? button 'left) (window-error-set! win #f) (invalidate! win))]
+          (when (eq? button 'left)
+            (window-error-set! win #f)
+            (invalidate! win))]
          [else
           (set! *drag* (make-drag 'capture win button x y 0 0 0 0))
           (let-values ([(lx ly) (window-local win x y)])
             (window-call win 'mouse-down lx ly button clicks))])]
       [else
        (when (eq? button 'left)
-         (set! *drag* (make-drag region win button x y (window-x win) (window-y win)
+         (set! *drag* (make-drag region win button x y
+                                 (window-x win) (window-y win)
                                  (window-w win) (window-h win))))])))
 
 (define (wm-mouse-up x y button)
@@ -587,7 +640,8 @@
 ;; (bind-key! '(ctrl shift #\w) close-focused-window!)
 (define (bind-key! spec proc)
   (set! *global-keys*
-    (cons (cons spec proc) (remp (lambda (b) (equal? (car b) spec)) *global-keys*))))
+    (cons (cons spec proc)
+          (remp (lambda (b) (equal? (car b) spec)) *global-keys*))))
 
 (define (unbind-key! spec)
   (set! *global-keys* (remp (lambda (b) (equal? (car b) spec)) *global-keys*)))
@@ -603,7 +657,9 @@
   (cond
     [(memq key '(ctrl shift alt super)) (void)]
     [(find (lambda (b) (key-matches? (car b) key mods)) *global-keys*)
-     => (lambda (b) (safe-call 'key-binding (cdr b) (lambda (c) (report-error! 'key-binding c))))]
+     => (lambda (b)
+          (safe-call 'key-binding (cdr b)
+                     (lambda (c) (report-error! 'key-binding c))))]
     [(menu-open?) (menu-key key mods)]
     [*focus* (window-call *focus* 'key key mods)]))
 
@@ -632,14 +688,16 @@
 ;; The part of win under the mouse, and the drag kind holding it, as the
 ;; style sees them (#f when none).
 (define (window-hover win)
-  (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win) (caddr *hover*)))
+  (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win)
+       (caddr *hover*)))
 
 (define (window-pressed win)
   (and *drag* (eq? (drag-win *drag*) win) (drag-kind *drag*)))
 
 (define (draw-window* win focused?)
   (let* ([style (window-style-of win)]
-         [x (window-x win)] [y (window-y win)] [w (window-w win)] [h (window-h win)]
+         [x (window-x win)] [y (window-y win)]
+         [w (window-w win)] [h (window-h win)]
          [hover (window-hover win)]
          [pressed (window-pressed win)]
          [r ((window-style-radius style) win)])
@@ -666,9 +724,12 @@
            [hint? (> h (+ y2 hint-h 66))])
       (draw-text 16 14 "This app crashed" 'red 'ui-bold)
       (draw-text 16 y1 (format "in its '~a handler:" (car err)) 'text-dim 'ui)
-      (draw-wrapped-text 16 y2 (- w 32) (- h y2 (if hint? (+ hint-h 4) 4)) (condition->string (cdr err)) 'text 'mono-small)
+      (draw-wrapped-text 16 y2 (- w 32) (- h y2 (if hint? (+ hint-h 4) 4))
+                         (condition->string (cdr err)) 'text 'mono-small)
       (when hint?
-        (draw-text 16 (- h hint-h) "Click to retry.  Fix it live: (window-on! win 'draw ...)" 'text-faint 'ui-small)))))
+        (draw-text 16 (- h hint-h)
+                   "Click to retry.  Fix it live: (window-on! win 'draw ...)"
+                   'text-faint 'ui-small)))))
 
 ;; Character-wrapped text for monospace fonts; returns the y after the text.
 (define (draw-wrapped-text x y w h str color font)
@@ -688,10 +749,12 @@
                 (let chunk ([s line] [acc '()])
                   (if (<= (string-length s) cols)
                       (reverse (cons s acc))
-                      (chunk (substring s cols (string-length s)) (cons (substring s 0 cols) acc)))))
+                      (chunk (substring s cols (string-length s))
+                             (cons (substring s 0 cols) acc)))))
               (string-split str #\newline))))
 
-(defvar *frame-ms* 0.0)      ; the last frame's time: drawing it, comparing its rows
+;; the last frame's time: drawing it, comparing its rows
+(defvar *frame-ms* 0.0)
 (defvar *frames-drawn* 0)
 
 (define (ms-since t0)
@@ -704,14 +767,17 @@
   ;; A fresh cairo context, so a crashed draw can't leave the graphics
   ;; state unbalanced. Outside it *cr* only measures.
   (let ([cr (cairo-create surface)])
-    (cairo-set-operator cr CAIRO_OPERATOR_SOURCE)   ; every pixel, the last column at 150% too
+    ;; every pixel, the last column at 150% too
+    (cairo-set-operator cr CAIRO_OPERATOR_SOURCE)
     (cairo-set-source-rgba cr 0 0 0 1)
     (cairo-paint cr)
     (cairo-set-operator cr CAIRO_OPERATOR_OVER)
     (cairo-scale cr *scale* *scale*)
     (fluid-let ([*cr* cr])
       (safely 'desktop draw-desktop)
-      (for-each (lambda (w) (when (visible? w) (safely 'window (lambda () (draw-window w)))))
+      (for-each (lambda (w)
+                  (when (visible? w)
+                    (safely 'window (lambda () (draw-window w)))))
                 (reverse *windows*))
       (safely 'taskbar draw-taskbar)
       (safely 'topbar draw-topbar)

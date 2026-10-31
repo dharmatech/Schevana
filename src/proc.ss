@@ -19,7 +19,8 @@
 
 (define (make-timeout-condition who)
   (condition (make-error) (make-who-condition who)
-             (make-message-condition "exceeded its time budget (infinite loop?)")))
+             (make-message-condition
+              "exceeded its time budget (infinite loop?)")))
 
 ;; Calls thunk. If it raises or runs out of fuel, returns (on-error condition).
 (define (safe-call who thunk on-error)
@@ -29,7 +30,8 @@
                  (lambda ()
                    (parameterize ([in-engine? #t])
                      (guard (c [#t (cons 'error c)])
-                       (call-with-values thunk (lambda vals (cons 'ok vals)))))))
+                       (call-with-values thunk
+                         (lambda vals (cons 'ok vals)))))))
                 handler-fuel
                 (lambda (left r) r)
                 (lambda (eng) (cons 'error (make-timeout-condition who))))])
@@ -54,7 +56,8 @@
 
 (defvar *procs* '())
 (defvar *next-pid* 1)
-(defvar *reloading* #f)   ; (proc . file) while that process loads the sources (system.ss)
+;; (proc . file) while that process loads the sources (system.ss)
+(defvar *reloading* #f)
 
 ;; (spawn name thunk [on-done]) starts a process. on-done receives
 ;; (status value): 'ok and the list of results, 'error and a condition,

@@ -26,13 +26,15 @@ installed already on a Linux desktop).
 ./schevana --fullscreen
 ```
 
-`~/.schevana.ss` is loaded at boot if it exists, like `.emacs`. The look
-you choose in the Settings app is saved to `~/.schevana-theme.ss` (plain
-data, never evaluated) and loaded at boot too. The host window's taskbar
-icon is the wallpaper's λ in your theme's colors, drawn by `draw-app-icon`
-(redefine it, then call `(update-host-icon!)`). GNOME and similar desktops
-take app icons from `.desktop` files instead, so install one once
-(it goes under `~/.local/share`; `--uninstall-desktop` removes it):
+`~/.schevana.ss` is loaded at boot if it exists, like `.emacs`, and so are
+your own apps, styles, themes and wallpapers in `~/.schevana.d/` (see
+"Your own apps, styles, themes and wallpapers" below). The look you choose
+in the Settings app is saved to `~/.schevana-theme.ss` (plain data, never
+evaluated) and loaded at boot too. The host window's taskbar icon is the
+wallpaper's λ in your theme's colors, drawn by `draw-app-icon` (redefine
+it, then call `(update-host-icon!)`). GNOME and similar desktops take app
+icons from `.desktop` files instead, so install one once (it goes under
+`~/.local/share`; `--uninstall-desktop` removes it):
 
 ```bash
 ./schevana --install-desktop
@@ -82,13 +84,16 @@ of Schevana.
 R6RS libraries work as in Chez: `(import (acme math))` in any REPL, in an
 app's file, or inside a body (`(let () (import (acme math)) …)`). Besides
 Chez's usual places, import looks in `~/.schevana.d/lib` (so
-`~/.schevana.d/lib/acme/math.sls`), and `(add-library-directory! dir)`
-adds more. Two things differ from Schevana's own code. A library is
-loaded once per session: after editing one, `load` its file again and
-import it again; `(reload!)` doesn't. And an import adds names to the
-environment it runs in, the world's for apps and the REPL, so a library
-exporting a name Schevana also defines changes what that name means in
-code you type afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
+`~/.schevana.d/lib/acme/math.sls`) and in the tree's `lib/`, for libraries
+shipped with Schevana (none yet), and `(add-library-directory! dir)` adds
+more. A library is compiled in memory when imported: nothing is written
+next to its source (Chez's `compile-imported-libraries` stays off). Two
+things differ from Schevana's own code. A library is loaded once per
+session: after editing one, `load` its file again and import it again;
+`(reload!)` doesn't. And an import adds names to the environment it runs
+in, the world's for apps and the REPL, so a library exporting a name
+Schevana also defines changes what that name means in code you type
+afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 
 ## Things to try in the REPL
 
@@ -96,15 +101,18 @@ code you type afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolor everything
-(apply-theme-preset! 'paper)               ; or: tokyo-night catppuccin nord gruvbox win98 interlisp genera
+; or: tokyo-night catppuccin nord gruvbox win98 interlisp genera
+(apply-theme-preset! 'paper)
 (set-theme! 'window-style 'win98)          ; or: mac windows interlisp genera
 (open-window "Odd one out" 'window-style 'windows)   ; per-window override
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
 (bind-key! '(ctrl shift #\l) life)
-(spawn "busy" (lambda () (let loop () (loop))))   ; watch it in (monitor); Ctrl+C or kill!
+; watch it in (monitor); Ctrl+C or kill!
+(spawn "busy" (lambda () (let loop () (loop))))
 (define (draw-wallpaper w h) (fill-gradient 0 0 w h #x102030 #x301020))
-(define (draw-window win) (draw-window* win #t))   ; every window looks focused; (reload!) undoes it
+; every window looks focused; (reload!) undoes it
+(define (draw-window win) (draw-window* win #t))
 ```
 
 Define a new app and it appears in the launcher immediately:
@@ -118,22 +126,72 @@ Define a new app and it appears in the launcher immediately:
       'mouse-down (lambda (win x y button clicks) (set! n (+ n 1))))))
 ```
 
+## Your own apps, styles, themes and wallpapers
+
+Window styles, themes (palettes) and wallpapers (desktop fills) have
+definers of the same shape as `define-app`: a name, a title, then the
+definition. Evaluate one in a REPL and the next frame shows it; define a
+name again and the new definition takes the old one's place.
+
+```scheme
+(define-theme dusk "Dusk"
+  '(bg-0 #x15131c bg-1 #x1c1a26 bg-2 #x24212f bg-3 #x2e2a3b
+    text #xe0dcef text-dim #xb8b2cc text-faint #x6e6884
+    accent #xf0a35e accent-2 #xc792ea
+    red #xf07178 orange #xf78c6c yellow #xffcb6b green #xc3e88d
+    cyan #x89ddff teal #x80cbc4 magenta #xc792ea
+    desktop-top #x1c1a26 desktop-bottom #x3a2a40 watermark #xffffff
+    panel #x111017))
+(apply-theme-preset! 'dusk)                ; or click it in Settings
+(define-wallpaper stripes "Stripes"
+  (lambda (x y w h top bottom)
+    (fill-rect x y w h top)
+    (do ([i 0 (+ i 24)]) ((>= i h)) (fill-rect x (+ y i) w 12 bottom))))
+(set-theme! 'desktop-pattern 'stripes)
+(define-window-style bare "Bare"
+  'insets (lambda (win) (values 0 8 0 0))
+  'draw-under (lambda (win x y w h focused? hover pressed)
+                (fill-rect x y w 8 (if focused? 'accent 'bg-3))))
+(set-theme! 'window-style 'bare)
+```
+
+To keep one, drop it into a file of its own in `~/.schevana.d/`, under
+`apps/`, `styles/`, `themes/` or `wallpapers/`, with any code your apps
+share under `kits/`. These folders load at boot after Schevana's own
+(`kits` first, then `styles`, `themes`, `wallpapers` and `apps`, each in
+file-name order) and again at every `(reload!)`. Settings lists your
+styles and themes with the others, and the saved look may name them.
+`(apps)`, `(window-styles)`, `(themes)` and `(wallpapers)` list what is
+registered.
+
 ## Architecture
 
 ```
-apps/        repl  clock  life  sketch  monitor  settings   ← ordinary procedures
-src/system   main loop, timers, inject!, boot, reload!
-src/ui       immediate-mode widgets: button, slider, segmented, clickable area
-src/shell    wallpaper, top bar + status segments, taskbar, menus, toasts
-src/styles   window styles (Mac, Windows, Windows 98, Interlisp, Genera): frames, buttons
+apps/        repl  clock  life  sketch  monitor  settings  ← ordinary procedures
+wallpapers/  desktop fills: gradient  flat  shade
+themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
+             tokyo-night  win98
+styles/      window styles: genera  interlisp  mac  win98  windows
+kits/        ui: immediate-mode widgets (button, slider, segmented,
+             clickable area)
+src/system   main loop, timers, inject!, boot, reload!, loading the folders
+src/shell    wallpapers, top bar + status segments, taskbar, menus, toasts
+src/styles   window styles: the record, the registry, previews
 src/wm       window records, z-order, focus, hit testing, drag/resize, dispatch
 src/proc     processes + watchdog (Chez engines)
 src/host     SDL2 window ⇄ Scheme event lists, uploads   |  headless mode
-src/gfx      immediate-mode drawing API, colors, fonts, layers; the two screen buffers
-src/shadows  window, menu and toast shadows (other files mark theirs ;; shadow{ … ;; shadow})
-src/theme    colors, metrics and fonts as data; presets; save/load
+src/gfx      immediate-mode drawing API, colors, fonts, layers; the two
+             screen buffers
+src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
+src/theme    colors, metrics and fonts as data; themes; save/load
 src/ffi      the only file that knows about C (SDL2 + Cairo)
 ```
+
+`src/` is the core, the explicit, ordered list in `load.ss`. Its last
+file loads the folders: `kits/`, `styles/`, `themes/`, `wallpapers/` and
+`apps/`, one definition per file, each folder in file-name order. A file
+dropped into a folder loads at the next boot or `(reload!)`, with no list
+to edit, and `(source-files)` lists them all.
 
 Decisions worth keeping in mind for the real design:
 
@@ -142,6 +200,14 @@ Decisions worth keeping in mind for the real design:
   `draw-window` or `draw-wallpaper` at the REPL changes the running system
   on the next frame. State that must survive `(reload!)` is declared with
   `defvar`, and record types are `nongenerative`.
+- **Folders, not lists.** Apart from the core, a definition is found by
+  its folder. Each kind has a definer shaped like `define-app` that
+  registers it by name, in a list kept in registration order, and a query
+  that lists them. Kits are world code shared by apps: they load at boot,
+  stay top-level and keep a name prefix (`ui-`). Code moves out of an app
+  into a kit when a second app needs it, not before. R6RS libraries are
+  one-way black boxes, like C libraries: the world imports them, they
+  never call into the world.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
@@ -184,7 +250,7 @@ Decisions worth keeping in mind for the real design:
 - **Window styles own the frame.** A style is a record of procedures:
   frame insets, a list of buttons (`close`, `minimize`, `maximize`,
   `depth`), and two drawing passes around the content. The window manager
-  only does geometry and dispatch, so `define-window-style!` at the REPL
+  only does geometry and dispatch, so `define-window-style` at the REPL
   adds a new look. Apps always get their content size, whatever the frame.
   The Windows 98 style matches real Windows 98 screenshots pixel for
   pixel. The two 1980s Lisp environments were matched against real
@@ -236,10 +302,11 @@ scheme --script tests/smoke.ss out
 This boots the world headlessly, types into the REPL, defines an app,
 crashes windows, runs away in loops, drags and resizes windows, uses the
 launcher, presses every button of each window style, clicks and drags
-through every Settings tab (checking the theme file round-trips), reloads the sources, runs the host's SDL code
-(uploads, presents, resize events, the window's size) against a stand-in
-that replaces every SDL call, so no window opens, and writes screenshots
-to the given folder. It never touches your real `~/.schevana-theme.ss`.
+through every Settings tab (checking the theme file round-trips), reloads
+the sources, runs the host's SDL code (uploads, presents, resize events,
+the window's size) against a stand-in that replaces every SDL call, so no
+window opens, and writes screenshots to the given folder. It never touches
+your real `~/.schevana-theme.ss`, and no test reads `~/.schevana.d`.
 
 ```bash
 scheme --script tests/units.ss out
@@ -270,6 +337,15 @@ for the next frame; and each generation of 30 Life windows shows on the
 next frame.
 
 ```bash
+scheme --script tests/sources.ss
+```
+
+This checks the sources themselves, and quickly: every line of every
+source file is at most 80 characters, no top-level name is defined in
+two files, `src/` stays within its size budget (raise it on purpose), and
+every file in a folder registers what it defines, under its own name.
+
+```bash
 scheme --script tests/bench.ss out               # [frames]
 ```
 
@@ -282,6 +358,12 @@ collections, then times a keystroke in the REPL, an idle step (it must
 stay under 0.2 ms and upload nothing) and a theme change, and prints
 how much of the main thread a busy REPL evaluation gets while 30 Life
 windows animate at 200%.
+
+## Conventions
+
+- Every line of every source file is at most 80 characters;
+  `tests/sources.ss` checks it.
+- American spelling: color, gray, center.
 
 ## Known gaps and open questions
 
@@ -300,7 +382,7 @@ windows animate at 200%.
   about 18 ms at 100% and 68 ms at 200% until its frame is drawn, so
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
-- Only a minimal widget kit (`src/ui.ss`, written for Settings): no text
+- Only a minimal widget kit (`kits/ui.ss`, written for Settings): no text
   fields, lists or layout yet. That is the "stable GUI API" question:
   keep growing these immediate-mode procedures, or describe retained
   widget trees as data?

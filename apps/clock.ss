@@ -13,13 +13,15 @@
            [cx (/ w 2)]
            [cy (+ 8 (/ size 2))])
       (define (hand angle len color width)
-        (draw-line cx cy (+ cx (* len (sin angle))) (- cy (* len (cos angle))) color width))
+        (draw-line cx cy (+ cx (* len (sin angle))) (- cy (* len (cos angle)))
+                   color width))
       (fill-rect 0 0 w h 'bg-1)
       (fill-glow cx cy (* r 1.6) (alpha 'accent 0.10))
       (fill-circle cx cy (+ r 8) 'bg-2)
       (stroke-circle cx cy (+ r 8) 'window-border 2)
       (do ([i 0 (+ i 1)]) ((= i 60))
-        (let* ([a (* i (/ pi 30))] [major? (= 0 (mod i 5))] [r1 (if major? (- r 10) (- r 4))])
+        (let* ([a (* i (/ pi 30))] [major? (= 0 (mod i 5))]
+               [r1 (if major? (- r 10) (- r 4))])
           (draw-line (+ cx (* r1 (sin a))) (- cy (* r1 (cos a)))
                      (+ cx (* r (sin a))) (- cy (* r (cos a)))
                      (if major? 'text 'text-faint) (if major? 2.5 1))))
@@ -28,7 +30,8 @@
       (hand (* ss (/ pi 30)) (* r 0.86) 'red 1.5)
       (fill-circle cx cy 5 'red)
       (draw-text-centered 0 (- h digital-h) w digital-h
-                          (format "~2,'0d:~2,'0d:~2,'0d" hh mm ss) 'text-dim 'mono))]))
+                          (format "~2,'0d:~2,'0d:~2,'0d" hh mm ss)
+                          'text-dim 'mono))]))
 
 (define-app (clock) "Clock"
   (let ([shown (current-date)])   ; the time on the face, taken by the tick

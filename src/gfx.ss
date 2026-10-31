@@ -13,13 +13,15 @@
 
 (defvar *cr* 0)          ; current cairo context
 (defvar *canvas* 0)      ; the screen image surface: the last frame drawn
-(defvar *back* 0)        ; the second screen buffer: the next frame is drawn here
+;; the second screen buffer: the next frame is drawn here
+(defvar *back* 0)
 (defvar *canvas-w* 0)    ; logical size (what apps see)
 (defvar *canvas-h* 0)
 (defvar *scale* 1.0)     ; logical -> pixel (HiDPI)
 (defvar *scratch* (foreign-alloc 64))
 
-(defvar *canvas-pw* (exact (round (* *canvas-w* *scale*))))   ; pixel size of the image
+;; pixel size of the image
+(defvar *canvas-pw* (exact (round (* *canvas-w* *scale*))))
 (defvar *canvas-ph* (exact (round (* *canvas-h* *scale*))))
 
 ;; A canvas pw × ph pixels big, drawn scale times bigger than the logical
@@ -43,7 +45,9 @@
 
 ;; A canvas of w × h logical pixels.
 (define (canvas-create! w h scale)
-  (canvas-create-pixels! (exact (round (* w scale))) (exact (round (* h scale))) scale))
+  (canvas-create-pixels! (exact (round (* w scale)))
+                         (exact (round (* h scale)))
+                         scale))
 
 (define (canvas-pixel-width) *canvas-pw*)
 (define (canvas-pixel-height) *canvas-ph*)
@@ -67,8 +71,10 @@
     ;; a canvas context left in *cr* by code from before the measuring context
     (unless (or (eqv? *cr* 0) (eqv? *cr* old)) (cairo-destroy *cr*))
     (unless (eqv? old 0) (cairo-destroy old))
-    (unless (eqv? *measure-surface* 0) (cairo-surface-destroy *measure-surface*))
-    (set! *measure-surface* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 1 1))
+    (unless (eqv? *measure-surface* 0)
+      (cairo-surface-destroy *measure-surface*))
+    (set! *measure-surface*
+      (cairo-image-surface-create CAIRO_FORMAT_ARGB32 1 1))
     (set! *measure-cr* (cairo-create *measure-surface*))
     (cairo-scale *measure-cr* *scale* *scale*)
     (set! *cr* *measure-cr*)))
@@ -79,7 +85,8 @@
 ;;; through one and no frame is drawn from a cache half freed.
 
 (defvar *gfx-owned* (make-eqv-hashtable))   ; surface address -> tag
-(defvar *owned-frees* 0)                    ; how often free-owned-surfaces! has run
+;; how often free-owned-surfaces! has run
+(defvar *owned-frees* 0)
 
 ;; An ARGB32 surface, cleared to transparent.
 (define (make-owned-surface tag pw ph)
@@ -122,7 +129,9 @@
 
 (define (color->fixnum c)
   (let-values ([(r g b a) (color-rgba c)])
-    (rgb (exact (round (* r 255))) (exact (round (* g 255))) (exact (round (* b 255))))))
+    (rgb (exact (round (* r 255)))
+         (exact (round (* g 255)))
+         (exact (round (* b 255))))))
 
 ;; Hue in degrees, saturation and lightness in [0, 1].
 (define (color->hsl c)
@@ -142,9 +151,12 @@
          [x (* c (- 1 (abs (- (mod hp 2) 1))))]
          [m (- l (/ c 2))])
     (define (byte v) (clamp (exact (round (* 255 (+ v m)))) 0 255))
-    (let-values ([(r g b) (cond [(< hp 1) (values c x 0)] [(< hp 2) (values x c 0)]
-                                [(< hp 3) (values 0 c x)] [(< hp 4) (values 0 x c)]
-                                [(< hp 5) (values x 0 c)] [else (values c 0 x)])])
+    (let-values ([(r g b) (cond [(< hp 1) (values c x 0)]
+                                [(< hp 2) (values x c 0)]
+                                [(< hp 3) (values 0 c x)]
+                                [(< hp 4) (values 0 x c)]
+                                [(< hp 5) (values x 0 c)]
+                                [else (values c 0 x)])])
       (rgb (byte r) (byte g) (byte b)))))
 
 ;; Black or white, whichever reads better on color c.
@@ -171,9 +183,14 @@
 (defvar *fonts* (make-eq-hashtable))
 
 (define (make-font* family size . opts)
-  (let ([slant (if (memq 'italic opts) CAIRO_FONT_SLANT_ITALIC CAIRO_FONT_SLANT_NORMAL)]
-        [weight (if (memq 'bold opts) CAIRO_FONT_WEIGHT_BOLD CAIRO_FONT_WEIGHT_NORMAL)])
-    (make-font family slant weight size (cairo-toy-font-face-create family slant weight) #f)))
+  (let ([slant (if (memq 'italic opts)
+                   CAIRO_FONT_SLANT_ITALIC
+                   CAIRO_FONT_SLANT_NORMAL)]
+        [weight (if (memq 'bold opts)
+                    CAIRO_FONT_WEIGHT_BOLD
+                    CAIRO_FONT_WEIGHT_NORMAL)])
+    (make-font family slant weight size
+               (cairo-toy-font-face-create family slant weight) #f)))
 
 (define (define-font! name family size . opts)
   (hashtable-set! *fonts* name (apply make-font* family size opts)))
@@ -202,7 +219,8 @@
                 [descent (foreign-ref 'double *scratch* 8)]
                 [height (foreign-ref 'double *scratch* 16)])
             (cairo-text-extents cr "M" *scratch*)
-            (let ([m (vector ascent descent height (foreign-ref 'double *scratch* 32))])
+            (let ([m (vector ascent descent height
+                             (foreign-ref 'double *scratch* 32))])
               (font-cache-set! f m)
               m))))))
 
@@ -221,7 +239,8 @@
     (define-font! 'ui-bold ui ui-size 'bold)
     (define-font! 'ui-small ui (- ui-size 2))
     (define-font! 'title ui ui-size 'bold)
-    (define-font! 'glyph ui (min ui-size 13) 'bold)   ; inside small fixed-size buttons
+    ;; inside small fixed-size buttons
+    (define-font! 'glyph ui (min ui-size 13) 'bold)
     (define-font! 'heading ui (+ ui-size 5) 'bold)
     (define-font! 'big ui (* 2 ui-size) 'bold)
     (define-font! 'huge "serif" 360 'bold)))
@@ -274,7 +293,9 @@
 (define (wrap-text str max-w font)
   (apply append
          (map (lambda (para)
-                (let loop ([words (string-split para #\space)] [line #f] [acc '()])
+                (let loop ([words (string-split para #\space)]
+                           [line #f]
+                           [acc '()])
                   (cond
                     [(null? words) (reverse (if line (cons line acc) acc))]
                     [(not line) (loop (cdr words) (car words) acc)]
@@ -328,7 +349,9 @@
 ;; Many rectangles in one color, filled at once: ((x y w h) ...).
 (define (fill-rects rects color)
   (set-color! color)
-  (for-each (lambda (r) (cairo-rectangle *cr* (car r) (cadr r) (caddr r) (cadddr r))) rects)
+  (for-each (lambda (r)
+              (cairo-rectangle *cr* (car r) (cadr r) (caddr r) (cadddr r)))
+            rects)
   (cairo-fill *cr*))
 
 (define (fill-round-rect x y w h r color)
@@ -369,7 +392,8 @@
        (cairo-move-to *cr* (caar points) (cdar points))
        (if (null? (cdr points))
            (cairo-line-to *cr* (caar points) (cdar points))
-           (for-each (lambda (p) (cairo-line-to *cr* (car p) (cdr p))) (cdr points)))
+           (for-each (lambda (p) (cairo-line-to *cr* (car p) (cdr p)))
+                     (cdr points)))
        (cairo-stroke *cr*))]))
 
 (define (fill-polygon points color)
@@ -459,7 +483,9 @@
 ;;; ------------------------------------------------------------------ layers
 ;;; An offscreen image that can be drawn once and blitted many times.
 
-(define-record-type layer (nongenerative schevana-layer) (fields surface w h scale))
+(define-record-type layer
+  (nongenerative schevana-layer)
+  (fields surface w h scale))
 
 (define (make-layer* w h)
   (make-layer (cairo-image-surface-create CAIRO_FORMAT_ARGB32
@@ -486,26 +512,6 @@
   (cairo-paint *cr*)
   (cairo-restore *cr*))
 
-;; The Interlisp desktop shade: paper with one ink pixel in four, from a
-;; 4 × 4 tile; each tile pixel is one logical pixel.
-(define (fill-shade x y w h paper ink)
-  (let* ([tile (cairo-image-surface-create CAIRO_FORMAT_ARGB32 4 4)]
-         [cr (cairo-create tile)])
-    (fluid-let ([*cr* cr])
-      (fill-rect 0 0 4 4 paper)
-      (for-each (lambda (p) (fill-rect (car p) (cdr p) 1 1 ink)) '((2 . 0) (0 . 1) (0 . 2) (2 . 3))))
-    (cairo-destroy cr)
-    (let ([pat (cairo-pattern-create-for-surface tile)])
-      (cairo-pattern-set-extend pat CAIRO_EXTEND_REPEAT)
-      (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
-      (cairo-save *cr*)
-      (cairo-set-source *cr* pat)
-      (cairo-rectangle *cr* x y w h)
-      (cairo-fill *cr*)
-      (cairo-restore *cr*)
-      (cairo-pattern-destroy pat)
-      (cairo-surface-destroy tile))))
-
 ;; A radial glow: color at the center fading to transparent at radius r.
 (define (fill-glow cx cy r color)
   (let ([pat (cairo-pattern-create-radial cx cy 0 cx cy r)])
@@ -518,7 +524,8 @@
     (cairo-fill *cr*)
     (cairo-pattern-destroy pat)))
 
-;;; ------------------------------------------------------------------ pixel buffers
+;;; ------------------------------------------------------------------
+;;; pixel buffers
 ;;; A pixmap is a small image an app fills pixel by pixel (one pixel per
 ;;; Life cell, say) and draws scaled up in one call, instead of drawing
 ;;; thousands of rectangles. Its pixels are a Scheme bytevector of 4·w·h
@@ -553,11 +560,13 @@
 (define (bytevector->pixmap bv w h)
   (unless (and (fixnum? w) (fixnum? h) (fx> w 0) (fx> h 0)
                (bytevector? bv) (= (bytevector-length bv) (* 4 w h)))
-    (errorf 'bytevector->pixmap "need ~a bytes for ~s × ~s pixels" (* 4 w h) w h))
+    (errorf 'bytevector->pixmap "need ~a bytes for ~s × ~s pixels"
+            (* 4 w h) w h))
   (new-pixmap w h bv))
 
 (define (check-pixmap-bytes who pm bv)
-  (unless (and (bytevector? bv) (= (bytevector-length bv) (* 4 (pixmap-w pm) (pixmap-h pm))))
+  (unless (and (bytevector? bv)
+               (= (bytevector-length bv) (* 4 (pixmap-w pm) (pixmap-h pm))))
     (errorf who "need ~a bytes of pixels for a ~a × ~a pixmap"
             (* 4 (pixmap-w pm) (pixmap-h pm)) (pixmap-w pm) (pixmap-h pm))))
 
@@ -569,21 +578,27 @@
       (let-values ([(r g b a) (color-rgba c)])
         (let ([a (clamp a 0.0 1.0)])
           (define (byte v) (exact (round (* 255 v))))
-          (fxior (fxsll (byte a) 24) (fxsll (byte (* r a)) 16) (fxsll (byte (* g a)) 8) (byte (* b a)))))))
+          (fxior (fxsll (byte a) 24) (fxsll (byte (* r a)) 16)
+                 (fxsll (byte (* g a)) 8) (byte (* b a)))))))
 
 (define (pixmap-index who pm x y)
-  (unless (and (fixnum? x) (fixnum? y) (fx< -1 x (pixmap-w pm)) (fx< -1 y (pixmap-h pm)))
-    (errorf who "(~s, ~s) is outside a ~a × ~a pixmap" x y (pixmap-w pm) (pixmap-h pm)))
+  (unless (and (fixnum? x) (fixnum? y)
+               (fx< -1 x (pixmap-w pm)) (fx< -1 y (pixmap-h pm)))
+    (errorf who "(~s, ~s) is outside a ~a × ~a pixmap"
+            x y (pixmap-w pm) (pixmap-h pm)))
   (fx* 4 (fx+ x (fx* y (pixmap-w pm)))))
 
-(define (pixmap-set! pm x y color) (pixmap-set-pixel! pm x y (color->pixel color)))
+(define (pixmap-set! pm x y color)
+  (pixmap-set-pixel! pm x y (color->pixel color)))
 
 (define (pixmap-set-pixel! pm x y px)
-  (bytevector-u32-native-set! (pixmap-bytes pm) (pixmap-index 'pixmap-set-pixel! pm x y) px))
+  (bytevector-u32-native-set! (pixmap-bytes pm)
+                              (pixmap-index 'pixmap-set-pixel! pm x y) px))
 
 ;; The raw pixel.
 (define (pixmap-ref pm x y)
-  (bytevector-u32-native-ref (pixmap-bytes pm) (pixmap-index 'pixmap-ref pm x y)))
+  (bytevector-u32-native-ref (pixmap-bytes pm)
+                             (pixmap-index 'pixmap-ref pm x y)))
 
 (define (pixmap-fill! pm color)
   (let* ([bv (pixmap-bytes pm)] [px (color->pixel color)]
@@ -616,12 +631,14 @@
     [(pm x y) (draw-pixmap pm x y (pixmap-w pm) (pixmap-h pm))]
     [(pm x y w h)
      (when (and (> w 0) (> h 0))
-       (let ([bytes (pixmap-bytes pm)] [pw (pixmap-w pm)] [ph (pixmap-h pm)] [surface 0] [pat 0])
+       (let ([bytes (pixmap-bytes pm)] [pw (pixmap-w pm)] [ph (pixmap-h pm)]
+             [surface 0] [pat 0])
          (dynamic-wind
            (lambda ()
              (lock-object bytes)
-             (set! surface (cairo-image-surface-create-for-data (object->reference-address bytes)
-                                                                CAIRO_FORMAT_ARGB32 pw ph (fx* 4 pw)))
+             (set! surface (cairo-image-surface-create-for-data
+                            (object->reference-address bytes)
+                            CAIRO_FORMAT_ARGB32 pw ph (fx* 4 pw)))
              (set! pat (cairo-pattern-create-for-surface surface))
              (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
              (cairo-save *cr*))
@@ -647,19 +664,25 @@
 
 ;; (a world reloaded from before the second buffer has none yet)
 (when (and (eqv? *back* 0) (not (eqv? *canvas* 0)))
-  (set! *back* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 *canvas-pw* *canvas-ph*)))
+  (set! *back* (cairo-image-surface-create CAIRO_FORMAT_ARGB32
+                                           *canvas-pw* *canvas-ph*)))
 
 ;; Copies the rows of *back*, holding a new frame, that differ from the
 ;; screen's onto the screen, which stays the same surface (swapping the
 ;; buffers instead measured slower); returns their runs, ((y0 . y1) ...).
 (define (copy-changed-rows!)
   (cairo-surface-flush *canvas*)
-  (let* ([b (cairo-image-surface-get-data *back*)] [c (cairo-image-surface-get-data *canvas*)]
-         [stride (cairo-image-surface-get-stride *canvas*)] [runs (changed-rows b c stride *canvas-ph*)])
-    (for-each (lambda (r) (sdl-memcpy (+ c (* stride (car r))) (+ b (* stride (car r))) (* stride (- (cdr r) (car r)))))
+  (let* ([b (cairo-image-surface-get-data *back*)]
+         [c (cairo-image-surface-get-data *canvas*)]
+         [stride (cairo-image-surface-get-stride *canvas*)]
+         [runs (changed-rows b c stride *canvas-ph*)])
+    (for-each (lambda (r)
+                (sdl-memcpy (+ c (* stride (car r))) (+ b (* stride (car r)))
+                            (* stride (- (cdr r) (car r)))))
               runs)
     (cairo-surface-mark-dirty *canvas*)
-    (set! *frame-rows* (fold-left (lambda (n r) (+ n (- (cdr r) (car r)))) 0 runs))
+    (set! *frame-rows*
+      (fold-left (lambda (n r) (+ n (- (cdr r) (car r)))) 0 runs))
     runs))
 
 ;; Runs of rows where two buffers of h rows differ, ((y0 . y1) ...), top

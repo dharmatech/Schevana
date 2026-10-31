@@ -3,15 +3,39 @@
 
 ;;; ------------------------------------------------------------------ desktop
 
+;;; A wallpaper fills the desktop from the theme's two desktop colors. Each
+;;; is a file in wallpapers/, and the theme key 'desktop-pattern names the
+;;; one in use:
+;;;
+;;;   (define-wallpaper flat "Flat"
+;;;     (lambda (x y w h top bottom) (fill-rect x y w h top)))
+
+;; ((name title fill) ...) in registration order
+(defvar *wallpapers* '())
+
+(define (register-wallpaper! name title fill)
+  (set! *wallpapers* (registry-add *wallpapers* (list name title fill) car))
+  (request-frame!))
+
+;; (define-wallpaper name "Title" fill) adds a wallpaper, or replaces the
+;; one of that name. (fill x y w h top bottom) fills the rectangle.
+(define-syntax define-wallpaper
+  (syntax-rules ()
+    [(_ name title fill) (register-wallpaper! 'name title fill)]))
+
+(define (wallpapers) (map car *wallpapers*))
+
 ;; The wallpaper is a picture, painted once and blitted every frame. It is
-;; a picture of its key: the screen's size and scale, draw-wallpaper and
-;; the whole theme, however it changed. When the key changes, the next
-;; frame paints it again first. Nothing else does, so a draw-wallpaper
-;; that reads the clock shows a still picture.
+;; a picture of its key: the screen's size and scale, draw-wallpaper, the
+;; wallpapers registered and the whole theme, however it changed. When the
+;; key changes, the next frame paints it again first. Nothing else does,
+;; so a draw-wallpaper that reads the clock shows a still picture.
 
 (defvar *wallpaper* #f)   ; (layer key . theme): the picture, and what it is of
 
-(define (wallpaper-key) (list *canvas-w* *canvas-h* *scale* draw-wallpaper *theme-version*))
+(define (wallpaper-key)
+  (list *canvas-w* *canvas-h* *scale* draw-wallpaper *wallpapers*
+        *theme-version*))
 
 ;; The picture of the wallpaper as it is now, painted again if its key
 ;; changed. If draw-wallpaper raises, the error is reported once and the
@@ -21,33 +45,39 @@
     (unless (and old (equal? (cadr old) key) (theme-same? (cddr old)))
       (let ([new (make-layer* *canvas-w* *canvas-h*)] [theme (theme-snapshot)])
         (if (guard (c [#t (report-error! 'desktop c) #f])
-              (draw-into-layer! new (lambda () (draw-wallpaper *canvas-w* *canvas-h*)))
+              (draw-into-layer! new
+                (lambda () (draw-wallpaper *canvas-w* *canvas-h*)))
               #t)
             (begin (when old (free-layer! (car old)))
                    (set! *wallpaper* (cons* new key theme)))
             (begin (when old (free-layer! new))
-                   (set! *wallpaper* (cons* (if old (car old) new) key theme))))))
+                   (set! *wallpaper*
+                     (cons* (if old (car old) new) key theme))))))
     (car *wallpaper*)))
 
 ;; Interrupts off: a process switched out between the lookup and the blit
 ;; would find the picture freed by main.
-(define (draw-desktop) (with-interrupts-disabled (blit-layer! (wallpaper-picture) 0 0)))
+(define (draw-desktop)
+  (with-interrupts-disabled (blit-layer! (wallpaper-picture) 0 0)))
 
-;; The desktop's background in a rectangle. pattern is a value of the
-;; theme key 'desktop-pattern; top and bottom its two colors.
+;; The desktop's background in a rectangle: the wallpaper named pattern (a
+;; value of the theme key 'desktop-pattern) from the colors top and
+;; bottom, or a plain fill when no wallpaper has that name.
 (define (fill-desktop-pattern x y w h pattern top bottom)
-  (case pattern
-    [(flat) (fill-rect x y w h top)]
-    [(shade) (fill-shade x y w h top bottom)]
-    [else (fill-gradient x y w h top bottom)]))
+  (let ([wp (assq pattern *wallpapers*)])
+    (if wp
+        ((caddr wp) x y w h top bottom)
+        (fill-rect x y w h top))))
 
 (define (draw-wallpaper w h)
-  (fill-desktop-pattern 0 0 w h (theme 'desktop-pattern) 'desktop-top 'desktop-bottom)
+  (fill-desktop-pattern 0 0 w h (theme 'desktop-pattern)
+                        'desktop-top 'desktop-bottom)
   (when (eq? (theme 'desktop-pattern) 'gradient)
     (fill-glow (* w 0.80) (* h 0.22) (* 0.55 (max w h)) (alpha 'accent-2 0.10))
     (fill-glow (* w 0.12) (* h 0.90) (* 0.50 (max w h)) (alpha 'accent 0.08)))
   (draw-text-centered 0 0 w (- h 60) "λ" (alpha 'watermark 0.05) 'huge)
-  (draw-text-centered 0 (+ (/ h 2) 150) w 30 "S C H E V A N A" (alpha 'watermark 0.10) 'ui-bold))
+  (draw-text-centered 0 (+ (/ h 2) 150) w 30 "S C H E V A N A"
+                      (alpha 'watermark 0.10) 'ui-bold))
 
 (define (desktop-click x y button)
   (case button
@@ -57,7 +87,8 @@
               (when old (window-call old 'blur))
               (request-frame!))]))
 
-;;; ------------------------------------------------------------------ status segments
+;;; ------------------------------------------------------------------
+;;; status segments
 ;;; The right side of the top bar is a list of (name . thunk); each thunk
 ;;; returns a string (or #f to hide). Add your own:
 ;;;   (add-status-segment! 'hello (lambda () "hi!"))
@@ -66,11 +97,13 @@
 
 (define (add-status-segment! name thunk)
   (set! *status-segments*
-    (append (remp (lambda (s) (eq? (car s) name)) *status-segments*) (list (cons name thunk))))
+    (append (remp (lambda (s) (eq? (car s) name)) *status-segments*)
+            (list (cons name thunk))))
   (request-frame!))
 
 (define (remove-status-segment! name)
-  (set! *status-segments* (remp (lambda (s) (eq? (car s) name)) *status-segments*))
+  (set! *status-segments*
+    (remp (lambda (s) (eq? (car s) name)) *status-segments*))
   (request-frame!))
 
 ;; What the top bar shows: ((name . string-or-#f) ...), taken once per
@@ -79,7 +112,10 @@
 
 (define (refresh-status!)
   (set! *status-shown*
-    (map (lambda (s) (cons (car s) (safe-call 'status (cdr s) (lambda (c) (format "⚠ ~a" (car s))))))
+    (map (lambda (s)
+           (cons (car s)
+                 (safe-call 'status (cdr s)
+                            (lambda (c) (format "⚠ ~a" (car s))))))
          *status-segments*)))
 
 (define (shown-status-strings) (filter string? (map cdr *status-shown*)))
@@ -93,7 +129,8 @@
 (define (status-frame) (format "~,1f ms/frame" *frame-ms*))
 
 (define day-names '#("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"))
-(define month-names '#("Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
+(define month-names
+  '#("Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
 
 (define (status-clock)
   (let ([d (current-date)])
@@ -114,7 +151,8 @@
 ;; The accent on the panels, or the panels' text color where the accent
 ;; would vanish (Genera's black accent on its black panels).
 (define (panel-accent)
-  (let-values ([(ar ag ab aa) (color-rgba 'accent)] [(pr pg pb pa) (color-rgba 'panel)])
+  (let-values ([(ar ag ab aa) (color-rgba 'accent)]
+               [(pr pg pb pa) (color-rgba 'panel)])
     (define (lum r g b) (+ (* 0.299 r) (* 0.587 g) (* 0.114 b)))
     (if (< (abs (- (lum ar ag ab) (lum pr pg pb))) 0.2) 'panel-text 'accent)))
 
@@ -133,15 +171,21 @@
       (when (or (equal? *hover* '(topbar launcher)) (launcher-open?))
         (fill-round-rect 6 4 bw (- h 8) 6 'panel-hover))
       (draw-text 18 ty label (panel-accent) 'ui-bold)
-      (let ([title-end (draw-text (+ bw 20) ty (if *focus* (window-title *focus*) "Desktop") 'panel-text 'ui-bold)])
+      (let ([title-end (draw-text (+ bw 20) ty
+                                  (if *focus* (window-title *focus*) "Desktop")
+                                  'panel-text 'ui-bold)])
         ;; status segments from the right, while they fit beside the title
-        (let loop ([segs (reverse (shown-status-strings))] [x (- w 14)] [first? #t])
+        (let loop ([segs (reverse (shown-status-strings))]
+                   [x (- w 14)]
+                   [first? #t])
           (unless (null? segs)
             (let* ([s (car segs)]
-                   [right (if first? x (- x gap dot-w gap))]   ; room for the separator
+                   ;; room for the separator
+                   [right (if first? x (- x gap dot-w gap))]
                    [x0 (- right (text-width s 'ui))])
               (when (> x0 (+ title-end gap gap))
-                (unless first? (draw-text (- x gap dot-w) ty "·" 'panel-dim 'ui))
+                (unless first?
+                  (draw-text (- x gap dot-w) ty "·" 'panel-dim 'ui))
                 (draw-text x0 ty s 'panel-text 'ui)
                 (loop (cdr segs) x0 #f)))))))))
 
@@ -161,16 +205,22 @@
          [ws (sort (lambda (a b) (< (window-id a) (window-id b))) *windows*)]
          [n (length ws)]
          [hint "F1 apps  ·  Ctrl+Tab switch  ·  right-click desktop"]
-         [button-w (lambda (hint-w) (if (zero? n) 0 (min 210 (/ (- w 16 hint-w (* 6 (- n 1))) n))))]
-         ;; the hint gives way when the buttons would be too narrow for their titles
+         [button-w (lambda (hint-w)
+                     (if (zero? n)
+                         0
+                         (min 210 (/ (- w 16 hint-w (* 6 (- n 1))) n))))]
+         ;; the hint gives way when the buttons would be too narrow for their
+         ;; titles
          [hint-w (let ([hw (+ 24 (text-width hint 'ui-small))]
-                       [want (min 210 (+ 48 (widest-text (map window-title ws) 'ui)))])
+                       [want (min 210 (+ 48 (widest-text (map window-title ws)
+                                                         'ui)))])
                    (if (>= (button-w hw) want) hw 0))]
          [bw (button-w hint-w)])
     (fill-rect 0 y0 w h (alpha 'panel 0.94))
     (draw-line 0 (+ y0 0.5) w (+ y0 0.5) (alpha 'panel-text 0.12))
     (when (> hint-w 0)
-      (draw-text (- w hint-w) (+ y0 (/ (- h (font-line-height 'ui-small)) 2)) hint 'panel-dim 'ui-small))
+      (draw-text (- w hint-w) (+ y0 (/ (- h (font-line-height 'ui-small)) 2))
+                 hint 'panel-dim 'ui-small))
     (let loop ([ws ws] [x 8] [items '()])
       (if (null? ws)
           (set! *taskbar-items* items)
@@ -180,17 +230,23 @@
                  [min? (not (visible? win))]
                  [color (app-color (window-app win))])
             (when (or focused? hover?)
-              (fill-round-rect x (+ y0 5) bw (- h 10) 6 (if focused? 'panel-hover (alpha 'panel-hover 0.6))))
+              (fill-round-rect x (+ y0 5) bw (- h 10) 6
+                               (if focused?
+                                   'panel-hover
+                                   (alpha 'panel-hover 0.6))))
             (when focused?
-              (fill-round-rect (+ x 12) (- (+ y0 h) 6) (- bw 24) 2 1 (panel-accent)))
-            (fill-circle (+ x 15) (+ y0 (/ h 2)) 4 (if min? (alpha color 0.35) color))
+              (fill-round-rect (+ x 12) (- (+ y0 h) 6) (- bw 24) 2 1
+                               (panel-accent)))
+            (fill-circle (+ x 15) (+ y0 (/ h 2)) 4
+                         (if min? (alpha color 0.35) color))
             (draw-text (+ x 27) (+ y0 (/ (- h lh) 2))
                        (fit-text (window-title win) (- bw 36) 'ui)
                        (if min? 'panel-dim 'panel-text) 'ui)
             (loop (cdr ws) (+ x bw 6) (cons (list x (+ x bw) win) items)))))))
 
 (define (taskbar-item-at x y)
-  (let ([it (find (lambda (it) (and (>= x (car it)) (< x (cadr it)))) *taskbar-items*)])
+  (let ([it (find (lambda (it) (and (>= x (car it)) (< x (cadr it))))
+                  *taskbar-items*)])
     (and it (memq (caddr it) *windows*) (caddr it))))
 
 (define (taskbar-click x y button)
@@ -218,7 +274,8 @@
 (define (menu-open?) (and *menu* #t))
 
 (define (open-menu! x y items . opts)
-  (set! *menu* (make-menu x y items 0 "" (plist-ref opts 'filter #f) (plist-ref opts 'tag #f)))
+  (set! *menu* (make-menu x y items 0 "" (plist-ref opts 'filter #f)
+                          (plist-ref opts 'tag #f)))
   (menu-select-next! 0)
   (request-frame!))
 
@@ -230,15 +287,21 @@
   (let ([f (menu-filter m)])
     (if (string=? f "")
         (menu-items m)
-        (filter (lambda (e) (and (pair? e) (string-contains-ci? (car e) f))) (menu-items m)))))
+        (filter (lambda (e) (and (pair? e) (string-contains-ci? (car e) f)))
+                (menu-items m)))))
 
-(define (menu-header-height m) (if (menu-filter? m) (+ (menu-field-height) 8) 0))
+(define (menu-header-height m)
+  (if (menu-filter? m) (+ (menu-field-height) 8) 0))
 
 (define (menu-geometry m)
   (let* ([es (menu-entries m)]
-         [w (fold-left (lambda (acc e) (if (pair? e) (max acc (+ 44 (text-width (car e) 'ui))) acc))
+         [w (fold-left (lambda (acc e)
+                         (if (pair? e)
+                             (max acc (+ 44 (text-width (car e) 'ui)))
+                             acc))
                        230 es)]
-         [h (fold-left (lambda (acc e) (+ acc (if (pair? e) (menu-item-height) 9)))
+         [h (fold-left (lambda (acc e)
+                         (+ acc (if (pair? e) (menu-item-height) 9)))
                        (+ 10 (menu-header-height m)) es)]
          [x (clamp (menu-x m) 4 (- (screen-w) w 4))]
          [y (clamp (menu-y m) (+ 2 (topbar-height)) (- (screen-h) h 4))])
@@ -251,11 +314,14 @@
 ;; Index of the entry under (px, py), or #f.
 (define (menu-entry-at px py)
   (let-values ([(x y w h) (menu-geometry *menu*)])
-    (let loop ([es (menu-entries *menu*)] [i 0] [ey (+ y 5 (menu-header-height *menu*))])
+    (let loop ([es (menu-entries *menu*)]
+               [i 0]
+               [ey (+ y 5 (menu-header-height *menu*))])
       (cond
         [(null? es) #f]
         [(pair? (car es))
-         (if (and (>= py ey) (< py (+ ey (menu-item-height))) (>= px x) (< px (+ x w)))
+         (if (and (>= py ey) (< py (+ ey (menu-item-height)))
+                  (>= px x) (< px (+ x w)))
              i
              (loop (cdr es) (+ i 1) (+ ey (menu-item-height))))]
         [else (loop (cdr es) (+ i 1) (+ ey 9))]))))
@@ -307,7 +373,8 @@
 (define (draw-menu)
   (when *menu*
     (let-values ([(x y w h) (menu-geometry *menu*)])
-      (let ([lh (font-line-height 'ui)] [m *menu*] [ih (menu-item-height)] [fh (menu-field-height)])
+      (let ([lh (font-line-height 'ui)] [m *menu*]
+            [ih (menu-item-height)] [fh (menu-field-height)])
         (draw-shadow x y w h 8 12)   ; shadow
         (fill-round-rect x y w h 8 'bg-2)
         (stroke-round-rect x y w h 8 'window-border-focus)
@@ -320,20 +387,27 @@
                 ;; the caret stay in view
                 (call-with-clip (+ x 6) (+ y 6) (- w 12) fh
                   (lambda ()
-                    (let ([ex (draw-text (min (+ x 16) (- (+ x w) 19 (text-width f 'ui))) ty f 'text 'ui)])
-                      (fill-rect (+ ex 1) (+ y 6 (round (/ (- fh lh 1) 2))) 1.5 (round (+ lh 1)) 'accent)))))))
-        (let loop ([es (menu-entries m)] [i 0] [ey (+ y 5 (menu-header-height m))])
+                    (let ([ex (draw-text (min (+ x 16)
+                                              (- (+ x w) 19 (text-width f 'ui)))
+                                         ty f 'text 'ui)])
+                      (fill-rect (+ ex 1) (+ y 6 (round (/ (- fh lh 1) 2)))
+                                 1.5 (round (+ lh 1)) 'accent)))))))
+        (let loop ([es (menu-entries m)]
+                   [i 0]
+                   [ey (+ y 5 (menu-header-height m))])
           (unless (null? es)
             (let ([e (car es)])
               (if (pair? e)
                   (begin
                     (when (= i (menu-sel m))
-                      (fill-round-rect (+ x 5) ey (- w 10) ih 5 (alpha 'accent 0.22)))
+                      (fill-round-rect (+ x 5) ey (- w 10) ih 5
+                                       (alpha 'accent 0.22)))
                     (draw-text (+ x 18) (+ ey (/ (- ih lh) 2)) (car e)
                                (if (= i (menu-sel m)) 'text 'text-dim) 'ui)
                     (loop (cdr es) (+ i 1) (+ ey ih)))
                   (begin
-                    (draw-line (+ x 12) (+ ey 4.5) (- (+ x w) 12) (+ ey 4.5) 'window-border)
+                    (draw-line (+ x 12) (+ ey 4.5) (- (+ x w) 12) (+ ey 4.5)
+                               'window-border)
                     (loop (cdr es) (+ i 1) (+ ey 9)))))))))))
 
 ;;; The launcher: every registered app, plus a few system actions.
@@ -343,19 +417,22 @@
   (append
    (map (lambda (a)
           (cons (app-title a)
-                (lambda () (parameterize ([new-window-position at]) ((app-launch a))))))
+                (lambda ()
+                  (parameterize ([new-window-position at]) ((app-launch a))))))
         (sort (lambda (a b) (string<? (app-title a) (app-title b))) *apps*))
    (list 'separator
          (cons "Tile windows" (lambda () (tile-windows!)))
          (cons "Cascade windows" (lambda () (cascade-windows!)))
-         (cons (if (fullscreen?) "Leave full screen" "Full screen") (lambda () (toggle-fullscreen!)))
+         (cons (if (fullscreen?) "Leave full screen" "Full screen")
+               (lambda () (toggle-fullscreen!)))
          (cons "Reload sources" (lambda () (spawn "reload" reload!)))
          (cons "Quit Schevana" (lambda () (quit!))))))
 
 (define (launcher-open?) (and *menu* (eq? (menu-tag *menu*) 'launcher)))
 
 (define (open-launcher! x y . at)
-  (open-menu! x y (launcher-items (and (pair? at) (car at))) 'filter #t 'tag 'launcher))
+  (open-menu! x y (launcher-items (and (pair? at) (car at)))
+              'filter #t 'tag 'launcher))
 
 (define (toggle-launcher!)
   (if (launcher-open?)
@@ -368,7 +445,9 @@
                           (lambda ()
                             (define-top-level-value '$w win)
                             (notify (format "$w = ~s" win))))
-                    (cons (if (eq? (window-state win) 'maximized) "Restore" "Maximize")
+                    (cons (if (eq? (window-state win) 'maximized)
+                              "Restore"
+                              "Maximize")
                           (lambda () (toggle-maximize! win)))
                     (cons "Minimize" (lambda () (minimize-window! win)))
                     'separator
@@ -385,10 +464,14 @@
     (call-with-round-clip m m s s r
       (lambda ()
         (fill-gradient m m s s 'desktop-top 'desktop-bottom)
-        (fill-glow (+ m (* s 0.8)) (+ m (* s 0.2)) (* s 0.9) (alpha 'accent-2 0.30))
-        (fill-glow (+ m (* s 0.15)) (+ m (* s 0.9)) (* s 0.8) (alpha 'accent 0.25))))
-    (stroke-round-rect (+ m 0.5) (+ m 0.5) (- s 1) (- s 1) r (alpha 'text 0.18) 1)
-    (draw-text-centered m m s s "λ" 'text (make-font* "serif" (* s 0.72) 'bold))))
+        (fill-glow (+ m (* s 0.8)) (+ m (* s 0.2)) (* s 0.9)
+                   (alpha 'accent-2 0.30))
+        (fill-glow (+ m (* s 0.15)) (+ m (* s 0.9)) (* s 0.8)
+                   (alpha 'accent 0.25))))
+    (stroke-round-rect (+ m 0.5) (+ m 0.5) (- s 1) (- s 1) r
+                       (alpha 'text 0.18) 1)
+    (draw-text-centered m m s s "λ" 'text
+                        (make-font* "serif" (* s 0.72) 'bold))))
 
 (define (update-host-icon!) (host-set-icon! 256 draw-app-icon))
 
@@ -398,7 +481,8 @@
 ;;; icon under ~/.local/share; ./schevana --install-desktop does the same.
 
 (define (desktop-data-home)
-  (or (getenv "XDG_DATA_HOME") (string-append (or (getenv "HOME") ".") "/.local/share")))
+  (or (getenv "XDG_DATA_HOME")
+      (string-append (or (getenv "HOME") ".") "/.local/share")))
 
 (define (desktop-entry-files)
   (let ([data (desktop-data-home)])
@@ -424,7 +508,8 @@
   (let-values ([(entry icon) (desktop-entry-files)])
     (let* ([root (cond [(path-absolute? *schevana-root*) *schevana-root*]
                        [(member *schevana-root* '("." "")) (current-directory)]
-                       [else (string-append (current-directory) "/" *schevana-root*)])]
+                       [else (string-append (current-directory) "/"
+                                            *schevana-root*)])]
            [exec (string-append root "/schevana")])
       (make-directories! (path-parent entry))
       (make-directories! (path-parent icon))
@@ -432,19 +517,25 @@
       (call-with-output-file entry
         (lambda (p)
           (fprintf p "[Desktop Entry]~%Type=Application~%Name=Schevana~%")
-          (fprintf p "Comment=A Lisp Machine-style desktop written in Chez Scheme~%")
-          (fprintf p "Exec=\"~a\"~%Icon=schevana~%Terminal=false~%Categories=Development;~%" exec)
+          (fprintf p
+            "Comment=A Lisp Machine-style desktop written in Chez Scheme~%")
+          (fprintf p "Exec=\"~a\"~%Icon=schevana~%Terminal=false~%\
+                      Categories=Development;~%" exec)
           (fprintf p "StartupWMClass=Schevana~%"))
         'replace)
       ;; let the desktop notice; harmless where these tools are missing
-      (system (format "update-desktop-database -q '~a' 2>/dev/null; gtk-update-icon-cache -q -t '~a/icons/hicolor' 2>/dev/null"
-                      (path-parent entry) (desktop-data-home)))
+      (system (format
+               "update-desktop-database -q '~a' 2>/dev/null; \
+                gtk-update-icon-cache -q -t '~a/icons/hicolor' 2>/dev/null"
+               (path-parent entry) (desktop-data-home)))
       (list entry icon))))
 
 (define (uninstall-desktop-entry!)
   (let-values ([(entry icon) (desktop-entry-files)])
-    (for-each (lambda (f) (when (file-exists? f) (delete-file f))) (list entry icon))
-    (system (format "update-desktop-database -q '~a' 2>/dev/null" (path-parent entry)))
+    (for-each (lambda (f) (when (file-exists? f) (delete-file f)))
+              (list entry icon))
+    (system (format "update-desktop-database -q '~a' 2>/dev/null"
+                    (path-parent entry)))
     (list entry icon)))
 
 (defvar *icon-update-pending* #f)
@@ -457,7 +548,8 @@
                  (set! *icon-update-pending* #f)
                  (update-host-icon!)))))
 
-;;; ------------------------------------------------------------------ notifications
+;;; ------------------------------------------------------------------
+;;; notifications
 
 (defvar *toasts* '())   ; (#(expires-at text color) ...)
 
@@ -465,9 +557,12 @@
   (case-lambda
     [(msg) (notify msg 'accent)]
     [(msg color)
-     (let ([text (list->string (map (lambda (c) (if (char=? c #\newline) #\space c))
-                                    (string->list (if (string? msg) msg (format "~a" msg)))))])
-       (set! *toasts* (append *toasts* (list (vector (+ (now-ms) 5000) text color))))
+     (let ([text (list->string
+                  (map (lambda (c) (if (char=? c #\newline) #\space c))
+                       (string->list
+                        (if (string? msg) msg (format "~a" msg)))))])
+       (set! *toasts*
+         (append *toasts* (list (vector (+ (now-ms) 5000) text color))))
        (when (> (length *toasts*) 5) (set! *toasts* (cdr *toasts*)))
        (request-frame!))]))
 
@@ -486,17 +581,23 @@
           (let* ([t (car ts)]
                  [text (fit-text (vector-ref t 1) (- (screen-w) 120) 'ui)]
                  [tw (+ 40 (text-width text 'ui))])
-            (loop (cdr ts) (+ y h 8) (cons (vector (- (screen-w) tw 12) y tw h text (vector-ref t 2)) acc)))))))
+            (loop (cdr ts) (+ y h 8)
+                  (cons (vector (- (screen-w) tw 12) y tw h text
+                                (vector-ref t 2))
+                        acc)))))))
 
 (define (draw-toasts)
   (let ([lh (font-line-height 'ui)])
     (for-each (lambda (b)
-                (let ([x (vector-ref b 0)] [y (vector-ref b 1)] [tw (vector-ref b 2)] [h (vector-ref b 3)])
+                (let ([x (vector-ref b 0)] [y (vector-ref b 1)]
+                      [tw (vector-ref b 2)] [h (vector-ref b 3)])
                   (draw-shadow x y tw h 8 10)   ; shadow
                   (fill-round-rect x y tw h 8 'bg-2)
                   (stroke-round-rect x y tw h 8 'window-border)
-                  (fill-round-rect (+ x 8) (+ y 9) 4 (- h 18) 2 (vector-ref b 5))
-                  (draw-text (+ x 22) (+ y (/ (- h lh) 2)) (vector-ref b 4) 'text 'ui)))
+                  (fill-round-rect (+ x 8) (+ y 9) 4 (- h 18) 2
+                                   (vector-ref b 5))
+                  (draw-text (+ x 22) (+ y (/ (- h lh) 2)) (vector-ref b 4)
+                             'text 'ui)))
               (toast-boxes))))
 
 (defvar *last-error* (cons "" 0))
@@ -504,7 +605,8 @@
 ;; System-level errors become a red notification (and a line on stderr).
 (define (report-error! who c)
   (let ([msg (format "~a: ~a" who (condition->string c))])
-    (unless (and (string=? msg (car *last-error*)) (< (- (now-ms) (cdr *last-error*)) 5000))
+    (unless (and (string=? msg (car *last-error*))
+                 (< (- (now-ms) (cdr *last-error*)) 5000))
       (set! *last-error* (cons msg (now-ms)))
       (notify msg 'red)
       (fprintf (console-error-port) "schevana: ~a\n" msg))))

@@ -1,7 +1,9 @@
 ;;; main.ss — boot Schevana.
 ;;;
-;;;   scheme --script main.ss [--size 1280x800] [--fullscreen] [--headless] [--eval EXPR] ...
-;;;   scheme --script main.ss --install-desktop     ; the app icon for GNOME and co.
+;;;   scheme --script main.ss [--size 1280x800] [--fullscreen] [--headless]
+;;;                           [--eval EXPR] ...
+;;;   scheme --script main.ss --install-desktop     ; the app icon for GNOME
+;;;                                                   and co.
 ;;;   scheme --script main.ss --uninstall-desktop
 ;;;
 ;;; --eval expressions run after boot, e.g.
@@ -12,12 +14,16 @@
     (if (string=? dir "") "." dir)))
 
 (load (string-append *schevana-root* "/load.ss"))
+;; ~/.schevana.d's kits, styles, themes, wallpapers and apps, before the
+;; saved theme is loaded: it may name a style or palette of the user's.
+(load-user-folders!)
 
 (define (parse-size s)
   (let ([parts (string-split s #\x)])
     (cons (string->number (car parts)) (string->number (cadr parts)))))
 
-(define start-fullscreen? (and (member "--fullscreen" (command-line-arguments)) #t))
+(define start-fullscreen?
+  (and (member "--fullscreen" (command-line-arguments)) #t))
 
 ;; Install or remove the desktop entry and icon, then stop.
 (cond
@@ -29,7 +35,10 @@
    (for-each (lambda (f) (printf "removed ~a~%" f)) (uninstall-desktop-entry!))
    (exit 0)])
 
-(let loop ([args (remove "--fullscreen" (command-line-arguments))] [mode 'sdl] [size '(1280 . 800)] [evals '()])
+(let loop ([args (remove "--fullscreen" (command-line-arguments))]
+           [mode 'sdl]
+           [size '(1280 . 800)]
+           [evals '()])
   (cond
     [(null? args)
      (load-saved-theme!)   ; first, so the window opens at the saved scale
@@ -48,5 +57,8 @@
     [(and (string=? (car args) "--eval") (pair? (cdr args)))
      (loop (cddr args) mode size (cons (cadr args) evals))]
     [else
-     (fprintf (current-error-port) "usage: schevana [--size WxH] [--fullscreen] [--headless] [--eval EXPR]...\n       schevana --install-desktop | --uninstall-desktop\n")
+     (fprintf (current-error-port)
+              "usage: schevana [--size WxH] [--fullscreen] [--headless] \
+               [--eval EXPR]...\n       \
+               schevana --install-desktop | --uninstall-desktop\n")
      (exit 1)]))

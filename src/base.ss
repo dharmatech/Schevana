@@ -19,13 +19,15 @@
   (let loop ([i 0] [start 0] [acc '()])
     (cond
       [(= i (string-length str)) (reverse (cons (substring str start i) acc))]
-      [(char=? (string-ref str i) ch) (loop (+ i 1) (+ i 1) (cons (substring str start i) acc))]
+      [(char=? (string-ref str i) ch)
+       (loop (+ i 1) (+ i 1) (cons (substring str start i) acc))]
       [else (loop (+ i 1) start acc)])))
 
 (define (string-join strs sep)
   (if (null? strs)
       ""
-      (apply string-append (car strs) (map (lambda (s) (string-append sep s)) (cdr strs)))))
+      (apply string-append (car strs)
+             (map (lambda (s) (string-append sep s)) (cdr strs)))))
 
 (define (string-prefix? prefix str)
   (and (<= (string-length prefix) (string-length str))
@@ -48,7 +50,9 @@
         [else (loop (+ i 1))]))))
 
 (define (truncate-string s n)
-  (if (<= (string-length s) n) s (string-append (substring s 0 (max 0 (- n 1))) "…")))
+  (if (<= (string-length s) n)
+      s
+      (string-append (substring s 0 (max 0 (- n 1))) "…")))
 
 ;; Property lists: '(key val key val ...)
 (define (plist-ref plist key default)
@@ -58,7 +62,9 @@
     [else (plist-ref (cddr plist) key default)]))
 
 (define (plist-keys plist)
-  (if (or (null? plist) (null? (cdr plist))) '() (cons (car plist) (plist-keys (cddr plist)))))
+  (if (or (null? plist) (null? (cdr plist)))
+      '()
+      (cons (car plist) (plist-keys (cddr plist)))))
 
 (define (condition->string c)
   (call-with-string-output-port
@@ -70,3 +76,12 @@
 (define (list-index pred lst)
   (let loop ([l lst] [i 0])
     (cond [(null? l) #f] [(pred (car l)) i] [else (loop (cdr l) (+ i 1))])))
+
+;; A registry (apps, window styles, themes, wallpapers) is a list in
+;; first-registration order. An entry whose name is already there replaces
+;; that entry in place. name-of gives an entry's name.
+(define (registry-add entries entry name-of)
+  (let ([name (name-of entry)])
+    (if (exists (lambda (e) (eq? (name-of e) name)) entries)
+        (map (lambda (e) (if (eq? (name-of e) name) entry e)) entries)
+        (append entries (list entry)))))

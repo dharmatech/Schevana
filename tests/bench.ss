@@ -48,11 +48,16 @@
 (define (wall-ms) (ms-of (current-time 'time-monotonic)))
 (define (main-ms) (ms-of (current-time 'time-thread)))
 
-(define (median xs) (if (null? xs) 0.0 (list-ref (sort < xs) (quotient (length xs) 2))))
+(define (median xs)
+  (if (null? xs) 0.0 (list-ref (sort < xs) (quotient (length xs) 2))))
 (define (percentile xs p)
-  (if (null? xs) 0.0 (list-ref (sort < xs) (min (- (length xs) 1) (exact (floor (* p (length xs))))))))
+  (if (null? xs)
+      0.0
+      (list-ref (sort < xs)
+                (min (- (length xs) 1) (exact (floor (* p (length xs))))))))
 
-;;; ------------------------------------------------------------------ the upload
+;;; ------------------------------------------------------------------
+;;; the upload
 
 ;; The host's SDL branch, with *host* 'sdl only around the present, and
 ;; the texture a buffer the canvas's size.
@@ -66,22 +71,30 @@
       (set! texture-bytes n))
     (if (eqv? rect 0)
         (sdl-memcpy texture pixels n)
-        (let ([x (foreign-ref 'integer-32 rect 0)] [y (foreign-ref 'integer-32 rect 4)]
-              [w (foreign-ref 'integer-32 rect 8)] [h (foreign-ref 'integer-32 rect 12)])
+        (let ([x (foreign-ref 'integer-32 rect 0)]
+              [y (foreign-ref 'integer-32 rect 4)]
+              [w (foreign-ref 'integer-32 rect 8)]
+              [h (foreign-ref 'integer-32 rect 12)])
           (if (and (= x 0) (= (* 4 w) pitch))
               (sdl-memcpy (+ texture (* y pitch)) pixels (* h pitch))
               (do ([r 0 (+ r 1)]) ((= r h))
-                (sdl-memcpy (+ texture (* (+ y r) pitch) (* 4 x)) (+ pixels (* r pitch)) (* 4 w))))))
+                (sdl-memcpy (+ texture (* (+ y r) pitch) (* 4 x))
+                            (+ pixels (* r pitch))
+                            (* 4 w))))))
     0))
 (set! sdl-update-texture texture-upload!)
 (set! sdl-render-copy (lambda (r t src dst) 0))
 (set! sdl-render-present (lambda (r) (void)))
 (define plain-present host-present-damage!)
-(set! host-present-damage! (lambda () (fluid-let ([*host* 'sdl]) (plain-present))))
+(set! host-present-damage!
+      (lambda () (fluid-let ([*host* 'sdl]) (plain-present))))
 
 ;;; ------------------------------------------------------------------ scenes
 
-(define (steps n ms) (do ([i 0 (+ i 1)]) ((= i n)) (set! fake-ms (+ fake-ms ms)) (schevana-step! 0)))
+(define (steps n ms)
+  (do ([i 0 (+ i 1)]) ((= i n))
+    (set! fake-ms (+ fake-ms ms))
+    (schevana-step! 0)))
 
 ;; Status segments that never change.
 (define (fixed-status!)
@@ -107,24 +120,34 @@
   '((input . "(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))")
     (result . "fib")
     (input . "(map fib (iota 20))")
-    (result . "(0 1 1 2 3 5 8 13 21 34 55 89 144 233 377 610 987 1597 2584 4181)")
+    (result . "(0 1 1 2 3 5 8 13 21 34 55 89 144 233 377 610 987 1597 2584 \
+               4181)")
     (input . "(windows)")
-    (result . "(#<window 4 \"Life\" 720x496+520+290> #<window 3 \"Clock\" 230x290+1020+50>")
-    (result . " #<window 2 \"Settings\" 780x560+380+140> #<window 1 \"REPL\" 692x470+30+45>)")
-    (input . "(for-each (lambda (w) (printf \"~a ~a\\n\" (window-id w) (window-title w))) (windows))")
+    (result . "(#<window 4 \"Life\" 720x496+520+290> \
+               #<window 3 \"Clock\" 230x290+1020+50>")
+    (result . " #<window 2 \"Settings\" 780x560+380+140> \
+               #<window 1 \"REPL\" 692x470+30+45>)")
+    (input . "(for-each (lambda (w) (printf \"~a ~a\\n\" (window-id w) \
+              (window-title w))) (windows))")
     (output . "4 Life")
     (output . "3 Clock")
     (output . "2 Settings")
     (output . "1 REPL")
     (input . "(set-theme! 'accent #xff9e64)")
     (input . "(apply-theme-preset! 'tokyo-night)")
-    (input . "(define-app (counter) \"Counter\" (let ([n 0]) (open-window \"Counter\" 'size '(240 . 100))))")
+    (input . "(define-app (counter) \"Counter\" (let ([n 0]) \
+              (open-window \"Counter\" 'size '(240 . 100))))")
     (result . "counter")
-    (input . "(list (screen-w) (screen-h) *scale* (length (windows)) (length (procs)) (apps))")
-    (result . "(1280 800 1.0 5 0 (repl private-repl pure-repl clock life sketch monitor settings))")
-    (input . "(string-append \"The quick brown fox \" \"jumps over the lazy dog, \" \"again and again.\")")
-    (result . "\"The quick brown fox jumps over the lazy dog, again and again.\"")
-    (input . "(vector-map (lambda (x) (* x x)) '#(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))")
+    (input . "(list (screen-w) (screen-h) *scale* (length (windows)) \
+              (length (procs)) (apps))")
+    (result . "(1280 800 1.0 5 0 (repl private-repl pure-repl clock life \
+               sketch monitor settings))")
+    (input . "(string-append \"The quick brown fox \" \
+              \"jumps over the lazy dog, \" \"again and again.\")")
+    (result . "\"The quick brown fox jumps over the lazy dog, again and \
+               again.\"")
+    (input . "(vector-map (lambda (x) (* x x)) '#(1 2 3 4 5 6 7 8 9 10 \
+              11 12 13 14 15 16))")
     (result . "#(1 4 9 16 25 36 49 64 81 100 121 144 169 196 225 256)")
     (input . "(bytes-allocated)")
     (result . "48233472")))
@@ -142,7 +165,11 @@
     [(S30) (lifes! 'cascaded)]
     [(S30M) (lifes! 'cascaded) (steps 3 17) (toggle-maximize! (texted-repl!))]
     [(S5)
-     (let* ([r (texted-repl!)] [s (settings)] [c (clock)] [l (life)] [m (monitor)])
+     (let* ([r (texted-repl!)]
+            [s (settings)]
+            [c (clock)]
+            [l (life)]
+            [m (monitor)])
        (move-window! r 30 45)
        (move-window! s 380 120)
        (move-window! c 1020 50)
@@ -156,7 +183,8 @@
   (fixed-status!)
   (steps 2 17))
 
-;;; ------------------------------------------------------------------ the ladder
+;;; ------------------------------------------------------------------
+;;; the ladder
 
 ;; One scene at one scale: a property list of what it measured.
 (define (run-scene name pct)
@@ -171,19 +199,23 @@
             (steps 1 81)
             (let ([m (- (main-ms) m0)] [w (- (wall-ms) w0)])
               (loop (+ i 1) (cons w walls) (cons m mains))))
-          (list 'scene name 'scale pct 'windows (length (windows)) 'drawn (- *frames-drawn* d0)
-                'main (median mains) 'wall (median walls) 'wall-p90 (percentile walls 0.9)
+          (list 'scene name 'scale pct 'windows (length (windows))
+                'drawn (- *frames-drawn* d0)
+                'main (median mains) 'wall (median walls)
+                'wall-p90 (percentile walls 0.9)
                 'upload (/ (- *upload-bytes* u0) frames 1.0)
                 'gcs (/ (- (collections) g0) frames 1.0))))))
 
 (define (row r)
   (printf "~5a ~4a ~7a ~7,2f ~7,2f (~6,2f) ~9,2f ~5,2f\n"
-          (plist-ref r 'scene #f) (plist-ref r 'scale #f) (plist-ref r 'windows #f)
-          (plist-ref r 'main #f) (plist-ref r 'wall #f) (plist-ref r 'wall-p90 #f)
+          (plist-ref r 'scene #f) (plist-ref r 'scale #f)
+          (plist-ref r 'windows #f) (plist-ref r 'main #f)
+          (plist-ref r 'wall #f) (plist-ref r 'wall-p90 #f)
           (/ (plist-ref r 'upload #f) 1048576.0) (plist-ref r 'gcs #f)))
 
 (printf "Per frame, ~a frames a scene; ms unless said.\n" frames)
-(printf "~5a ~4a ~7a ~7a ~7a (~6a) ~9a ~5a\n" "scene" "%" "windows" "main" "wall" "p90" "upload MiB" "GCs")
+(printf "~5a ~4a ~7a ~7a ~7a (~6a) ~9a ~5a\n"
+        "scene" "%" "windows" "main" "wall" "p90" "upload MiB" "GCs")
 (define results '())
 (for-each (lambda (name)
             (for-each (lambda (pct)
@@ -194,9 +226,13 @@
           '(S30T S5 S30 S30M))
 
 (define (result name pct)
-  (find (lambda (r) (and (eq? (plist-ref r 'scene #f) name) (eqv? (plist-ref r 'scale #f) pct))) results))
+  (find (lambda (r)
+          (and (eq? (plist-ref r 'scene #f) name)
+               (eqv? (plist-ref r 'scale #f) pct)))
+        results))
 
-;;; ------------------------------------------------------------------ idle steps and theme changes
+;;; ------------------------------------------------------------------
+;;; idle steps and theme changes
 
 ;; Steps with 30 paused Life windows and the clock standing still: the
 ;; ones that draw no frame (all but the once-a-second one).
@@ -212,7 +248,8 @@
           (let ([t (- (wall-ms) t0)])
             (if (> *frames-drawn* n)
                 (loop (+ i 1) times uploaded)
-                (loop (+ i 1) (cons t times) (+ uploaded (- *upload-bytes* u))))))
+                (loop (+ i 1) (cons t times)
+                      (+ uploaded (- *upload-bytes* u))))))
         (values (median times) uploaded))))
 
 ;; A theme change and the step after it, which paints the wallpaper's new
@@ -222,13 +259,18 @@
   (scene! 'S30)
   (for-each (lambda (w) (window-call w 'key #\space '())) (windows))
   (steps 3 17)
-  (let loop ([colors '(#xff9e64 #x7aa2f7 #xff9e64 #x7aa2f7 #xff9e64 #x7aa2f7 #xff9e64)] [walls '()] [mains '()])
+  (let loop ([colors
+              '(#xff9e64 #x7aa2f7 #xff9e64 #x7aa2f7 #xff9e64 #x7aa2f7 #xff9e64)]
+             [walls '()]
+             [mains '()])
     (if (null? colors)
         (values (median walls) (median mains))
         (let ([w0 (wall-ms)] [m0 (main-ms)])
           (set-theme! 'accent (car colors))
           (steps 1 17)
-          (loop (cdr colors) (cons (- (wall-ms) w0) walls) (cons (- (main-ms) m0) mains))))))
+          (loop (cdr colors)
+                (cons (- (wall-ms) w0) walls)
+                (cons (- (main-ms) m0) mains))))))
 
 ;; A key typed into S5's REPL, the clock standing still: the step that
 ;; handles it draws the frame that shows it. (values wall main) medians.
@@ -241,25 +283,35 @@
         (let ([w0 (wall-ms)] [m0 (main-ms)] [n *frames-drawn*])
           (inject! (list 'text (if (even? i) "a" "b")))
           (schevana-step! 0)
-          (unless (= *frames-drawn* (+ n 1)) (errorf 'keystroke-ms "a keystroke drew no frame"))
-          (loop (+ i 1) (cons (- (wall-ms) w0) walls) (cons (- (main-ms) m0) mains)))
+          (unless (= *frames-drawn* (+ n 1))
+            (errorf 'keystroke-ms "a keystroke drew no frame"))
+          (loop (+ i 1)
+                (cons (- (wall-ms) w0) walls)
+                (cons (- (main-ms) m0) mains)))
         (values (median walls) (median mains)))))
 
 (newline)
 (for-each (lambda (pct)
             (let-values ([(wall main) (keystroke-ms pct)])
-              (printf "a keystroke in S5's REPL at ~a%: ~,2f ms until its frame is drawn (main thread ~,2f ms)\n" pct wall main)))
+              (printf "a keystroke in S5's REPL at ~a%: ~,2f ms until its \
+                       frame is drawn (main thread ~,2f ms)\n"
+                      pct wall main)))
           '(100 200))
 (define-values (idle-100 idle-up-100) (idle-steps 100))
 (define-values (idle-200 idle-up-200) (idle-steps 200))
-(printf "idle step with 30 paused Life windows: ~,3f ms at 100%, ~,3f ms at 200%\n" idle-100 idle-200)
+(printf "idle step with 30 paused Life windows: ~,3f ms at 100%, \
+         ~,3f ms at 200%\n"
+        idle-100 idle-200)
 (for-each (lambda (pct)
             (let-values ([(wall main) (theme-change-ms pct)])
-              (printf "a theme change at ~a%: ~,1f ms until its frame is drawn, the wallpaper painted again (main thread ~,1f ms)\n"
+              (printf "a theme change at ~a%: ~,1f ms until its frame is \
+                       drawn, the wallpaper painted again \
+                       (main thread ~,1f ms)\n"
                       pct wall main)))
           '(100 200))
 
-;;; ------------------------------------------------------------------ a busy process
+;;; ------------------------------------------------------------------
+;;; a busy process
 
 ;; A REPL evaluation that computes (a loop counting) while S30T animates,
 ;; steps back to back as with a window: its loops a second, as a share of
@@ -271,11 +323,15 @@
 (define (busy-run pct animate? ms)   ; (values loops a second, frames a second)
   (set-theme! 'scale pct)
   (scene! 'S30T)
-  (unless animate? (for-each (lambda (w) (window-call w 'key #\space '())) (windows)))
+  (unless animate?
+    (for-each (lambda (w) (window-call w 'key #\space '())) (windows)))
   (steps 2 81)
   (let* ([count 0] [k 0] [n0 *frames-drawn*] [t0 (wall-ms)] [ms0 fake-ms]
-         [p (spawn "busy" (lambda () (let loop () (set! count (fx+ count 1)) (loop))))])
-    (fluid-let ([now-ms (lambda () (+ ms0 (exact (floor (- (wall-ms) t0))) (* 81 k)))])
+         [p (spawn "busy"
+                   (lambda ()
+                     (let loop () (set! count (fx+ count 1)) (loop))))])
+    (fluid-let ([now-ms (lambda ()
+                          (+ ms0 (exact (floor (- (wall-ms) t0))) (* 81 k)))])
       (let loop ()
         (when (< (- (wall-ms) t0) ms)
           (set! k (+ k 1))
@@ -288,7 +344,8 @@
 
 (define-values (busy-alone busy-idle-fps) (busy-run 200 #f 2000))
 (define-values (busy-loops busy-fps) (busy-run 200 #t 2000))
-(printf "a busy process while S30T animates at 200%: ~a% of its loops with Life paused, ~,1f frames a second\n"
+(printf "a busy process while S30T animates at 200%: ~a% of its loops with \
+         Life paused, ~,1f frames a second\n"
         (exact (round (* 100.0 (/ busy-loops busy-alone)))) busy-fps)
 
 (define failures 0)
@@ -299,10 +356,16 @@
 (newline)
 (assert! "every measured step drew a frame"
          (for-all (lambda (r) (= frames (plist-ref r 'drawn #f))) results))
-(assert! (format "an idle step takes under 0.2 ms (~,3f, ~,3f) and uploads nothing" idle-100 idle-200)
+(assert! (format
+          "an idle step takes under 0.2 ms (~,3f, ~,3f) and uploads nothing"
+          idle-100 idle-200)
          (and (< (max idle-100 idle-200) 0.2) (= 0 idle-up-100 idle-up-200)))
-(assert! "a busy process and S30T's animation both go on" (and (> busy-loops 0) (> busy-fps 1)))
+(assert! "a busy process and S30T's animation both go on"
+         (and (> busy-loops 0) (> busy-fps 1)))
 (printf "S30T main per frame: ~,2f ms at 100%, ~,2f ms at 200%\n"
-        (plist-ref (result 'S30T 100) 'main #f) (plist-ref (result 'S30T 200) 'main #f))
-(printf "~a\n" (if (zero? failures) "all assertions hold" (format "~a assertion(s) FAILED" failures)))
+        (plist-ref (result 'S30T 100) 'main #f)
+        (plist-ref (result 'S30T 200) 'main #f))
+(printf "~a\n" (if (zero? failures)
+                   "all assertions hold"
+                   (format "~a assertion(s) FAILED" failures)))
 (exit (if (zero? failures) 0 1))
