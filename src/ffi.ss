@@ -1,6 +1,6 @@
 ;;; ffi.ss — the only place where Schevana talks to C.
 ;;;
-;;; SDL2 gives us a host window, input events and a clipboard.
+;;; SDL3 gives us a host window, input events and a clipboard.
 ;;; Cairo gives us 2D drawing into an in-memory image.
 ;;; Everything above this file is plain Scheme.
 
@@ -11,31 +11,46 @@
       [(guard (c [#t #f]) (load-shared-object (car ns)) #t) (car ns)]
       [else (loop (cdr ns))])))
 
-(define libsdl
-  (load-first-library
-   '("libSDL2-2.0.so.0" "libSDL2.so" "libSDL2-2.0.0.dylib" "libSDL2.dylib"
-     "SDL2.dll")))
+(define sdl-library-names
+  '("libSDL3.so.0" "libSDL3.so" "libSDL3.0.dylib" "libSDL3.dylib" "SDL3.dll"))
+
+;; A process loads one SDL for good, so a session that started with another
+;; (SDL2, before the switch) cannot reload into this one.
+(when (and (top-level-bound? 'libsdl) (not (member libsdl sdl-library-names)))
+  (errorf 'reload! "this session runs ~a; quit and start Schevana again"
+          libsdl))
+
+(define libsdl (load-first-library sdl-library-names))
 
 (define libcairo
   (load-first-library
    '("libcairo.so.2" "libcairo.so" "libcairo.2.dylib" "libcairo.dylib"
      "libcairo-2.dll" "cairo.dll")))
 
-;; Like foreign-procedure, but `double` arguments accept any real number.
+;; Like foreign-procedure, but `double` arguments accept any real number,
+;; and `bool` is C's one-byte bool (SDL3's) as #t or #f: Chez's boolean is
+;; an int, whose upper bytes a C bool leaves undefined.
 (define-syntax define-foreign
   (lambda (x)
+    (define (is? t name) (eq? (syntax->datum t) name))
+    (define (c-type t) (if (is? t 'bool) #'unsigned-8 t))
     (syntax-case x ()
       [(_ name cname (type ...) ret)
        (with-syntax ([(arg ...) (generate-temporaries #'(type ...))])
          (with-syntax ([(conv ...)
                         (map (lambda (t a)
-                               (if (eq? (syntax->datum t) 'double)
-                                   #`(inexact #,a)
-                                   a))
-                             #'(type ...) #'(arg ...))])
-           #'(define name
-               (let ([f (foreign-procedure cname (type ...) ret)])
-                 (lambda (arg ...) (f conv ...))))))])))
+                               (cond [(is? t 'double) #`(inexact #,a)]
+                                     [(is? t 'bool) #`(if #,a 1 0)]
+                                     [else a]))
+                             #'(type ...) #'(arg ...))]
+                       [(ctype ...) (map c-type #'(type ...))]
+                       [cret (c-type #'ret)])
+           #`(define name
+               (let ([f (foreign-procedure cname (ctype ...) cret)])
+                 (lambda (arg ...)
+                   #,(if (is? #'ret 'bool)
+                         #'(not (fx= 0 (f conv ...)))
+                         #'(f conv ...)))))))])))
 
 (define (c-string->string ptr)
   (if (= ptr 0)
@@ -47,100 +62,82 @@
             (bytevector-u8-set! bv i (foreign-ref 'unsigned-8 ptr i)))
           (utf8->string bv)))))
 
-;;; ------------------------------------------------------------------ SDL2
+;;; ------------------------------------------------------------------ SDL3
 
 (define SDL_INIT_VIDEO #x20)
+(define SDL_WINDOW_FULLSCREEN #x1)
 (define SDL_WINDOW_HIDDEN #x8)
 (define SDL_WINDOW_RESIZABLE #x20)
-(define SDL_WINDOW_ALLOW_HIGHDPI #x2000)
-(define SDL_WINDOW_FULLSCREEN_DESKTOP #x1001)
+(define SDL_WINDOW_HIGH_PIXEL_DENSITY #x2000)
 (define SDL_WINDOWPOS_CENTERED #x2FFF0000)
-(define SDL_RENDERER_ACCELERATED 2)
-(define SDL_RENDERER_PRESENTVSYNC 4)
 (define SDL_PIXELFORMAT_ARGB8888 #x16362004)
 (define SDL_TEXTUREACCESS_STREAMING 1)
+(define SDL_SCALEMODE_NEAREST 0)
 
-(define SDL_QUIT #x100)
-(define SDL_WINDOWEVENT #x200)
-(define SDL_KEYDOWN #x300)
-(define SDL_KEYUP #x301)
-(define SDL_TEXTINPUT #x303)
-(define SDL_MOUSEMOTION #x400)
-(define SDL_MOUSEBUTTONDOWN #x401)
-(define SDL_MOUSEBUTTONUP #x402)
-(define SDL_MOUSEWHEEL #x403)
-(define SDL_WINDOWEVENT_EXPOSED 3)
-(define SDL_WINDOWEVENT_RESIZED 5)
-(define SDL_WINDOWEVENT_SIZE_CHANGED 6)
-(define SDL_WINDOWEVENT_LEAVE 11)
-(define SDL_RENDER_TARGETS_RESET #x2000)
-(define SDL_RENDER_DEVICE_RESET #x2001)
+(define SDL_EVENT_QUIT #x100)
+(define SDL_EVENT_WINDOW_EXPOSED #x204)
+(define SDL_EVENT_WINDOW_RESIZED #x206)
+(define SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED #x207)
+(define SDL_EVENT_WINDOW_MOUSE_LEAVE #x20D)
+(define SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED #x214)
+(define SDL_EVENT_KEY_DOWN #x300)
+(define SDL_EVENT_TEXT_INPUT #x303)
+(define SDL_EVENT_MOUSE_MOTION #x400)
+(define SDL_EVENT_MOUSE_BUTTON_DOWN #x401)
+(define SDL_EVENT_MOUSE_BUTTON_UP #x402)
+(define SDL_EVENT_MOUSE_WHEEL #x403)
+(define SDL_EVENT_RENDER_TARGETS_RESET #x2000)
+(define SDL_EVENT_RENDER_DEVICE_RESET #x2001)
 
-(define-foreign sdl-init "SDL_Init" (unsigned-32) int)
+(define-foreign sdl-init "SDL_Init" (unsigned-32) bool)
 (define-foreign sdl-quit "SDL_Quit" () void)
 (define-foreign sdl-get-error "SDL_GetError" () string)
-(define-foreign sdl-set-hint "SDL_SetHint" (string string) boolean)
+(define-foreign sdl-set-hint "SDL_SetHint" (string string) bool)
 (define-foreign sdl-create-window "SDL_CreateWindow"
-  (string int int int int unsigned-32) uptr)
+  (string int int unsigned-64) uptr)
 (define-foreign sdl-destroy-window "SDL_DestroyWindow" (uptr) void)
-(define-foreign sdl-set-window-title "SDL_SetWindowTitle" (uptr string) void)
+(define-foreign sdl-set-window-title "SDL_SetWindowTitle" (uptr string) bool)
 (define-foreign sdl-set-window-minimum-size "SDL_SetWindowMinimumSize"
-  (uptr int int) void)
-(define-foreign sdl-set-window-size "SDL_SetWindowSize" (uptr int int) void)
+  (uptr int int) bool)
+(define-foreign sdl-set-window-size "SDL_SetWindowSize" (uptr int int) bool)
 (define-foreign sdl-set-window-position "SDL_SetWindowPosition"
-  (uptr int int) void)
-(define-foreign sdl-show-window "SDL_ShowWindow" (uptr) void)
-(define-foreign sdl-get-window-size "SDL_GetWindowSize" (uptr uptr uptr) void)
-(define-foreign sdl-create-renderer "SDL_CreateRenderer"
-  (uptr int unsigned-32) uptr)
+  (uptr int int) bool)
+(define-foreign sdl-show-window "SDL_ShowWindow" (uptr) bool)
+(define-foreign sdl-get-window-size "SDL_GetWindowSize" (uptr uptr uptr) bool)
+(define-foreign sdl-get-window-display-scale "SDL_GetWindowDisplayScale"
+  (uptr) float)
+;; the name of a render driver, or #f to let SDL choose
+(define-foreign sdl-create-renderer "SDL_CreateRenderer" (uptr string) uptr)
 (define-foreign sdl-destroy-renderer "SDL_DestroyRenderer" (uptr) void)
-(define-foreign sdl-get-renderer-output-size "SDL_GetRendererOutputSize"
-  (uptr uptr uptr) int)
+(define-foreign sdl-get-current-render-output-size
+  "SDL_GetCurrentRenderOutputSize" (uptr uptr uptr) bool)
 (define-foreign sdl-create-texture "SDL_CreateTexture"
   (uptr unsigned-32 int int int) uptr)
+(define-foreign sdl-set-texture-scale-mode "SDL_SetTextureScaleMode"
+  (uptr int) bool)
 (define-foreign sdl-destroy-texture "SDL_DestroyTexture" (uptr) void)
-(define-foreign sdl-update-texture "SDL_UpdateTexture" (uptr uptr uptr int) int)
-(define-foreign sdl-render-copy "SDL_RenderCopy" (uptr uptr uptr uptr) int)
-(define-foreign sdl-render-present "SDL_RenderPresent" (uptr) void)
-(define-foreign sdl-poll-event "SDL_PollEvent" (uptr) int)
-(define-foreign sdl-wait-event-timeout "SDL_WaitEventTimeout" (uptr int) int)
-(define-foreign sdl-start-text-input "SDL_StartTextInput" () void)
+(define-foreign sdl-update-texture "SDL_UpdateTexture"
+  (uptr uptr uptr int) bool)
+(define-foreign sdl-render-texture "SDL_RenderTexture"
+  (uptr uptr uptr uptr) bool)
+(define-foreign sdl-render-present "SDL_RenderPresent" (uptr) bool)
+(define-foreign sdl-poll-event "SDL_PollEvent" (uptr) bool)
+(define-foreign sdl-wait-event-timeout "SDL_WaitEventTimeout" (uptr int) bool)
+(define-foreign sdl-start-text-input "SDL_StartTextInput" (uptr) bool)
 (define-foreign sdl-get-clipboard-text "SDL_GetClipboardText" () uptr)
-(define-foreign sdl-set-clipboard-text "SDL_SetClipboardText" (string) int)
+(define-foreign sdl-set-clipboard-text "SDL_SetClipboardText" (string) bool)
 (define-foreign sdl-free "SDL_free" (uptr) void)
 (define-foreign sdl-create-system-cursor "SDL_CreateSystemCursor" (int) uptr)
-(define-foreign sdl-set-cursor "SDL_SetCursor" (uptr) void)
+(define-foreign sdl-set-cursor "SDL_SetCursor" (uptr) bool)
 (define-foreign sdl-set-window-fullscreen "SDL_SetWindowFullscreen"
-  (uptr unsigned-32) int)
-(define-foreign sdl-get-window-flags "SDL_GetWindowFlags" (uptr) unsigned-32)
-(define-foreign sdl-create-rgb-surface-with-format-from
-  "SDL_CreateRGBSurfaceWithFormatFrom"
-  (uptr int int int int unsigned-32) uptr)
-(define-foreign sdl-free-surface "SDL_FreeSurface" (uptr) void)
-(define-foreign sdl-set-window-icon "SDL_SetWindowIcon" (uptr uptr) void)
-(define-foreign sdl-get-current-video-driver "SDL_GetCurrentVideoDriver"
-  () string)
+  (uptr bool) bool)
+(define-foreign sdl-get-window-flags "SDL_GetWindowFlags" (uptr) unsigned-64)
+(define-foreign sdl-create-surface-from "SDL_CreateSurfaceFrom"
+  (int int unsigned-32 uptr int) uptr)
+(define-foreign sdl-destroy-surface "SDL_DestroySurface" (uptr) void)
+(define-foreign sdl-set-window-icon "SDL_SetWindowIcon" (uptr uptr) bool)
 (define-foreign sdl-memcmp "SDL_memcmp" (uptr uptr size_t) int)
 (define-foreign sdl-memcpy "SDL_memcpy" (uptr uptr size_t) uptr)
-
-;;; ------------------------------------------------------------------ Xlib
-;;; Only to read the desktop's scale (Xft.dpi) when SDL runs on X11.
-
-(define libx11
-  (guard (c [#t #f]) (load-first-library '("libX11.so.6" "libX11.so"))))
-
-;; The X server's resource database as text (what `xrdb -query` prints), or #f.
-(define x-resource-string
-  (if libx11
-      (let ([open (foreign-procedure "XOpenDisplay" (uptr) uptr)]
-            [resources
-             (foreign-procedure "XResourceManagerString" (uptr) string)]
-            [close (foreign-procedure "XCloseDisplay" (uptr) int)])
-        (lambda ()
-          (let ([d (open 0)])
-            (and (not (= d 0))
-                 (let ([s (resources d)]) (close d) s)))))
-      (lambda () #f)))
 
 ;;; ------------------------------------------------------------------ Cairo
 

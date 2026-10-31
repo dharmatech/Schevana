@@ -5,14 +5,16 @@ entirely in Chez Scheme. Every window, color, key binding, status-bar segment
 and running process is a live Scheme value. You can inspect it, redefine it and
 break it from a REPL that runs inside the world it changes.
 
-The only C code involved is SDL2 (host window and input) and Cairo (2D
+The only C code involved is SDL3 (host window and input) and Cairo (2D
 drawing), both called through Chez's FFI. There is no build step: the whole
 world compiles from source in about 0.1 s at startup.
 
 ## Running
 
-Requirements: Chez Scheme 10, `libSDL2-2.0`, `libcairo2` (both usually
-installed already on a Linux desktop).
+Requirements: Chez Scheme 10, SDL 3.2 or later, and `libcairo2` (usually
+installed already on a Linux desktop). On Debian 13, SDL3 is `sudo apt
+install libsdl3-0`. SDL chooses between Wayland and X11 by itself;
+`SDL_VIDEO_DRIVER=x11 ./schevana` (or `wayland`) chooses for it.
 
 ```bash
 ./schevana
@@ -179,12 +181,12 @@ src/shell    wallpapers, top bar + status segments, taskbar, menus, toasts
 src/styles   window styles: the record, the registry, previews
 src/wm       window records, z-order, focus, hit testing, drag/resize, dispatch
 src/proc     processes + watchdog (Chez engines)
-src/host     SDL2 window ⇄ Scheme event lists, uploads   |  headless mode
+src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors, fonts, layers; the two
              screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
 src/theme    colors, metrics and fonts as data; themes; save/load
-src/ffi      the only file that knows about C (SDL2 + Cairo)
+src/ffi      the only file that knows about C (SDL3 + Cairo)
 ```
 
 `src/` is the core, the explicit, ordered list in `load.ss`. Its last
@@ -237,9 +239,10 @@ Decisions worth keeping in mind for the real design:
 - **Logical pixels.** All layout is in logical pixels; the canvas is
   drawn `*scale*` times bigger with a single `cairo-scale`, so text and
   shapes are rendered from outlines at full resolution. The scale follows
-  the desktop (SDL's pixel ratio on macOS and Wayland, `Xft.dpi` under
-  X11, which is how GNOME publishes 200%), and the theme key `scale`
-  (a percentage; 0 for automatic, in Settings → Display) overrides it.
+  the desktop (SDL's display scale for the window: the pixel ratio on
+  macOS and Wayland, `Xft.dpi` under X11, which is how GNOME publishes
+  200% and SDL reads once, as it starts), and the theme key `scale` (a
+  percentage; 0 for automatic, in Settings → Display) overrides it.
   Mouse positions are converted at the host boundary, so apps never see
   physical pixels.
 - **Sizes follow the fonts.** Title bars, panels, menus, the apps' bars

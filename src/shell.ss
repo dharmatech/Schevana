@@ -484,8 +484,9 @@
 
 ;;; Desktops like GNOME don't use the icon a window sets: they show the
 ;;; icon of the app's .desktop file, which they match to the window by its
-;;; class (Schevana). (install-desktop-entry!) writes that file and the
-;;; icon under ~/.local/share; ./schevana --install-desktop does the same.
+;;; app id (host-app-id; the class under X11). (install-desktop-entry!)
+;;; writes that file and the icon under ~/.local/share; ./schevana
+;;; --install-desktop does the same.
 
 (define (desktop-data-home)
   (or (getenv "XDG_DATA_HOME")
@@ -493,7 +494,8 @@
 
 (define (desktop-entry-files)
   (let ([data (desktop-data-home)])
-    (values (string-append data "/applications/schevana.desktop")
+    ;; named after the app id, which Wayland desktops look it up by
+    (values (string-append data "/applications/" host-app-id ".desktop")
             (string-append data "/icons/hicolor/256x256/apps/schevana.png"))))
 
 (define (make-directories! path)
@@ -528,7 +530,7 @@
             "Comment=A Lisp Machine-style desktop written in Chez Scheme~%")
           (fprintf p "Exec=\"~a\"~%Icon=schevana~%Terminal=false~%\
                       Categories=Development;~%" exec)
-          (fprintf p "StartupWMClass=Schevana~%"))
+          (fprintf p "StartupWMClass=~a~%" host-app-id))
         'replace)
       ;; let the desktop notice; harmless where these tools are missing
       (system (format

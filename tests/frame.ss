@@ -207,11 +207,11 @@
                 (list x y w h pitch)))
       (sdl-memcpy (+ td (* y ts)) pixels (* h ts))
       (cairo-surface-mark-dirty texture)
-      0)))
+      #t)))
 
 (set! sdl-update-texture texture-upload!)
-(set! sdl-render-copy (lambda (r t src dst) 0))
-(set! sdl-render-present (lambda (r) (set! presents (+ presents 1))))
+(set! sdl-render-texture (lambda (r t src dst) #t))
+(set! sdl-render-present (lambda (r) (set! presents (+ presents 1)) #t))
 (set! plain-present host-present-damage!)
 (set! host-present-damage!
   (lambda ()
@@ -682,25 +682,26 @@
     (set! size (cons w h))
     (set! queue 1)
     (turn! l))
-  (fluid-let ([sdl-get-window-size (lambda (win a b) (size! a b))]
-              [sdl-get-renderer-output-size (lambda (r a b) (size! a b) 0)]
-              [sdl-set-window-minimum-size (lambda (win w h) (void))]
+  (fluid-let ([sdl-get-window-size (lambda (win a b) (size! a b) #t)]
+              [sdl-get-current-render-output-size
+               (lambda (r a b) (size! a b) #t)]
+              [sdl-get-window-display-scale (lambda (win) 1.0)]
+              [sdl-set-window-minimum-size (lambda (win w h) #t)]
               [sdl-get-window-flags (lambda (win) 0)]
-              [sdl-poll-event   ; the queued size-changed events
+              [sdl-poll-event   ; the queued pixel-size-changed events
                (lambda (buf)
-                 (if (= queue 0)
-                     0
-                     (begin (foreign-set! 'unsigned-32 buf 0 SDL_WINDOWEVENT)
-                            (foreign-set! 'unsigned-8 buf 12
-                                          SDL_WINDOWEVENT_SIZE_CHANGED)
-                            (set! queue (- queue 1))
-                            1)))]
+                 (and (> queue 0)
+                      (begin (foreign-set! 'unsigned-32 buf 0
+                                           SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+                             (set! queue (- queue 1))
+                             #t)))]
               [sdl-create-texture   ; a new texture: its pixels are undefined
                (lambda (r f a w h)
                  (when texture
                    (cairo-surface-destroy texture)
                    (set! texture #f))
                  1)]
+              [sdl-set-texture-scale-mode (lambda (t mode) #t)]
               [sdl-destroy-texture (lambda (t) (void))]
               [sdl-render-present
                (lambda (r)

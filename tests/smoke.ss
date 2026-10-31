@@ -703,9 +703,12 @@
 ;; folder).
 (putenv "XDG_DATA_HOME" (string-append out-dir "/xdg"))
 (let ([files (install-desktop-entry!)])
-  (check "the desktop entry names the window class and the icon"
+  (check "the desktop entry names the window's app id and the icon"
          (let ([text (call-with-input-file (car files) get-string-all)])
-           (and (string-contains-ci? text "StartupWMClass=Schevana")
+           (and (member (string-append "StartupWMClass=" host-app-id)
+                        (string-split text #\newline))
+                (string-suffix? (string-append "/" host-app-id ".desktop")
+                                (car files))
                 (string-contains-ci? text "Icon=schevana")
                 (file-exists? (cadr files)))))
   (uninstall-desktop-entry!)
@@ -919,18 +922,51 @@
      (close-window! w)
      (steps 1))))
 
+;;; SDL3's event layout, from a hand-filled SDL_Event: the offsets are
+;;; SDL_events.h's (3.2).
+(define (decode-event type . fields)   ; fields: (type offset value) ...
+  (do ([i 0 (+ i 1)]) ((= i 128)) (foreign-set! 'unsigned-8 *sdl-event* i 0))
+  (foreign-set! 'unsigned-32 *sdl-event* 0 type)
+  (for-each (lambda (f) (foreign-set! (car f) *sdl-event* (cadr f) (caddr f)))
+            fields)
+  (sdl-event->list *sdl-event*))
+
+(set! *wheel-rest* '(0 . 0))
+;; the decoded wheel events, in order (map's order is unspecified)
+(let ([wheel (lambda ds
+               (let loop ([ds ds] [acc '()])
+                 (if (null? ds)
+                     (reverse acc)
+                     (loop (cdr ds)
+                           (cons (decode-event SDL_EVENT_MOUSE_WHEEL
+                                               `(float 28 ,(car ds)))
+                                 acc)))))])
+  (check "SDL3 events decode: a key with its modifiers, float mouse \
+          positions, and wheel fractions summed into whole steps, the \
+          leftover dropped when the wheel turns back"
+         (and (equal? (decode-event SDL_EVENT_KEY_DOWN '(unsigned-32 28 #x61)
+                                    '(unsigned-16 32 #x41))
+                      '(key-down #\a (ctrl shift)))
+              (equal? (decode-event SDL_EVENT_MOUSE_MOTION '(float 28 10.75)
+                                    '(float 32 20.25))
+                      (list 'mouse-move (host->world 10.75)
+                            (host->world 20.25)))
+              (equal? (wheel 0.4 0.4 -0.4 -0.4 -0.4)
+                      '(#f #f #f #f (wheel 0 -1))))))
+
 ;;; The host's SDL code, run against a stand-in for SDL: every SDL call
 ;;; src/ffi.ss binds is replaced (one with no stand-in raises), so nothing
 ;;; here reaches the real SDL or opens a window. The fake window is
 ;;; fake-units window units big with fake-ratio physical pixels per unit,
-;;; on an X11 desktop at fake-dpi; its texture is an image that uploads
-;;; copy rows into, as SDL_UpdateTexture does. *host* is 'sdl only around
-;;; single host calls, so steps stay headless.
+;;; on a desktop that asks for fake-desktop (Xft.dpi / 96 under X11), so
+;;; its display scale is their product, as SDL3's is; its texture is an
+;;; image that uploads copy rows into, as SDL_UpdateTexture does. *host*
+;;; is 'sdl only around single host calls, so steps stay headless.
 
 (define fake-sdl-names
   (call-with-input-file (string-append *schevana-root* "/src/ffi.ss")
     (lambda (p)
-      (let loop ([acc '(x-resource-string)])
+      (let loop ([acc '()])
         (let ([x (read p)])
           (cond
             [(eof-object? x) acc]
@@ -943,11 +979,13 @@
 
 (define fake-units '(1280 . 800))
 (define fake-ratio 1)
-(define fake-dpi 96)
+(define fake-desktop 1)
 (define fake-flags 0)
-(define fake-queue '())        ; the window events SDL_PollEvent hands out next
+(define fake-hints '())        ; the hints set, newest first
+(define fake-queue '())        ; the event types SDL_PollEvent hands out next
 (define fake-log '())          ; what was asked of the window, newest first
 (define fake-texture #f)
+(define fake-nearest? #f)      ; the texture is not filtered
 (define fake-bytes 0)
 (define fake-copies 0)
 (define fake-presents 0)
@@ -963,53 +1001,58 @@
 (define (fake-sdl name)
   (define (pair! a b x y)
     (foreign-set! 'integer-32 a 0 x)
-    (foreign-set! 'integer-32 b 0 y))
+    (foreign-set! 'integer-32 b 0 y)
+    #t)
   (define (poll buf)
-    (if (null? fake-queue)
-        0
-        (begin
-          (foreign-set! 'unsigned-32 buf 0 SDL_WINDOWEVENT)
-          (foreign-set! 'unsigned-8 buf 12 (car fake-queue))
-          (set! fake-queue (cdr fake-queue))
-          1)))
+    (and (pair? fake-queue)
+         (begin
+           (foreign-set! 'unsigned-32 buf 0 (car fake-queue))
+           (set! fake-queue (cdr fake-queue))
+           #t)))
   (case name
-    [(sdl-init) (lambda (flags) 0)]
-    [(sdl-set-hint) (lambda (k v) #t)]
-    [(sdl-start-text-input) (lambda () (void))]
-    [(sdl-get-current-video-driver) (lambda () "x11")]
-    [(x-resource-string)
-     (lambda () (format "Xft.antialias:\t1\nXft.dpi:\t~a\n" fake-dpi))]
+    [(sdl-init) (lambda (flags) #t)]
+    [(sdl-set-hint)
+     (lambda (k v) (set! fake-hints (cons (cons k v) fake-hints)) #t)]
+    [(sdl-start-text-input) (lambda (win) #t)]
+    [(sdl-get-window-display-scale)
+     (lambda (win) (inexact (* fake-ratio fake-desktop)))]
     [(sdl-create-window)
-     (lambda (title x y w h flags)
+     (lambda (title w h flags)
        (set! fake-units (cons w h))
        (set! fake-flags flags)
        (fake-log! 'create w h
-                  (if (fxzero? (fxand flags SDL_WINDOW_HIDDEN)) 'shown 'hidden))
+                  (if (logtest flags SDL_WINDOW_HIDDEN) 'hidden 'shown))
        1)]
-    [(sdl-create-renderer) (lambda (win index flags) 2)]
+    [(sdl-create-renderer) (lambda (win name) 2)]
     [(sdl-set-window-size)
-     (lambda (win w h) (set! fake-units (cons w h)) (fake-log! 'size w h))]
+     (lambda (win w h) (set! fake-units (cons w h)) (fake-log! 'size w h) #t)]
     [(sdl-set-window-position)
      (lambda (win x y)
        (fake-log! 'position
-                  (if (= x y SDL_WINDOWPOS_CENTERED) 'centered (list x y))))]
-    [(sdl-show-window) (lambda (win) (fake-log! 'show))]
-    [(sdl-set-window-minimum-size) (lambda (win w h) (fake-log! 'minimum w h))]
+                  (if (= x y SDL_WINDOWPOS_CENTERED) 'centered (list x y)))
+       #t)]
+    [(sdl-show-window) (lambda (win) (fake-log! 'show) #t)]
+    [(sdl-set-window-minimum-size)
+     (lambda (win w h) (fake-log! 'minimum w h) #t)]
     [(sdl-get-window-flags) (lambda (win) fake-flags)]
     [(sdl-get-window-size)
      (lambda (win w h) (pair! w h (car fake-units) (cdr fake-units)))]
-    [(sdl-get-renderer-output-size)
+    [(sdl-get-current-render-output-size)
      (lambda (r w h)
        (pair! w h (* fake-ratio (car fake-units))
-              (* fake-ratio (cdr fake-units)))
-       0)]
+              (* fake-ratio (cdr fake-units))))]
     [(sdl-poll-event) poll]
     [(sdl-wait-event-timeout) (lambda (buf ms) (poll buf))]
     [(sdl-create-texture)   ; its pixels are undefined: clear here
      (lambda (r format access w h)
        (when fake-texture (cairo-surface-destroy fake-texture))
        (set! fake-texture (cairo-image-surface-create CAIRO_FORMAT_ARGB32 w h))
+       (set! fake-nearest? #f)
        3)]
+    [(sdl-set-texture-scale-mode)
+     (lambda (t mode)
+       (set! fake-nearest? (and (= t 3) (= mode SDL_SCALEMODE_NEAREST)))
+       #t)]
     [(sdl-destroy-texture) (lambda (t) (void))]
     [(sdl-update-texture)
      (lambda (t rect pixels pitch)
@@ -1032,14 +1075,15 @@
                          (* 4 w)))
            (cairo-surface-mark-dirty fake-texture)
            (set! fake-bytes (+ fake-bytes (* 4 w h)))
-           0)))]
-    [(sdl-render-copy)
+           #t)))]
+    [(sdl-render-texture)
      (lambda (r t src dst)
-       (unless (and (= t 3) (= src 0) (= dst 0))
-         (errorf 'sdl-render-copy "not the whole texture"))
+       (unless (and (= t 3) (= src 0) (= dst 0) fake-nearest?)
+         (errorf 'sdl-render-texture "not the whole texture, unfiltered"))
        (set! fake-copies (+ fake-copies 1))
-       0)]
-    [(sdl-render-present) (lambda (r) (set! fake-presents (+ fake-presents 1)))]
+       #t)]
+    [(sdl-render-present)
+     (lambda (r) (set! fake-presents (+ fake-presents 1)) #t)]
     [else (lambda args
             (set! fake-unfaked (cons name fake-unfaked))
             (errorf name "the fake SDL has no stand-in for this"))]))
@@ -1076,17 +1120,20 @@
         (for-each set-top-level-value! fake-sdl-names saved)
         (set! host-present-damage! present)))))
 
-;; SDL reports a window event (through the host's real event loop); the
-;; world handles what the host makes of it.
-(define (fake-event! id)
-  (set! fake-queue (list id))
+;; SDL reports window events (through the host's real event loop); the
+;; world handles what the host makes of them.
+(define (fake-event! . types)
+  (set! fake-queue types)
   (apply inject! (fluid-let ([*host* 'sdl]) (host-events 0)))
   (steps 2))
 
+;; As SDL3 reports a change of size or of pixel ratio: each of the three
+;; events may come alone, and the first makes the change.
 (define (fake-resize! units ratio)
   (set! fake-units units)
   (set! fake-ratio ratio)
-  (fake-event! SDL_WINDOWEVENT_SIZE_CHANGED))
+  (fake-event! SDL_EVENT_WINDOW_RESIZED SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
+               SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED))
 
 ;; A font's metrics measured afresh (no cache) at the current scale.
 (define (fresh-metrics name)
@@ -1124,7 +1171,7 @@
           (window-call l 'key #\space '())   ; paused
           (after-clock-frame!)
           (let ([p0 fake-presents] [b0 fake-bytes])
-            (fake-event! SDL_WINDOWEVENT_EXPOSED)
+            (fake-event! SDL_EVENT_WINDOW_EXPOSED)
             (let ([exposed (list (- fake-presents p0) (- fake-bytes b0))]
                   [p1 fake-presents]
                   [b1 fake-bytes])
@@ -1160,13 +1207,13 @@
         ;; only stores it, so it is passed on again after
         (do ([i 1 (+ i 1)]) ((> i 8))
           (fake-resize! (cons (+ 1280 (* 20 i)) (+ 800 (* 12 i))) 1))
-        (set! fake-dpi 144)
-        (set! fake-flags SDL_WINDOW_FULLSCREEN_DESKTOP)
+        (set! fake-desktop 3/2)
+        (set! fake-flags SDL_WINDOW_FULLSCREEN)
         (fake-resize! '(1920 . 1200) 1)
         (set! fake-flags 0)
         (fake-resize! '(1300 . 820) 1)
         (fake-resize! '(1320 . 830) 1)
-        (set! fake-dpi 96)
+        (set! fake-desktop 1)
         (fake-resize! '(1280 . 800) 1)
         (let ([minimums
                (reverse
@@ -1180,7 +1227,8 @@
                       (= *canvas-h* 800)))))))))
 
 ;; The host window opens hidden, is sized in window units once the pixel
-;; ratio is known (a 2x display here), and only then is shown.
+;; ratio and the desktop's scale are known, centered, and only then shown.
+;; SDL is told the app id that the desktop entry names.
 (with-quiet-status
  (lambda ()
    (fluid-let ([*host* 'headless] [*sdl-window* 0] [*sdl-renderer* 0]
@@ -1188,32 +1236,57 @@
                [*pixel-ratio* 1] [*host-scale* *host-scale*])
      (with-fake-sdl
       (lambda ()
-        (define (open scale . fullscreen?)
+        (define (open scale ratio desktop . fullscreen?)
           (hashtable-set! *theme* 'scale scale)
-          (set! fake-ratio 2)
+          (set! fake-ratio ratio)
+          (set! fake-desktop desktop)
           (set! fake-log '())
           (set! *sdl-texture* 0)   ; as in a new session
           (apply host-init! 'sdl 1280 800 fullscreen?)
           (set! *host* 'headless)   ; steps stay headless
-          (list (reverse fake-log) *canvas-w* *canvas-h*))
-        (let* ([explicit (open 200)] [auto (open 0)] [full (open 200 #t)])
+          (list (reverse fake-log) *canvas-w* *canvas-h*
+                (= fake-flags
+                   (fxior SDL_WINDOW_RESIZABLE SDL_WINDOW_HIGH_PIXEL_DENSITY
+                          SDL_WINDOW_HIDDEN
+                          (if (pair? fullscreen?) SDL_WINDOW_FULLSCREEN 0)))))
+        (let* ([explicit (open 200 2 1)]   ; a 2x display (macOS, Wayland)
+               [x11 (open 0 1 2)]          ; X11 at Xft.dpi 192
+               [wayland (open 0 2 1)]
+               [x150 (open 150 1 1)]
+               [full (open 200 1 1 #t)])   ; never resized
           (hashtable-set! *theme* 'scale 0)
           (set! fake-flags 0)
+          (set! fake-desktop 1)
           (set! *host-fullscreen* #f)
           (fake-resize! '(1280 . 800) 1)   ; the world as it was
           (check (format "the host window opens hidden, sized for the pixel \
-                          ratio, then shown ~s" (list explicit auto full))
-                 (and (equal? explicit '(((create 2560 1600 hidden)
-                                          (size 1280 800) (position centered)
-                                          (show) (minimum 640 400))
-                                         1280 800))
-                      (equal? auto '(((create 1280 800 hidden) (show)
-                                      (minimum 640 400))
-                                     1280 800))
-                      (equal? (car full) '((create 2560 1600 hidden) (show)
-                                           (minimum 640 400)))
+                          ratio and the desktop's scale, then centered and \
+                          shown ~s" (list explicit x11 wayland x150 full))
+                 (and (equal? explicit '(((create 1280 800 hidden)
+                                          (position centered) (show)
+                                          (minimum 640 400))
+                                         1280 800 #t))
+                      (equal? x11 '(((create 1280 800 hidden) (size 2560 1600)
+                                     (position centered) (show)
+                                     (minimum 1280 800))
+                                    1280 800 #t))
+                      (equal? wayland explicit)
+                      (equal? x150 '(((create 1280 800 hidden) (size 1920 1200)
+                                      (position centered) (show)
+                                      (minimum 960 600))
+                                     1280 800 #t))
+                      (equal? full '(((create 1280 800 hidden)
+                                      (position centered) (show)
+                                      (minimum 1280 800))
+                                     640 400 #t))
                       (= *scale* 1.0) (= *canvas-w* 1280) (= *canvas-h* 800)
-                      (null? fake-unfaked)))))))))
+                      (null? fake-unfaked))))
+        (check (format "SDL gets the app id the desktop entry names, ~s, and \
+                        vsync" host-app-id)
+               (and (equal? (assoc "SDL_APP_ID" fake-hints)
+                            (cons "SDL_APP_ID" host-app-id))
+                    (equal? (assoc "SDL_RENDER_VSYNC" fake-hints)
+                            '("SDL_RENDER_VSYNC" . "1")))))))))
 
 
 ;; Settings: input and the full-screen switch reach it.

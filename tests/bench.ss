@@ -84,10 +84,10 @@
                 (sdl-memcpy (+ texture (* (+ y r) pitch) (* 4 x))
                             (+ pixels (* r pitch))
                             (* 4 w))))))
-    0))
+    #t))
 (set! sdl-update-texture texture-upload!)
-(set! sdl-render-copy (lambda (r t src dst) 0))
-(set! sdl-render-present (lambda (r) (void)))
+(set! sdl-render-texture (lambda (r t src dst) #t))
+(set! sdl-render-present (lambda (r) #t))
 (define plain-present host-present-damage!)
 (set! host-present-damage!
       (lambda () (fluid-let ([*host* 'sdl]) (plain-present))))
