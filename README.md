@@ -105,7 +105,7 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (set-theme! 'accent #xff9e64)              ; recolor everything
 ; or: tokyo-night catppuccin nord gruvbox interlisp genera
 (apply-theme-preset! 'paper)
-(set-theme! 'window-style 'genera)         ; or: mac windows interlisp
+(set-theme! 'window-style 'cons)           ; or: mac genera fold ...
 (open-window "Odd one out" 'window-style 'windows)   ; per-window override
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
@@ -173,7 +173,8 @@ apps/        repl  clock  life  sketch  monitor  settings  ← ordinary procedur
 wallpapers/  desktop fills: gradient  flat  shade
 themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
              tokyo-night
-styles/      window styles: genera  interlisp  mac  windows
+styles/      window styles: cons  curses  draft  fold  genera  halo
+             interlisp  lambda  mac  reticle  slab  spine  windows
 kits/        ui: immediate-mode widgets (button, slider, segmented,
              clickable area)
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
