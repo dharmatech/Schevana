@@ -2,9 +2,17 @@
 ;;;
 ;;; Each evaluation runs as a process (see proc.ss), so long computations
 ;;; keep the desktop alive and Ctrl+C interrupts them.
+;;;
+;;; A REPL evaluates in one of three environments (its mode):
+;;;   world    the shared environment the whole system lives in, so a
+;;;            define here changes the running world
+;;;   private  a copy of the world: same names, but define and set! stay in
+;;;            this window and vanish with it, like private browsing.
+;;;            Calling the world's procedures still acts on the world.
+;;;   pure     plain Chez Scheme; none of Schevana's names are bound
 
 (define-record-type repl
-  (nongenerative schevana-repl)
+  (nongenerative schevana-repl-2)
   (fields (mutable lines)      ; transcript, newest first: ((style . text) ...)
           (mutable count)
           (mutable open?)      ; is the newest line unterminated output?
@@ -21,7 +29,35 @@
           (mutable blink-at)
           (mutable cols)       ; layout from the last draw
           (mutable rows)
-          (mutable queued?)))  ; Enter was pressed while an evaluation ran
+          (mutable queued?)    ; Enter was pressed while an evaluation ran
+          mode                 ; world, private or pure
+          env))                ; its environment, or #f for the world's
+
+;; (mode title prompt-color background-tint)
+(define repl-modes
+  '((world "REPL" accent #f)
+    (private "Private REPL" accent-2 accent-2)
+    (pure "Pure Scheme REPL" green green)))
+
+(define (repl-mode-info mode)
+  (or (assq mode repl-modes)
+      (errorf 'repl "unknown REPL mode ~s (expected world, private or pure)" mode)))
+
+(define (repl-title r) (cadr (repl-mode-info (repl-mode r))))
+
+(define (repl-background r)
+  (let ([tint (cadddr (repl-mode-info (repl-mode r)))])
+    (if tint (mix 'bg-0 tint 0.06) 'bg-0)))
+
+(define (make-repl-environment mode)
+  (case mode
+    [(world) #f]
+    [(private) (copy-environment (interaction-environment) #t)]
+    [(pure) (copy-environment (scheme-environment) #t)]))
+
+;; The world's environment is looked up at evaluation time, so a world REPL
+;; opened from inside a private one still talks to the real world.
+(define (repl-environment r) (or (repl-env r) (interaction-environment)))
 
 (define repl-max-lines 4000)
 (define repl-prompt "λ> ")
@@ -60,7 +96,14 @@
   (repl-open?-set! r #f)
   (repl-append! r style (string-append str "\n"))
   (repl-scroll-set! r 0)
-  (invalidate!))
+  (repl-invalidate! r))
+
+;; The window showing r, or #f (before it opens).
+(define (repl-window r)
+  (find (lambda (w) (eq? (window-ref w 'state) r)) *windows*))
+
+(define (repl-invalidate! r)
+  (let ([w (repl-window r)]) (if w (invalidate! w) (request-frame!))))
 
 ;; Called from inside the evaluation process: queue, don't touch the transcript.
 (define (repl-emit! r style str)
@@ -77,7 +120,7 @@
                       (repl-add! r (car c) (cdr c))))
                 (reverse chunks))
       (repl-scroll-set! r 0)
-      (invalidate!))))
+      (repl-invalidate! r))))
 
 (define (make-repl-port r)
   (let ([p (make-custom-textual-output-port "repl"
@@ -123,17 +166,18 @@
 
 (define (repl-eval! r win forms)
   (let ([port (repl-port r)] [width (max 20 (- (repl-cols r) 1))])
-    (window-title-set! win "REPL — running · Ctrl+C to interrupt")
+    (window-title-set! win (string-append (repl-title r) " — running · Ctrl+C to interrupt"))
     (repl-proc-set! r
       (spawn "repl"
              (lambda ()
-               (parameterize ([current-output-port port]
+               (parameterize ([interaction-environment (repl-environment r)]
+                              [current-output-port port]
                               [current-error-port port]
                               [current-input-port (open-input-string "")]
                               [pretty-line-length width])
                  (for-each
                   (lambda (form)
-                    (call-with-values (lambda () (eval form))
+                    (call-with-values (lambda () (eval form (interaction-environment)))
                       (lambda vals
                         (for-each (lambda (v)
                                     (unless (eq? v (void))
@@ -146,7 +190,7 @@
                  [(error) (repl-add! r 'error (condition->string value))]
                  [(killed) (repl-add! r 'info "; interrupted")])
                (repl-proc-set! r #f)
-               (window-title-set! win "REPL")
+               (window-title-set! win (repl-title r))
                (when (repl-queued? r)
                  (repl-queued?-set! r #f)
                  (when (input-complete? (repl-input r)) (repl-submit! r win)))
@@ -270,30 +314,576 @@
                      (substring a 0 i))))
              (car strs) (cdr strs)))
 
-;; Tab: complete the symbol before the cursor from the live environment.
-(define (repl-complete! r)
-  (let* ([s (repl-input r)] [p (repl-point r)]
-         [start (let loop ([i p]) (if (and (> i 0) (symbol-char? (string-ref s (- i 1)))) (loop (- i 1)) i))]
-         [prefix (substring s start p)])
-    (if (string=? prefix "")
-        (repl-insert! r "  ")
-        (let ([cands (sort string<?
-                           (filter (lambda (n) (string-prefix? prefix n))
-                                   (map symbol->string (environment-symbols (interaction-environment)))))])
-          (cond
-            [(null? cands) (void)]
-            [(null? (cdr cands))
-             (repl-insert! r (substring (car cands) (string-length prefix) (string-length (car cands))))]
-            [else
-             (let ([common (common-prefix cands)])
-               (if (> (string-length common) (string-length prefix))
-                   (repl-insert! r (substring common (string-length prefix) (string-length common)))
-                   (repl-add! r 'info
-                              (string-append
-                               (string-join (list-head cands (min 60 (length cands))) "  ")
-                               (if (> (length cands) 60) (format "  … ~a more" (- (length cands) 60)) "")))))])))))
+;;; ------------------------------------------------------------------ completion
+;;; Tab opens a list of completions under the cursor, which narrows as you
+;;; type: Up/Down choose, Tab or Enter accept, Esc closes. What it offers
+;;; depends on where the cursor is: inside a string, file names; after a
+;;; quote in (theme '…), (launch-app '…) and the like, the theme keys,
+;;; apps, palettes or styles that fit there; inside (import (…)), library
+;;; names a part at a time; otherwise every name bound in
+;;; this REPL's environment. Names match by prefix, then substring, then
+;;; letters in order ("stp" finds set-theme-plist!), Schevana's own first.
+;;; The chosen name shows its argument list and the comment above its
+;;; definition, read from the sources.
 
+(define-record-type completion
+  (nongenerative schevana-completion)
+  (fields kind              ; symbols or path
+          start             ; where the text being completed starts
+          (mutable items)   ; #((name kind matched-indices) ...), best first
+          (mutable sel)
+          (mutable top)))
+
+(defvar *completions* (make-weak-eq-hashtable))   ; repl -> its open list
+
+(define (repl-completion r) (hashtable-ref *completions* r #f))
+(define (close-completion! r) (hashtable-delete! *completions* r))
+
+(define completion-rows 8)        ; visible at once
+(define completion-max-items 200)
+
+;;; Names, and what the sources say about them.
+
+(defvar *name-docs* #f)   ; (file-stamps . table): name -> (signature . doc)
+
+;; Every top-level definition in the Schevana sources: its argument list
+;; and the ;; comment lines right above it. Re-read when a source changes.
+(define (name-docs)
+  (let* ([files (map (lambda (f) (string-append *schevana-root* "/" f)) *schevana-sources*)]
+         [stamps (map (lambda (f) (guard (c [#t 0]) (time-second (file-modification-time f)))) files)])
+    (unless (and *name-docs* (equal? (car *name-docs*) stamps))
+      (let ([table (make-hashtable string-hash string=?)])
+        (for-each (lambda (f) (index-source! table f)) files)
+        (set! *name-docs* (cons stamps table))))
+    (cdr *name-docs*)))
+
+(define (index-source! table file)
+  (guard (c [#t (void)])   ; an unreadable file just contributes nothing
+    (let* ([text (call-with-input-file file get-string-all)]
+           [n (string-length text)]
+           [port (open-string-input-port text)])
+      (let loop ([prev 0])
+        (let ([start (skip-blank-and-comments text prev)])
+          (when (< start n)
+            (set-port-position! port start)
+            (let ([form (read port)])
+              (unless (eof-object? form)
+                (record-definition! table form (comment-above text prev start))
+                (loop (port-position port))))))))))
+
+(define (skip-blank-and-comments text i)
+  (let ([n (string-length text)])
+    (let loop ([i i])
+      (cond
+        [(>= i n) n]
+        [(char-whitespace? (string-ref text i)) (loop (+ i 1))]
+        [(char=? (string-ref text i) #\;) (loop (line-end text i))]
+        [else i]))))
+
+;; The ;; lines (not ;;; headings) directly above position start.
+(define (comment-above text from start)
+  (let loop ([lines (reverse (string-split (substring text from start) #\newline))] [acc '()])
+    (let ([l (and (pair? lines) (string-trim (car lines)))])
+      (cond
+        [(not l) (string-join acc " ")]
+        [(and (string=? l "") (null? acc)) (loop (cdr lines) acc)]
+        [(and (string-prefix? ";;" l) (not (string-prefix? ";;;" l)))
+         (loop (cdr lines) (cons (string-trim (substring l 2 (string-length l))) acc))]
+        [else (string-join acc " ")]))))
+
+(define (record-definition! table form doc)
+  (define (add! name signature)
+    (hashtable-set! table (symbol->string name) (cons signature doc)))
+  (when (and (pair? form) (pair? (cdr form)))
+    (let ([head (cadr form)])
+      (case (car form)
+        [(define defvar)
+         (cond
+           [(and (pair? head) (symbol? (car head))) (add! (car head) (format "~s" head))]
+           [(symbol? head)
+            (let ([v (and (pair? (cddr form)) (caddr form))])
+              (cond
+                [(and (pair? v) (eq? (car v) 'lambda) (pair? (cdr v)))
+                 (add! head (format "~s" (cons head (cadr v))))]
+                [(and (pair? v) (eq? (car v) 'case-lambda))
+                 (add! head (string-join (map (lambda (clause) (format "~s" (cons head (car clause)))) (cdr v))
+                                         "  "))]
+                [else (add! head (symbol->string head))]))])]
+        [(define-app)
+         (when (and (pair? head) (symbol? (car head))) (add! (car head) (format "~s" head)))]
+        [(define-syntax)
+         (when (symbol? head) (add! head (format "(~a …)" head)))]))))
+
+;; (values signature doc) for name in env.
+(define (name-description name env)
+  (let ([d (hashtable-ref (name-docs) name #f)] [sym (string->symbol name)])
+    (cond
+      [d (values (car d) (cdr d))]
+      [(top-level-bound? sym env)
+       (let ([v (top-level-value sym env)])
+         (if (procedure? v)
+             (values (format "(~a …)" name) (arity-description (procedure-arity-mask v)))
+             (values (string-append name " = "
+                                    (truncate-string (parameterize ([print-length 6] [print-level 3])
+                                                       (format "~s" v))
+                                                     70))
+                     "")))]
+      [(top-level-syntax? sym env) (values (format "(~a …)" name) "Syntax.")]
+      [else (values name "")])))
+
+;; "Takes 2 arguments." from a procedure-arity-mask: bit n set when n
+;; arguments are accepted, negative when any number from some n up is.
+(define (arity-description mask)
+  (define (args n) (if (= n 1) "1 argument" (format "~a arguments" n)))
+  (if (< mask 0)
+      (let ([least (let loop ([n 0]) (if (bitwise-bit-set? mask n) n (loop (+ n 1))))])
+        (if (= least 0) "Takes any number of arguments." (format "Takes ~a or more." (args least))))
+      (let ([ns (filter (lambda (n) (bitwise-bit-set? mask n)) (iota (max 1 (bitwise-length mask))))])
+        (cond
+          [(null? ns) ""]
+          [(null? (cdr ns)) (format "Takes ~a." (args (car ns)))]
+          [else (format "Takes ~a or ~a." (string-join (map number->string (reverse (cdr (reverse ns)))) ", ")
+                        (args (car (last-pair ns))))]))))
+
+(define (name-kind name env)
+  (let ([sym (string->symbol name)])
+    (cond
+      [(top-level-bound? sym env) (if (procedure? (top-level-value sym env)) "proc" "var")]
+      [(top-level-syntax? sym env) "syntax"]
+      [else ""])))
+
+;;; What to complete, by context.
+
+;; After a quote in one of these forms, offer only what fits there.
+;; (operator kind choices-thunk), or (operator kind thunk key) to apply only
+;; when the form's text mentions 'key (set-theme!'s second argument).
+(define completion-quoted
+  `((set-theme! "style" ,(lambda () (map symbol->string (window-styles))) window-style)
+    (set-theme! "pattern" ,(lambda () '("gradient" "flat" "shade")) desktop-pattern)
+    (set-theme! "palette" ,(lambda () (map (lambda (p) (symbol->string (car p))) theme-presets)) preset)
+    (set-theme! "key" ,(lambda () (map symbol->string (theme-keys))))
+    (theme "key" ,(lambda () (map symbol->string (theme-keys))))
+    (theme-default "key" ,(lambda () (map symbol->string (theme-keys))))
+    (launch-app "app" ,(lambda () (map symbol->string (apps))))
+    (find-window "app" ,(lambda () (map symbol->string (apps))))
+    (apply-theme-preset! "palette" ,(lambda () (map (lambda (p) (symbol->string (car p))) theme-presets)))
+    (preset-colors "palette" ,(lambda () (map (lambda (p) (symbol->string (car p))) theme-presets)))))
+
+;; (values kind start typed choices): choices are (name . kind-or-#f);
+;; a kind of #f is looked up in the environment when shown.
+(define (completion-context r)
+  (let ([s (repl-input r)] [p (repl-point r)])
+    (let-values ([(stack str?) (scan-parens s p)])
+      (cond
+        [str? (path-context s p)]
+        [(library-context s p stack)
+         => (lambda (lib)
+              (apply (lambda (parts start typed) (values 'library start typed (library-choices parts))) lib))]
+        [else
+          (let* ([start (let loop ([i p]) (if (and (> i 0) (symbol-char? (string-ref s (- i 1)))) (loop (- i 1)) i))]
+                 [typed (substring s start p)]
+                 [quoted (and (> start 0) (char=? (string-ref s (- start 1)) #\') (pair? stack)
+                              (quoted-choices r s (car stack) start))])
+            (values 'symbols start typed
+                    (or quoted
+                        (map (lambda (sym) (cons (symbol->string sym) #f))
+                             (environment-symbols (repl-environment r))))))]))))
+
+;; The choices for a quoted name inside the form opening at open, or #f.
+(define (quoted-choices r s open start)
+  (let* ([form (substring s open start)]
+         [op (let ([end (let loop ([i (+ open 1)])
+                          (if (and (< i start) (symbol-char? (string-ref s i))) (loop (+ i 1)) i))])
+               (string->symbol (substring s (+ open 1) end)))]
+         [env (repl-environment r)])
+    (and (top-level-bound? op env)
+         (let ([entry (find (lambda (e)
+                              (and (eq? (car e) op)
+                                   (or (null? (cdddr e))
+                                       (string-contains-ci? form (format "'~a" (cadddr e))))))
+                            completion-quoted)])
+           (and entry
+                (guard (c [#t #f])
+                  (map (lambda (name) (cons name (cadr entry))) ((caddr entry)))))))))
+
+;; Inside a string: complete the last part of a file name.
+(define (path-context s p)
+  (let* ([open (let loop ([i (- p 1)])
+                 (if (and (>= i 0) (not (and (char=? (string-ref s i) #\")
+                                             (not (and (> i 0) (char=? (string-ref s (- i 1)) #\\))))))
+                     (loop (- i 1))
+                     i))]
+         [text (substring s (+ open 1) p)]
+         [slash (let loop ([i (- (string-length text) 1)])
+                  (cond [(< i 0) #f] [(char=? (string-ref text i) #\/) i] [else (loop (- i 1))]))]
+         [dir (if slash (substring text 0 (+ slash 1)) "")]
+         [base (if slash (substring text (+ slash 1) (string-length text)) text)]
+         [real-dir (cond
+                     [(string=? dir "") "."]
+                     [(string-prefix? "~/" dir)
+                      (string-append (or (getenv "HOME") "") (substring dir 1 (string-length dir)))]
+                     [else dir])]
+         [entries (guard (c [#t '()]) (directory-list real-dir))])
+    (values 'path (- p (string-length base)) base
+            (filter-map (lambda (e)
+                          (and (or (string-prefix? "." base) (not (string-prefix? "." e)))
+                               (if (guard (c [#t #f]) (file-directory? (string-append real-dir "/" e)))
+                                   (cons (string-append e "/") "dir")
+                                   (cons e "file"))))
+                        entries))))
+
+;;; Library names inside (import ...), offered a part at a time like the
+;;; folders of a file name: (import (acme m| offers math when acme/math.sls
+;;; is in a library directory or (acme math) is loaded.
+
+(define import-set-forms
+  '((only "(only import-set name ...)" "Just these names.")
+    (except "(except import-set name ...)" "Everything but these names.")
+    (prefix "(prefix import-set prefix)" "Every name, with prefix in front.")
+    (rename "(rename import-set (old new) ...)" "These names, called something else.")
+    (for "(for import-set level ...)" "Imported for these levels (run, expand).")
+    (library "(library name)" "A library whose name starts with one of these words.")))
+
+;; The symbol right after the paren at open, and the index after it.
+(define (form-head s open)
+  (let* ([n (string-length s)]
+         [b (let loop ([i (+ open 1)]) (if (and (< i n) (char-whitespace? (string-ref s i))) (loop (+ i 1)) i))]
+         [e (let loop ([i b]) (if (and (< i n) (symbol-char? (string-ref s i))) (loop (+ i 1)) i))])
+    (values (and (< b e) (string->symbol (substring s b e))) e)))
+
+;; Does the list opening at (car stack) stand where an import set goes:
+;; an argument of import, or the first argument of only, prefix and the like?
+(define (import-set-position? s stack)
+  (and (pair? stack) (pair? (cdr stack))
+       (let-values ([(head end) (form-head s (cadr stack))])
+         (case head
+           [(import) #t]
+           [(only except prefix rename for library)
+            (and (for-all char-whitespace? (string->list (substring s end (car stack))))
+                 (import-set-position? s (cdr stack)))]
+           [else #f]))))
+
+;; In a library name: (parts start typed), parts being the symbols before
+;; the one at the cursor; else #f.
+(define (library-context s p stack)
+  (and (import-set-position? s stack)
+       (let* ([start (let loop ([i p]) (if (and (> i 0) (symbol-char? (string-ref s (- i 1)))) (loop (- i 1)) i))]
+              [before (string->list (substring s (+ (car stack) 1) start))]
+              [parts (let loop ([cs before] [word '()] [acc '()])
+                       (define (flush) (if (null? word) acc (cons (string->symbol (list->string (reverse word))) acc)))
+                       (cond [(null? cs) (reverse (flush))]
+                             [(char-whitespace? (car cs)) (loop (cdr cs) '() (flush))]
+                             [else (loop (cdr cs) (cons (car cs) word) acc)]))])
+         (and (for-all (lambda (c) (or (char-whitespace? c) (symbol-char? c))) before)
+              (not (and (pair? parts) (assq (car parts) import-set-forms)))
+              (list parts start (substring s start p))))))
+
+;; Where to look for library files: Chez's library directories, except the
+;; current one (often the home folder; what is there still imports).
+(define (library-source-directories)
+  (filter (lambda (d) (not (member d '("" "."))))
+          (map (lambda (e) (if (pair? e) (car e) e)) (library-directories))))
+
+;; File extensions of library sources, longest first (.chezscheme.sls before .sls).
+(define (library-source-extensions)
+  (sort (lambda (a b) (> (string-length a) (string-length b)))
+        (map (lambda (e) (if (pair? e) (car e) e)) (library-extensions))))
+
+;; "math" for "math.sls", or #f.
+(define (library-file-name entry)
+  (let ([ext (find (lambda (x) (string-suffix? x entry)) (library-source-extensions))])
+    (and ext (> (string-length entry) (string-length ext))
+         (substring entry 0 (- (string-length entry) (string-length ext))))))
+
+;; The parts that can follow parts: (name . "library") when parts plus name
+;; is a library, (name . "group") when only longer names go on from it.
+(define (library-choices parts)
+  (let ([found (make-hashtable string-hash string=?)]   ; name -> (library? . group?)
+        [n (length parts)])
+    (define (note! name lib? group?)
+      (let ([old (hashtable-ref found name '(#f . #f))])
+        (hashtable-set! found name (cons (or lib? (car old)) (or group? (cdr old))))))
+    (for-each (lambda (lib)
+                (when (and (> (length lib) n) (equal? (list-head lib n) parts) (symbol? (list-ref lib n)))
+                  (note! (symbol->string (list-ref lib n)) (= (length lib) (+ n 1)) (> (length lib) (+ n 1)))))
+              (library-list))
+    (for-each (lambda (dir)
+                (let ([d (fold-left (lambda (acc p) (string-append acc "/" (symbol->string p))) dir parts)])
+                  (for-each (lambda (e)
+                              (unless (string-prefix? "." e)
+                                (cond
+                                  [(guard (c [#t #f]) (file-directory? (string-append d "/" e))) (note! e #f #t)]
+                                  [(library-file-name e) => (lambda (name) (note! name #t #f))])))
+                            (guard (c [#t '()]) (directory-list d)))))
+              (library-source-directories))
+    (let-values ([(names vals) (hashtable-entries found)])
+      (append (map (lambda (name v) (cons name (if (car v) "library" "group")))
+                   (vector->list names) (vector->list vals))
+              (if (null? parts)
+                  (map (lambda (f) (cons (symbol->string (car f)) "import set")) import-set-forms)
+                  '())))))
+
+;; The source file of a library, or #f.
+(define (library-file lib)
+  (let ([rel (string-join (map symbol->string lib) "/")])
+    (exists (lambda (dir)
+              (exists (lambda (ext) (let ([f (string-append dir "/" rel ext)]) (and (file-exists? f) f)))
+                      (library-source-extensions)))
+            (library-source-directories))))
+
+;; The names a library file exports, read (not run) from its export clause.
+(define (file-exports file)
+  (guard (c [#t #f])
+    (let ([form (call-with-input-file file read)])
+      (and (pair? form) (memq (car form) '(library define-library))
+           (let ([ex (find (lambda (x) (and (pair? x) (eq? (car x) 'export))) (cdr form))])
+             (and ex
+                  (apply append
+                         (map (lambda (spec)
+                                (cond
+                                  [(symbol? spec) (list spec)]
+                                  [(and (pair? spec) (eq? (car spec) 'rename))
+                                   (if (and (pair? (cdr spec)) (symbol? (cadr spec)))
+                                       (cddr spec)                       ; R7RS (rename old new)
+                                       (filter-map (lambda (p) (and (pair? p) (pair? (cdr p)) (cadr p)))
+                                                   (cdr spec)))]         ; R6RS (rename (old new) ...)
+                                  [else '()]))
+                              (cdr ex)))))))))
+
+;; (values signature doc) for a choice after parts.
+(define (library-description parts name kind)
+  (let ([lib (append parts (list (string->symbol name)))])
+    (cond
+      [(string=? kind "import set")
+       (let ([f (assq (string->symbol name) import-set-forms)]) (values (cadr f) (caddr f)))]
+      [(string=? kind "group") (values (format "~s" (append lib '(...))) "")]
+      [else
+       (let* ([file (library-file lib)]
+              [exports (if (member lib (library-list)) (library-exports lib) (and file (file-exports file)))])
+         (values (format "~s" lib)
+                 (string-append
+                   (if exports
+                       (format "Exports ~a." (string-join (sort string<? (map symbol->string exports)) " "))
+                       "")
+                   (if file (format " From ~a." file) ""))))])))
+
+;;; Ranking.
+
+(define (string-index-ci str sub)
+  (let ([n (string-length str)] [m (string-length sub)])
+    (let loop ([i 0])
+      (cond
+        [(> (+ i m) n) #f]
+        [(string-ci=? (substring str i (+ i m)) sub) i]
+        [else (loop (+ i 1))]))))
+
+;; Does a word of name start at index j? (after -, _, /, :, . or *)
+(define (word-start? name j)
+  (or (= j 0) (memv (string-ref name (- j 1)) '(#\- #\_ #\/ #\: #\. #\*))))
+
+;; Indices of name matching typed's characters in order, the first
+;; character first, each preferably at the start of a word ("stp" takes
+;; s-t-p of set-theme-plist!); or #f.
+(define (subsequence-match typed name)
+  (let ([n (string-length typed)] [m (string-length name)])
+    (define (next-at j ch start-only?)
+      (let loop ([k j])
+        (cond [(>= k m) #f]
+              [(and (char-ci=? ch (string-ref name k)) (or (not start-only?) (word-start? name k))) k]
+              [else (loop (+ k 1))])))
+    (and (> n 0) (> m 0) (char-ci=? (string-ref typed 0) (string-ref name 0))
+         (let loop ([i 1] [j 1] [acc '(0)])
+           (if (= i n)
+               (reverse acc)
+               (let ([k (or (next-at j (string-ref typed i) #t) (next-at j (string-ref typed i) #f))])
+                 (and k (loop (+ i 1) (+ k 1) (cons k acc)))))))))
+
+;; (values key matched) for how typed matches name, key #f when it
+;; doesn't. Keys compare as lists of numbers, smaller first.
+(define (match-key typed name own?)
+  (let ([n (string-length typed)] [m (string-length name)] [own (if own? 0 1)])
+    (cond
+      [(and (<= n m) (string-ci=? typed (substring name 0 n))) (values (list 0 own) (iota n))]
+      [(and (> n 1) (string-index-ci name typed))
+       => (lambda (i) (values (list 1 own i m) (map (lambda (k) (+ i k)) (iota n))))]
+      [(and (> n 1) (subsequence-match typed name))
+       => (lambda (ix)
+            (let ([initials (length (filter (lambda (j) (word-start? name j)) ix))])
+              (values (list 2 (- n initials) own (- (car (last-pair ix)) (- n 1)) m) ix)))]
+      [else (values #f '())])))
+
+(define (key<? a b)
+  (cond [(null? a) #f] [(< (car a) (car b)) #t] [(> (car a) (car b)) #f] [else (key<? (cdr a) (cdr b))]))
+
+;; The choices matching typed, best first: #((name kind matched) ...).
+(define (rank-choices typed choices)
+  (let* ([docs (name-docs)]
+         [scored (filter-map (lambda (c)
+                               (let-values ([(key ix) (match-key typed (car c)
+                                                                 (hashtable-contains? docs (car c)))])
+                                 (and key (list key (car c) (cdr c) ix))))
+                             choices)]
+         [sorted (sort (lambda (a b)
+                         (or (key<? (car a) (car b))
+                             (and (not (key<? (car b) (car a))) (string<? (cadr a) (cadr b)))))
+                       scored)])
+    (list->vector (map cdr (list-head sorted (min completion-max-items (length sorted)))))))
+
+(define (prefix-matches items typed)
+  (filter (lambda (name) (string-prefix? typed name)) (map car (vector->list items))))
+
+;;; Opening, narrowing and accepting.
+
+;; Tab.
+(define (repl-complete! r)
+  (let-values ([(kind start typed choices) (completion-context r)])
+    (if (and (eq? kind 'symbols) (string=? typed ""))
+        (repl-insert! r "  ")
+        (let ([items (rank-choices typed choices)])
+          (cond
+            [(= 0 (vector-length items)) (close-completion! r)]
+            [(= 1 (vector-length items)) (accept-completion! r kind start (vector-ref items 0))]
+            [else
+             ;; first take what all names starting with it share, as a shell would
+             (let ([prefixed (prefix-matches items typed)])
+               (when (pair? prefixed)
+                 (let ([common (common-prefix prefixed)])
+                   (when (> (string-length common) (string-length typed))
+                     (repl-delete! r start (repl-point r))
+                     (repl-insert! r common)))))
+             (hashtable-set! *completions* r (make-completion kind start items 0 0))
+             (refresh-completion! r)])))))
+
+;; After the input changed while the list is open: narrow it, or close it
+;; when the cursor has left the name (or nothing matches).
+(define (refresh-completion! r)
+  (let ([c (repl-completion r)])
+    (when c
+      (let-values ([(kind start typed choices) (completion-context r)])
+        (if (or (not (eq? kind (completion-kind c)))
+                (and (memq kind '(symbols library)) (not (= start (completion-start c))))
+                (and (eq? kind 'symbols) (string=? typed "")))
+            (close-completion! r)
+            (let ([items (rank-choices typed choices)])
+              (if (or (= 0 (vector-length items))   ; nothing left, or just what is typed
+                      (and (= 1 (vector-length items)) (string=? typed (car (vector-ref items 0)))))
+                  (close-completion! r)
+                  (hashtable-set! *completions* r (make-completion kind start items 0 0)))))))))
+
+(define (accept-completion! r kind start item)
+  (repl-delete! r start (repl-point r))
+  (repl-insert! r (car item))
+  (close-completion! r)
+  ;; a directory, or the start of longer library names: carry on inside it
+  (when (or (and (eq? kind 'path) (string-suffix? "/" (car item)))
+            (and (eq? kind 'library) (equal? (cadr item) "group")))
+    (when (eq? kind 'library) (repl-insert! r " "))
+    (let-values ([(kind start typed choices) (completion-context r)])
+      (let ([items (rank-choices typed choices)])
+        (when (> (vector-length items) 0)
+          (hashtable-set! *completions* r (make-completion kind start items 0 0)))))))
+
+(define (move-completion! c delta)
+  (let* ([n (vector-length (completion-items c))]
+         [sel (mod (+ (completion-sel c) delta) n)])
+    (completion-sel-set! c sel)
+    (completion-top-set! c (clamp (completion-top c) (max 0 (- sel (- completion-rows 1))) sel))))
+
+;; A key while the list is open; #t when the list used it.
+(define (completion-key! r c key mods)
+  (case key
+    [(down) (move-completion! c 1) #t]
+    [(up) (move-completion! c -1) #t]
+    [(page-down) (move-completion! c completion-rows) #t]
+    [(page-up) (move-completion! c (- completion-rows)) #t]
+    [(tab return)
+     (accept-completion! r (completion-kind c) (completion-start c)
+                         (vector-ref (completion-items c) (completion-sel c)))
+     #t]
+    [(escape) (close-completion! r) #t]
+    [else #f]))
+
+;;; Drawing.
+
+;; The list under the text being completed; caret is the cursor's (x . y).
+(define (draw-completion r c caret w h cw lh)
+  (let* ([items (completion-items c)]
+         [n (vector-length items)]
+         [rows (min completion-rows n)]
+         [top (completion-top c)]
+         [env (repl-environment r)]
+         [shown (map (lambda (k) (+ top k)) (iota rows))]   ; indices of the visible rows
+         [visible (map (lambda (i) (vector-ref items i)) shown)]
+         [kinds (map (lambda (it) (or (cadr it) (name-kind (car it) env))) visible)]
+         [kind-w (+ 14 (widest-text kinds 'ui-small))]
+         [names-w (* cw (apply max (map (lambda (it) (string-length (car it))) visible)))]
+         [pw (min (- w 8) (max 260 (+ 20 names-w kind-w)))]
+         [sel-item (vector-ref items (completion-sel c))]
+         [detail (case (completion-kind c)
+                   [(symbols) (let-values ([(sig doc) (name-description (car sel-item) env)]) (list sig doc))]
+                   [(library)
+                    (let* ([s (repl-input r)] [start (completion-start c)]
+                           [lib (let-values ([(stack str?) (scan-parens s start)]) (library-context s start stack))])
+                      (if lib
+                          (let-values ([(sig doc) (library-description (car lib) (car sel-item) (cadr sel-item))])
+                            (list sig doc))
+                          '("" "")))]
+                   [else '("" "")])]
+         [small-lh (font-line-height 'ui-small)]
+         [doc-lines (let ([d (cadr detail)])
+                      (if (string=? d "") '() (list-head* (wrap-text d (- pw 20) 'ui-small) 3)))]
+         [detail-h (if (string=? (car detail) "")
+                       0
+                       (round (+ 12 (font-line-height 'mono-small) (* (length doc-lines) (+ small-lh 2)))))]
+         [ph (+ 8 (* rows lh) detail-h)]
+         [typed-w (* cw (- (repl-point r) (completion-start c)))]
+         [px (clamp (- (car caret) typed-w 10) 4 (max 4 (- w pw 4)))]
+         [below (+ (cdr caret) lh 2)]
+         [py (if (<= (+ below ph) (- h 4)) below (max 4 (- (cdr caret) ph 2)))])
+    (draw-shadow px py pw ph 6 10)   ; shadow
+    (fill-round-rect px py pw ph 6 'bg-2)
+    (stroke-round-rect px py pw ph 6 'window-border-focus)
+    (for-each
+      (lambda (it kind i)
+        (let ([ry (+ py 4 (* (- i top) lh))] [selected? (= i (completion-sel c))])
+          (when selected? (fill-round-rect (+ px 4) ry (- pw 8) lh 4 (alpha 'accent 0.25)))
+          (let ([tx (+ px 10)] [ty (+ ry (/ (- lh (font-line-height 'mono)) 2))])
+            (draw-text tx ty (car it) (if selected? 'text 'text-dim) 'mono)
+            (for-each (lambda (j)
+                        (when (< j (string-length (car it)))
+                          (draw-text (+ tx (* j cw)) ty (string (string-ref (car it) j)) 'accent 'mono-bold)))
+                      (caddr it)))
+          (draw-text (- (+ px pw) kind-w -4) (+ ry (/ (- lh small-lh) 2)) kind 'text-faint 'ui-small)))
+      visible kinds shown)
+    (when (> n rows)   ; where the visible rows are in the whole list
+      (let* ([track (* rows lh)] [bar (max 12 (* track (/ rows n)))]
+             [by (+ py 4 (* (- track bar) (/ top (max 1 (- n rows)))))])
+        (fill-round-rect (+ px pw -5) by 3 bar 1.5 (alpha 'text 0.3))))
+    (unless (= detail-h 0)
+      (let ([dy (+ py 4 (* rows lh) 4)])
+        (draw-line (+ px 6) (+ dy 0.5) (+ px pw -6) (+ dy 0.5) 'window-border)
+        (draw-text (+ px 10) (+ dy 5) (fit-text (car detail) (- pw 20) 'mono-small) 'text 'mono-small)
+        (for-each (lambda (line i)
+                    (draw-text (+ px 10) (+ dy 5 (font-line-height 'mono-small) 3 (* i (+ small-lh 2)))
+                               line 'text-faint 'ui-small))
+                  doc-lines (iota (length doc-lines)))))))
+
+(define (list-head* l n) (if (> (length l) n) (list-head l n) l))
+
+;; With the completion list open, it takes the keys it uses. Moving the
+;; cursor away closes it; editing narrows it. (Printable characters arrive
+;; as 'text, and modifier keys alone change nothing.)
 (define (repl-key r win key mods)
+  (let ([c (repl-completion r)])
+    (cond
+      [(and c (null? (remq 'shift mods)) (completion-key! r c key mods)) (invalidate! win)]
+      [else
+       (when (and c (or (memq key '(left right home end)) (memq 'ctrl mods) (memq 'alt mods)))
+         (close-completion! r))
+       (repl-edit-key r win key mods)
+       (when (and c (memq key '(backspace delete))) (refresh-completion! r))])))
+
+(define (repl-edit-key r win key mods)
   (repl-blink-set! r #t)
   (repl-blink-at-set! r (now-ms))
   (let ([s (repl-input r)] [p (repl-point r)] [ctrl? (memq 'ctrl mods)])
@@ -334,6 +924,7 @@
 
 (define (repl-text r win str)
   (repl-insert! r str)
+  (refresh-completion! r)
   (repl-scroll-set! r 0)
   (repl-blink-set! r #t)
   (repl-blink-at-set! r (now-ms))
@@ -351,7 +942,7 @@
     [(info) 'text-faint]
     [else 'text]))
 
-;; A colour key per character, for the Scheme text in s (from index `from`).
+;; A color key per character, for the Scheme text in s (from index `from`).
 (define (scheme-colors s from)
   (let* ([n (string-length s)] [v (make-vector n 'text)])
     (define (fill! a b color) (do ([i a (+ i 1)]) ((>= i (min b n))) (vector-set! v i color)))
@@ -412,10 +1003,22 @@
 
 (define (rows-for len cols) (max 1 (quotient (+ len cols -1) cols)))
 
+(define repl-pad 10)
+(define (repl-line-height) (+ 3 (font-line-height 'mono)))
+
+;; A new REPL opens with room for this many characters, like a terminal,
+;; whatever size the code font is.
+(define repl-initial-cols 80)
+(define repl-initial-rows 22)
+
+(define (repl-window-size)
+  (cons (exact (ceiling (+ repl-pad repl-pad (* repl-initial-cols (font-char-width 'mono)))))
+        (exact (ceiling (+ repl-pad repl-pad (* repl-initial-rows (repl-line-height)))))))
+
 (define (repl-draw r win w h)
   (let* ([cw (font-char-width 'mono)]
-         [lh (+ 3 (font-line-height 'mono))]
-         [pad 10]
+         [lh (repl-line-height)]
+         [pad repl-pad]
          [cols (max 8 (exact (floor (/ (- w pad pad) cw))))]
          [rows (max 1 (exact (floor (/ (- h pad pad) lh))))]
          [focused? (eq? win (focused-window))]
@@ -436,11 +1039,12 @@
                       (and (< p (string-length input)) (memv (string-ref input p) '(#\( #\[))
                            (let ([m (matching-paren input p)]) (and m (list p m))))))]
          [total (+ (fold-left (lambda (acc e) (+ acc (rows-for (string-length (cadr e)) cols))) 0 input-entries)
-                   (fold-left (lambda (acc l) (+ acc (rows-for (string-length (cdr l)) cols))) 0 (repl-lines r)))])
+                   (fold-left (lambda (acc l) (+ acc (rows-for (string-length (cdr l)) cols))) 0 (repl-lines r)))]
+         [caret #f])   ; where the cursor was drawn: (x . y)
     (repl-cols-set! r cols)
     (repl-rows-set! r rows)
     (repl-scroll-set! r (clamp (repl-scroll r) 0 (max 0 (- total rows))))
-    (fill-rect 0 0 w h 'bg-0)
+    (fill-rect 0 0 w h (repl-background r))
     ;; Lay out bottom-up; while everything fits, hang it from the top instead.
     (let loop ([entries (append input-entries (repl-lines r))]
                [bottom (if (< total rows) (+ pad (* total lh)) (- h pad))]
@@ -458,7 +1062,7 @@
                   [edit?
                    (let* ([start (caddr e)]
                           [colors (scheme-colors text 3)])
-                     (vector-fill-range! colors 0 3 (if running? 'orange 'accent))
+                     (vector-fill-range! colors 0 3 (if running? 'orange (caddr (repl-mode-info (repl-mode r)))))
                      (when paren
                        (for-each (lambda (i)
                                    (let ([j (+ 3 (- i start))])
@@ -475,6 +1079,7 @@
                        (when (and (>= p start) (<= p end))
                          (let* ([j (+ 3 (- p start))] [row (quotient j cols)] [col (remainder j cols)])
                            (when (< row shown)
+                             (set! caret (cons (+ pad (* col cw)) (+ top (* row lh))))
                              (cond
                                [(not focused?)
                                 (stroke-rect (+ pad (* col cw)) (+ top (* row lh)) cw lh 'text-faint)]
@@ -492,44 +1097,78 @@
       (let* ([track (- h 8)] [frac (/ rows (max rows total))]
              [bar (max 20 (* track frac))]
              [pos (* (- track bar) (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))])
-        (fill-round-rect (- w 7) (+ 4 pos) 4 bar 2 (alpha 'text 0.25))))))
+        (fill-round-rect (- w 7) (+ 4 pos) 4 bar 2 (alpha 'text 0.25))))
+    (let ([c (repl-completion r)])
+      (when (and c caret) (draw-completion r c caret w h cw lh)))))
 
 (define (vector-fill-range! v a b x)
   (do ([i a (+ i 1)]) ((>= i (min b (vector-length v)))) (vector-set! v i x)))
 
 ;;; ------------------------------------------------------------------ the app
 
+(define (repl-examples! r examples)
+  (for-each (lambda (l) (repl-add! r 'input (string-append "   " l))) examples))
+
 (define (repl-banner! r)
-  (repl-add! r 'banner (format "Schevana — a world made of Scheme.   ~a" (scheme-version)))
-  (repl-add! r 'info "Every window, colour and key binding here is a live Scheme value. Try:")
-  (for-each (lambda (l) (repl-add! r 'input (string-append "   " l)))
-            '("(clock)                          ; apps are just procedures"
-              "(windows)                        ; the window list, as data"
-              "(set-theme! 'accent #xff9e64)    ; recolour the world"
-              "(spawn \"spin\" (lambda () (let loop () (loop))))"))
-  (repl-add! r 'info "F1 launcher · Ctrl+Tab switch · Tab completes · Shift+Enter newline · Ctrl+C interrupts")
+  (case (repl-mode r)
+    [(world)
+     (repl-add! r 'banner (format "Schevana — a world made of Scheme.   ~a" (scheme-version)))
+     (repl-add! r 'info "Every window, color and key binding here is a live Scheme value. Try:")
+     (repl-examples! r '("(clock)                          ; apps are just procedures"
+                         "(windows)                        ; the window list, as data"
+                         "(set-theme! 'accent #xff9e64)    ; recolor the world"
+                         "(spawn \"spin\" (lambda () (let loop () (loop))))"))
+     (repl-add! r (quote info) "F1 apps · Ctrl+Tab switch · Tab completes · Shift+Enter newline · Ctrl+C stops")
+     (repl-add! r 'info "To experiment without changing anything, Ctrl+Shift+P opens a Private REPL.")]
+    [(private)
+     (repl-add! r 'banner "Private REPL — like a private browsing window.")
+     (repl-add! r 'info "Your definitions and set!s stay in this window and vanish when you close it;")
+     (repl-add! r 'info "the world keeps running its own code. Go ahead and break something:")
+     (repl-examples! r '("(define (draw-window win) (error 'oops \"broken\"))   ; harmless here"
+                         "(set! *windows* '())                                ; so is this"))
+     (repl-add! r 'info "Calling the world's procedures still acts on the world: (set-theme! ...)")
+     (repl-add! r 'info "recolors it and (open-window ...) opens a window. (exit) closes this REPL.")]
+    [(pure)
+     (repl-add! r 'banner (format "Pure Scheme REPL — plain ~a." (scheme-version)))
+     (repl-add! r 'info "None of Schevana's names are bound here: a clean scratchpad whose")
+     (repl-add! r 'info "definitions are invisible everywhere else. (exit) closes this REPL.")])
   (repl-add! r 'info ""))
 
-(define-app (repl) "REPL"
-  (let ([r (make-repl '() 0 #f "" 0 '() -1 #f 0 #f '() #f #t (now-ms) 80 24 #f)])
+(define (open-repl mode)
+  (let ([r (make-repl '() 0 #f "" 0 '() -1 #f 0 #f '() #f #t (now-ms) repl-initial-cols repl-initial-rows #f
+                      mode (make-repl-environment (car (repl-mode-info mode))))])
     (repl-port-set! r (make-repl-port r))
     (repl-banner! r)
-    (open-window "REPL"
-      'size '(720 . 440)
-      'min-size '(240 . 120)
-      'cursor 'ibeam
-      'bg 'bg-0
-      'draw (lambda (win w h) (repl-draw r win w h))
-      'key (lambda (win key mods) (repl-key r win key mods))
-      'text (lambda (win str) (repl-text r win str))
-      'wheel (lambda (win dx dy)
-               (repl-scroll-set! r (max 0 (+ (repl-scroll r) (* 3 dy))))
-               (invalidate! win))
-      'tick (lambda (win)
-              (repl-drain! r)
-              (when (and (eq? win (focused-window)) (> (- (now-ms) (repl-blink-at r)) 530))
-                (repl-blink-set! r (not (repl-blink r)))
-                (repl-blink-at-set! r (now-ms))
-                (invalidate! win)))
-      'close (lambda (win) (when (repl-proc r) (kill! (repl-proc r))))
-      'state r)))
+    (let ([win (open-repl-window r)])
+      ;; In a private or pure REPL, (exit) closes the window, not the world.
+      (when (repl-env r)
+        (define-top-level-value 'exit (lambda args (close-window! win)) (repl-env r)))
+      win)))
+
+(define-app (repl . mode) "REPL" (open-repl (if (pair? mode) (car mode) 'world)))
+(define-app (private-repl) "Private REPL" (open-repl 'private))
+(define-app (pure-repl) "Pure Scheme REPL" (open-repl 'pure))
+
+(define (open-repl-window r)
+  (open-window (repl-title r)
+    'size (repl-window-size)
+    'min-size '(240 . 120)
+    'cursor 'ibeam
+    'bg (repl-background r)
+    'draw (lambda (win w h) (repl-draw r win w h))
+    'key (lambda (win key mods) (repl-key r win key mods))
+    'text (lambda (win str) (repl-text r win str))
+    'wheel (lambda (win dx dy)
+             (let ([c (repl-completion r)])
+               (if c
+                   (move-completion! c (- dy))
+                   (repl-scroll-set! r (max 0 (+ (repl-scroll r) (* 3 dy))))))
+             (invalidate! win))
+    'tick (lambda (win)
+            (repl-drain! r)
+            (when (and (eq? win (focused-window)) (> (- (now-ms) (repl-blink-at r)) 530))
+              (repl-blink-set! r (not (repl-blink r)))
+              (repl-blink-at-set! r (now-ms))
+              (invalidate! win)))
+    'close (lambda (win) (when (repl-proc r) (kill! (repl-proc r))))
+    'state r))

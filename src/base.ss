@@ -7,6 +7,10 @@
     [(_ name init)
      (define name (if (top-level-bound? 'name) (top-level-value 'name) init))]))
 
+;; The environment the world lives in. Lookups by name go here, not to
+;; (interaction-environment), which a private REPL rebinds.
+(defvar *world-env* (interaction-environment))
+
 (define (now-ms) (real-time))
 
 (define (clamp x lo hi) (max lo (min hi x)))
@@ -26,6 +30,14 @@
 (define (string-prefix? prefix str)
   (and (<= (string-length prefix) (string-length str))
        (string=? prefix (substring str 0 (string-length prefix)))))
+
+(define (string-suffix? suffix str)
+  (let ([n (string-length str)] [m (string-length suffix)])
+    (and (<= m n) (string=? suffix (substring str (- n m) n)))))
+
+;; map, keeping only the true results.
+(define (filter-map f l)
+  (fold-right (lambda (x acc) (let ([y (f x)]) (if y (cons y acc) acc))) '() l))
 
 (define (string-contains-ci? str sub)
   (let ([n (string-length str)] [m (string-length sub)])

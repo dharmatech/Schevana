@@ -2,7 +2,9 @@
 ;;;
 ;;; Schevana is single-threaded. Long computations become *processes*:
 ;;; engines that get a slice of fuel every frame, so an infinite loop in the
-;;; REPL never freezes the world and can be killed with Ctrl+C.
+;;; REPL never freezes the world and can be killed with Ctrl+C. A process
+;;; reloading the sources is no exception, but while it loads it holds the
+;;; world still (*reloading*, see system.ss): only it runs, and nothing draws.
 ;;;
 ;;; Every app handler (draw, key, tick, ...) also runs under a fuel budget via
 ;;; safe-call: if it loops forever or raises, only that window "crashes".
@@ -52,6 +54,7 @@
 
 (defvar *procs* '())
 (defvar *next-pid* 1)
+(defvar *reloading* #f)   ; (proc . file) while that process loads the sources (system.ss)
 
 ;; (spawn name thunk [on-done]) starts a process. on-done receives
 ;; (status value): 'ok and the list of results, 'error and a condition,
@@ -101,15 +104,20 @@
 
 (define (proc-ready? p) (<= (proc-wake p) (now-ms)))
 
-(define (procs-ready?) (exists proc-ready? *procs*))
+;; While one process reloads the sources only it runs: the others may
+;; call half-loaded code.
+(define (proc-may-run? p)
+  (and (proc-ready? p) (or (not *reloading*) (eq? p (car *reloading*)))))
+
+(define (procs-ready?) (exists proc-may-run? *procs*))
 
 ;; Run ready processes round-robin until budget-ms has elapsed.
 (define (run-procs! budget-ms)
   (let ([deadline (+ (now-ms) budget-ms)])
     (let loop ()
-      (let ([ready (filter proc-ready? *procs*)])
+      (let ([ready (filter proc-may-run? *procs*)])
         (when (and (pair? ready) (< (now-ms) deadline))
-          (for-each run-slice! ready)
+          (for-each (lambda (p) (when (proc-may-run? p) (run-slice! p))) ready)
           (loop))))))
 
 ;; Give up the CPU for ms milliseconds (only inside a process).

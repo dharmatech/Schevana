@@ -5,7 +5,7 @@
 ;;; draw-over after it. The global style is the theme key 'window-style;
 ;;; one window can override it with its own 'window-style property.
 ;;;
-;;;   (set-theme! 'window-style 'amiga)
+;;;   (set-theme! 'window-style 'win98)       ; or mac, windows, interlisp, genera
 ;;;   (open-window "Odd one out" 'window-style 'windows)
 ;;;
 ;;; Styles are data, so you can add your own from the REPL:
@@ -16,7 +16,9 @@
 ;;;                   (fill-rect x y w 8 (if focused? 'accent 'bg-3))))
 ;;;
 ;;; Buttons are (kind x y w h) in window coordinates. Kinds: close,
-;;; minimize, maximize and depth (send to back / bring to front).
+;;; minimize, maximize and depth (send to back / bring to front). A style
+;;; whose title is not along the top lists its drag handle as a 'title
+;;; area (Genera's label sits at the bottom).
 ;;; hover is the region under the mouse, pressed the drag in progress.
 
 (define-record-type window-style
@@ -44,7 +46,7 @@
 (define (window-styles) (map window-style-name *window-styles*))
 
 ;; A 1-pixel bevel: light on the top and left, dark on the bottom and right.
-;; Swap the colours for a recessed look.
+;; Swap the colors for a recessed look.
 (define (bevel-rect x y w h light dark)
   (fill-rect x y w 1 light)
   (fill-rect x y 1 h light)
@@ -55,12 +57,8 @@
   (for-each (lambda (d) (draw-line (- x d) (- y 3) (- x 3) (- y d) (alpha 'text 0.18) 1))
             '(7 11)))
 
-(define (window-shadow win x y w h r focused?)
-  (unless (maximized? win)
-    (draw-shadow x y w h r (if focused? (theme 'shadow) (quotient (theme 'shadow) 2)))))
-
 ;;; ------------------------------------------------------------------ Mac
-;;; Traffic lights on the left, glyphs on hover, centred title.
+;;; Traffic lights on the left, glyphs on hover, centered title.
 
 (define (mac-radius win) (if (maximized? win) 0 (theme 'corner-radius)))
 
@@ -72,7 +70,7 @@
 (define (mac-draw-under win x y w h focused? hover pressed)
   (let ([th (title-height)] [r (mac-radius win)]
         [glyphs? (memq hover '(close minimize maximize))])
-    (window-shadow win x y w h r focused?)
+    (window-shadow win x y w h r focused?)   ; shadow
     (fill-round-rect x y w h r (window-bg win))
     (call-with-round-clip x y w h r
       (lambda ()
@@ -84,14 +82,15 @@
                     (let ([cy (+ y (/ th 2))])
                       (fill-circle (+ x cx) cy 6 (if (or focused? glyphs?) color 'button-idle))
                       (when glyphs?
-                        (draw-text-centered (+ x cx -6) (- cy 7) 12 13 glyph (alpha #x000000 0.6) 'ui-bold))))
+                        (draw-text-centered (+ x cx -6) (- cy 7) 12 13 glyph (alpha #x000000 0.6) 'glyph))))
                   '(18 38 58) '(button-close button-min button-max) '("×" "–" "+"))
         (draw-text-centered (+ x 70) y (- w 140) th (fit-text (window-title win) (- w 160) 'title)
                             (if focused? 'title-text 'title-text-dim) 'title)))))
 
 (define (mac-draw-over win x y w h focused? hover pressed)
   (stroke-round-rect x y w h (mac-radius win) (if focused? 'window-border-focus 'window-border))
-  (unless (maximized? win) (draw-resize-grip (+ x w) (+ y h))))
+  (unless (or (maximized? win) (< w 14) (< h 14))   ; (the grip reaches 11 pixels in)
+    (draw-resize-grip (+ x w) (+ y h))))
 
 (define-window-style! 'mac "Mac"
   'radius mac-radius
@@ -141,18 +140,19 @@
 (define (windows-draw-under win x y w h focused? hover pressed)
   (let* ([th (title-height)] [r (windows-radius win)]
          [title (window-title win)]
-         [icon (app-color (window-app win))])
-    (window-shadow win x y w h r focused?)
+         [icon (app-color (window-app win))]
+         [is (max 16 (round (+ (font-line-height 'ui-small) 3)))])
+    (window-shadow win x y w h r focused?)   ; shadow
     (fill-round-rect x y w h r (window-bg win))
     (call-with-round-clip x y w h r
       (lambda ()
         (fill-rect x y w th (if focused? 'title-bg-focus 'title-bg))
-        (fill-round-rect (+ x 12) (+ y (quotient (- th 16) 2)) 16 16 4 icon)
-        (draw-text-centered (+ x 12) (+ y (quotient (- th 16) 2)) 16 16
+        (fill-round-rect (+ x 12) (+ y (quotient (- th is) 2)) is is 4 icon)
+        (draw-text-centered (+ x 12) (+ y (quotient (- th is) 2)) is is
                             (if (string=? title "") "·" (string (char-upcase (string-ref title 0))))
                             (readable-on icon) 'ui-small)
-        (draw-text (+ x 38) (+ y (/ (- th (font-line-height 'ui)) 2))
-                   (fit-text title (- w 38 (* 3 windows-button-width) 12) 'ui)
+        (draw-text (+ x is 22) (+ y (/ (- th (font-line-height 'ui)) 2))
+                   (fit-text title (- w is 22 (* 3 windows-button-width) 12) 'ui)
                    (if focused? 'title-text 'title-text-dim) 'ui)
         (for-each (lambda (b)
                     (windows-draw-button win (car b) (+ x (list-ref b 1)) (+ y (list-ref b 2))
@@ -168,94 +168,181 @@
   'draw-under windows-draw-under
   'draw-over windows-draw-over)
 
-;;; ------------------------------------------------------------------ Amiga
-;;; Workbench 3.1, matched against a real screenshot: four pens (fill,
-;;; shine white, shadow black, background grey); every part of the frame is
-;;; a raised section with a white top-left and black bottom-right edge; the
-;;; frame is filled with the accent while active. Close gadget on the left,
-;;; zoom and depth on the right, a size gadget at the right end of the tall
-;;; bottom border. Title text is black on blue, in a monospace font
-;;; (Topaz). There is no minimize.
+;;; ------------------------------------------------------------------ Windows 98
+;;; Matched against real Windows 98 screenshots: a 4-pixel frame of two
+;;; bevels (light gray and white above, black and dark gray below) around
+;;; the gray face; an 18-pixel caption, navy fading to blue while active
+;;; and gray when not, holding the app's icon and a bold title; 16 × 14
+;;; bevelled buttons on the right, minimize touching maximize and close 2
+;;; pixels apart. No rounded corners, no hover effects. The
+;;; face is the theme's title-bg; the caption runs from accent to accent-2.
 
-(define amiga-shine #xffffff)
-(define amiga-shadow #x000000)
+(define win98-border 4)
 
-(define (amiga-title-height) (max 18 (- (title-height) 8)))
-(define (amiga-bottom-height) (max 12 (exact (round (* 0.8 (amiga-title-height))))))
-(define (amiga-close-width) (exact (round (* 1.15 (amiga-title-height)))))
-(define (amiga-gadget-width) (exact (round (* 1.45 (amiga-title-height)))))
-(define (amiga-size-width) (exact (round (* 1.2 (amiga-bottom-height)))))
+;; The four bevel pens for a face color, lightest first: for the classic
+;; #c0c0c0 that is white, #dfdfdf, #808080 and black.
+(define (win98-pens face)
+  (values #xffffff (mix face #xffffff 0.49) (mix face #x000000 1/3) #x000000))
 
-(define (amiga-insets win)
-  (values 4 (amiga-title-height) 4 (amiga-bottom-height)))
+(define (win98-caption-height)
+  (exact (max 18 (- (title-height) 12) (round (+ (font-line-height 'title) 3)))))
 
-(define (amiga-buttons win)
-  (let ([w (window-w win)] [h (window-h win)] [t (amiga-title-height)] [gw (amiga-gadget-width)])
-    (append
-     (list (list 'close 0 0 (amiga-close-width) t)
-           (list 'maximize (- w gw gw) 0 gw t)
-           (list 'depth (- w gw) 0 gw t))
-     (if (maximized? win)
-         '()
-         (let ([b (amiga-bottom-height)] [sw (amiga-size-width)])
-           (list (list 'resize-br (- w sw) (- h b) sw b)))))))
+;; (values width height): 16 × 14 in the classic 18-pixel caption.
+(define (win98-button-size)
+  (let ([bh (- (win98-caption-height) 4)])
+    (values (exact (round (* bh 8/7))) bh)))
 
-;; A raised section of the frame; pressed sections are recessed.
-(define (amiga-section x y w h face down?)
-  (fill-rect x y w h face)
-  (if down?
-      (bevel-rect x y w h amiga-shadow amiga-shine)
-      (bevel-rect x y w h amiga-shine amiga-shadow)))
+(define (win98-insets win)
+  (values win98-border (+ win98-border (win98-caption-height) 1) win98-border win98-border))
 
-(define (amiga-gadget kind gx gy gw gh fill down?)
-  (define (r v) (exact (round v)))
-  (define (box x y w h color)
-    (fill-rect (r x) (r y) (r w) (r h) color)
-    (stroke-rect (r x) (r y) (r w) (r h) amiga-shadow))
-  (amiga-section gx gy gw gh (if down? (mix fill #x000000 0.15) fill) down?)
-  (case kind
-    [(close)
-     (let ([iw (max 4 (r (* 0.32 gh)))] [ih (max 6 (r (* 0.45 gh)))])
-       (box (+ gx (/ (- gw iw) 2)) (+ gy (/ (- gh ih) 2)) iw ih amiga-shine))]
-    [(maximize)
-     (let* ([ow (r (* 0.56 gw))] [oh (r (* 0.7 gh))] [s (r (* 0.45 oh))]
-            [ox (r (+ gx (/ (- gw ow) 2)))] [oy (r (+ gy (/ (- gh oh) 2)))])
-       (box ox oy ow oh fill)
-       (box ox oy s s amiga-shine))]
-    [(depth)
-     (let* ([rw (r (* 0.47 gw))] [rh (r (* 0.45 gh))]
-            [dx (r (* 0.4 rw))] [dy (r (* 0.45 rh))]
-            [bx (r (+ gx (/ (- gw rw dx) 2)))] [by (r (+ gy (/ (- gh rh dy) 2)))])
-       (box bx by rw rh 'bg-1)
-       (box (+ bx dx) (+ by dy) rw rh amiga-shine))]
-    [(resize-br)
-     (let ([x0 (+ gx 4.5)] [y0 (+ gy 3.5)] [x1 (+ gx gw -4.5)] [y1 (+ gy gh -3.5)])
-       (fill-polygon (list (cons x0 y1) (cons x1 y1) (cons x1 y0)) fill)
-       (draw-polyline (list (cons x0 y1) (cons x1 y1) (cons x1 y0) (cons x0 y1)) amiga-shadow 1))]))
+(define (win98-buttons win)
+  (let*-values ([(bw bh) (win98-button-size)]
+                [(y) (+ win98-border 2)]
+                [(close-x) (- (window-w win) win98-border 2 bw)]
+                [(max-x) (- close-x 2 bw)])
+    (list (list 'close close-x y bw bh)
+          (list 'maximize max-x y bw bh)
+          (list 'minimize (- max-x bw) y bw bh))))
 
-(define (amiga-draw-under win x y w h focused? hover pressed)
-  (let ([fill (if focused? 'accent 'bg-1)]
-        [t (amiga-title-height)]
-        [cw (amiga-close-width)]
-        [gw (amiga-gadget-width)])
-    (amiga-section x y w h fill #f)
-    ;; the drag bar between the gadgets
-    (amiga-section (+ x cw) y (- w cw gw gw) t fill #f)
-    (for-each (lambda (b)
-                (amiga-gadget (car b) (+ x (list-ref b 1)) (+ y (list-ref b 2))
-                              (list-ref b 3) (list-ref b 4) fill (eq? pressed (car b))))
-              (amiga-buttons win))
-    (draw-text (+ x cw 6) (+ y (/ (- t (font-line-height 'mono)) 2))
-               (fit-text (window-title win) (- w cw gw gw 12) 'mono)
-               (readable-on fill) 'mono)
-    ;; the content sits in a recessed well
-    (let-values ([(cx cy cw ch) (content-rect win)])
-      (bevel-rect (- cx 1) (- cy 1) (+ cw 2) (+ ch 2) amiga-shadow amiga-shine))))
+;; A bevelled box, raised or (pressed) sunken.
+(define (win98-box x y w h face down?)
+  (let-values ([(hi lt sh dk) (win98-pens face)])
+    (fill-rect x y w h face)
+    (if down?
+        (begin (bevel-rect x y w h dk hi) (bevel-rect (+ x 1) (+ y 1) (- w 2) (- h 2) sh lt))
+        (begin (bevel-rect x y w h hi dk) (bevel-rect (+ x 1) (+ y 1) (- w 2) (- h 2) lt sh)))))
 
-(define-window-style! 'amiga "Amiga"
-  'insets amiga-insets
-  'buttons amiga-buttons
-  'draw-under amiga-draw-under)
+;; Button glyphs as rectangles in the pixels of a 16 × 14 button.
+(define win98-glyphs
+  '((minimize (4 9 6 2))
+    (maximize (3 2 9 2) (3 2 1 9) (11 2 1 9) (3 10 9 1))
+    (restore (5 1 6 2) (5 1 1 3) (10 1 1 6) (8 6 3 1)
+             (3 4 6 2) (3 4 1 6) (8 4 1 6) (3 9 6 1))
+    (close (4 3 2 1) (10 3 2 1) (5 4 2 1) (9 4 2 1) (6 5 4 1) (7 6 2 1)
+           (6 7 4 1) (5 8 2 1) (9 8 2 1) (4 9 2 1) (10 9 2 1))))
+
+(define (win98-draw-button win kind bx by bw bh face pressed)
+  (let* ([down? (eq? pressed kind)]
+         [glyph (if (and (eq? kind 'maximize) (maximized? win)) 'restore kind)]
+         [k (max 1 (quotient bh 14))]           ; whole pixels stay crisp
+         [ox (+ bx (quotient (- bw (* 16 k)) 2) (if down? 1 0))]
+         [oy (+ by (quotient (- bh (* 14 k)) 2) (if down? 1 0))])
+    (win98-box bx by bw bh face down?)
+    (when (eq? glyph 'restore)   ; the front window hides the back one
+      (fill-rect (+ ox (* 4 k)) (+ oy (* 6 k)) (* 4 k) (* 3 k) face))
+    (for-each (lambda (r)
+                (fill-rect (+ ox (* k (car r))) (+ oy (* k (cadr r))) (* k (caddr r)) (* k (cadddr r)) #x000000))
+              (cdr (assq glyph win98-glyphs)))))
+
+(define (win98-draw-under win x y w h focused? hover pressed)
+  (let*-values ([(face) 'title-bg]
+                [(hi lt sh dk) (win98-pens face)]
+                [(b) win98-border]
+                [(ch) (win98-caption-height)]
+                [(cx cy cw) (values (+ x b) (+ y b) (- w b b))]
+                [(is) (- ch 2)]
+                [(icon) (app-color (window-app win))]
+                [(title) (window-title win)]
+                [(buttons) (win98-buttons win)])
+    ;; a window too narrow for its buttons and icon shows only what fits
+    (call-with-clip x y w h
+      (lambda ()
+        (fill-rect x y w h face)
+        (bevel-rect x y w h lt dk)
+        (bevel-rect (+ x 1) (+ y 1) (- w 2) (- h 2) hi sh)
+        (if focused?
+            (fill-gradient cx cy cw ch 'accent 'accent-2 'horizontal)
+            (fill-gradient cx cy cw ch sh face 'horizontal))
+        ;; the app's icon: a square in its color with its initial
+        (fill-rect (+ cx 2) (+ cy 1) is is icon)
+        (stroke-rect (+ cx 2.5) (+ cy 1.5) (- is 1) (- is 1) (mix icon #x000000 0.4))
+        (draw-text-centered (+ cx 2) (+ cy 1) is is
+                            (if (string=? title "") "·" (string (char-upcase (string-ref title 0))))
+                            (readable-on icon) 'ui-small)
+        (draw-text (+ cx is 5) (+ cy (/ (- ch (font-line-height 'title)) 2))
+                   (fit-text title (- (list-ref (car (last-pair buttons)) 1) is b 10) 'title)
+                   (if focused? #xffffff face) 'title)
+        (for-each (lambda (bt)
+                    (win98-draw-button win (car bt) (+ x (list-ref bt 1)) (+ y (list-ref bt 2))
+                                       (list-ref bt 3) (list-ref bt 4) face pressed))
+                  buttons)))))
+
+(define-window-style! 'win98 "Windows 98"
+  'insets win98-insets
+  'buttons win98-buttons
+  'draw-under win98-draw-under)
+
+;;; ------------------------------------------------------------------ Interlisp
+;;; Interlisp-D, later Medley (Xerox PARC, 1980s; on Unix workstations
+;;; from 1988), matched against a real Medley screen: a 2-pixel border and
+;;; a 15-pixel title bar in solid ink with the title in paper color, and
+;;; no buttons: everything was done from the right-button menu (here:
+;;; right-click the title). Ink is the theme's text color, paper the
+;;; window's background, so any palette gets the inverse-video look.
+
+(define interlisp-border 2)
+
+(define (interlisp-title-height)
+  (exact (max 15 (- (title-height) 15) (round (+ (font-line-height 'ui-small) 2)))))
+
+(define (interlisp-insets win)
+  (values interlisp-border (interlisp-title-height) interlisp-border interlisp-border))
+
+(define (interlisp-draw-under win x y w h focused? hover pressed)
+  (let ([th (interlisp-title-height)])
+    (fill-rect x y w h 'text)
+    (call-with-clip x y w th   ; even "…" may not fit a narrow window
+      (lambda ()
+        (draw-text (+ x 5) (+ y (floor (/ (- th (font-line-height 'ui-small)) 2)))
+                   (fit-text (window-title win) (- w 10) 'ui-small)
+                   (window-bg win) 'ui-small)))))
+
+(define-window-style! 'interlisp "Interlisp"
+  'insets interlisp-insets
+  'draw-under interlisp-draw-under)
+
+;;; ------------------------------------------------------------------ Genera
+;;; Symbolics Genera, the Lisp Machine system of the 1980s, as its manuals
+;;; describe it. Programming the User Interface (Genera 7, 1986): a pane's
+;;; default margins are "a 1-pixel-wide border and a margin between the
+;;; border and displayed output to the pane of 4 pixels", and its label
+;;; "appears ... in the lower, left-hand corner of the pane (directly
+;;; inside the border)" in the pane's default character style, a fixed-
+;;; width font. No title bar and no buttons: the label strip is what you
+;;; drag, and right-clicking it gives the window menu (Genera explained its
+;;; mouse clicks in the documentation line instead).
+
+(define genera-border 1)
+(define genera-margin 4)
+
+(define (genera-label-height)
+  (exact (max 14 (- (title-height) 16) (round (+ (font-line-height 'mono) 2)))))
+
+(define (genera-insets win)
+  (let ([m (+ genera-border genera-margin)])
+    (values m m m (+ genera-border (genera-label-height) genera-margin))))
+
+;; The label strip is the window's title area. The corners and the bottom
+;; edge stay free for resizing.
+(define (genera-buttons win)
+  (let ([w (window-w win)] [h (window-h win)] [lh (genera-label-height)])
+    (list (list 'title 14 (- h genera-border lh) (- w 28) (- lh 4)))))
+
+(define (genera-draw-under win x y w h focused? hover pressed)
+  (let ([lh (genera-label-height)] [b genera-border])
+    (fill-rect x y w h 'text)
+    (fill-rect (+ x b) (+ y b) (- w b b) (- h b b) (window-bg win))
+    (call-with-clip x y w h   ; even "…" may not fit a narrow window
+      (lambda ()
+        (draw-text (+ x b genera-margin)
+                   (+ y (- h b lh) (floor (/ (- lh (font-line-height 'mono)) 2)))
+                   (fit-text (window-title win) (- w (* 2 (+ b genera-margin))) 'mono)
+                   'text 'mono)))))
+
+(define-window-style! 'genera "Genera"
+  'insets genera-insets
+  'buttons genera-buttons
+  'draw-under genera-draw-under)
 
 ;;; ------------------------------------------------------------------ previews
 

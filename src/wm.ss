@@ -54,15 +54,46 @@
   (nongenerative schevana-drag)
   (fields kind win button mx my x y w h))
 
-(define (invalidate! . _) (set! *dirty* #t))
+;;; ------------------------------------------------------------------ invalidation
+;;; *dirty* asks for a forced frame: everything on screen is drawn again
+;;; from scratch (render-full-into!), so every change only has to say that
+;;; something changed.
+;;;
+;;;   (invalidate!)       anything may have changed
+;;;   (invalidate! win)   win's content changed (input to a window says so
+;;;                       by itself)
+;;;   (invalidate! win x y w h)   the same as (invalidate! win), for apps
+;;;                       written when only that part was drawn again
+
+(defvar current-window (make-thread-parameter #f))   ; the window whose handler is running
+
+(define invalidate!
+  (case-lambda
+    [() (set! *dirty* #t)]
+    [(win) (set! *dirty* #t)]
+    [(win x y w h) (invalidate! win)]))
+
+;; The window manager's or the shell's state changed.
+(define (request-frame!) (set! *dirty* #t))
 
 (define (screen-w) *canvas-w*)
 (define (screen-h) *canvas-h*)
-(define (title-height) (theme 'title-height))
+;; The chrome grows with the fonts: each height is the theme's setting or
+;; the room its text needs, whichever is more. At the default fonts the
+;; text fits every setting the Settings app offers.
+(define (chrome-min-height key)
+  (exact (round (case key
+                  [(title-height) (+ (font-line-height 'title) 7)]
+                  [(topbar-height) (+ (font-line-height 'ui) 7)]
+                  [(taskbar-height) (+ (font-line-height 'ui) 13)]
+                  [else 0]))))
+(define (title-height) (max (theme 'title-height) (chrome-min-height 'title-height)))
+(define (topbar-height) (max (theme 'topbar-height) (chrome-min-height 'topbar-height)))
+(define (taskbar-height) (max (theme 'taskbar-height) (chrome-min-height 'taskbar-height)))
 
 ;; The area between the top bar and the taskbar.
 (define (desktop-rect)
-  (let ([top (theme 'topbar-height)] [bottom (theme 'taskbar-height)])
+  (let ([top (topbar-height)] [bottom (taskbar-height)])
     (values 0 top (screen-w) (- (screen-h) top bottom))))
 
 (define (point-in? px py x y w h)
@@ -80,7 +111,7 @@
 (define (register-app! name title launch)
   (set! *apps* (append (remp (lambda (a) (eq? (app-name a) name)) *apps*)
                        (list (make-app name title launch))))
-  (invalidate!))
+  (request-frame!))
 
 ;; (define-app (name) "Title" body ...) defines an ordinary procedure that
 ;; opens the app, and registers it with the launcher.
@@ -108,8 +139,9 @@
 ;;; ------------------------------------------------------------------ windows
 
 (define (open-window title . opts)
-  (let* ([size (plist-ref opts 'size '(480 . 320))]
-         [min-size (plist-ref opts 'min-size '(160 . 80))]
+  (let* ([whole (lambda (p) (cons (exact (round (car p))) (exact (round (cdr p)))))]
+         [size (whole (plist-ref opts 'size '(480 . 320)))]
+         [min-size (whole (plist-ref opts 'min-size '(160 . 80)))]
          [win (make-window *next-window-id* (plist-ref opts 'app (current-app)) title
                            0 0 (car size) (cdr size) 'normal #f
                            (make-eq-hashtable) (make-eq-hashtable) #f
@@ -133,16 +165,26 @@
     (focus-window! win)
     win))
 
+;; Where a window opens when open-window gets no 'pos: #f to cascade, or a
+;; point for its top-left corner, moved as little as needed to fit on the
+;; desktop. (parameterize ([new-window-position '(400 . 300)]) (clock))
+(defvar new-window-position (make-parameter #f))
+
 (define (place-window! win pos)
   (let-values ([(dx dy dw dh) (desktop-rect)])
     (window-w-set! win (min (window-w win) dw))
     (window-h-set! win (min (window-h win) dh))
-    (if pos
-        (begin (window-x-set! win (car pos)) (window-y-set! win (cdr pos)))
+    (cond
+      [pos (window-x-set! win (car pos)) (window-y-set! win (cdr pos))]
+      [(new-window-position)
+       => (lambda (at)
+            (window-x-set! win (clamp (car at) dx (max dx (- (+ dx dw) (window-w win)))))
+            (window-y-set! win (clamp (cdr at) dy (max dy (- (+ dy dh) (window-h win))))))]
+      [else
         (let ([k (mod *cascade* 8)])
           (set! *cascade* (+ *cascade* 1))
           (window-x-set! win (min (+ 60 (* 34 k)) (max 0 (- dw (window-w win)))))
-          (window-y-set! win (min (+ dy 24 (* 30 k)) (max dy (- (+ dy dh) (window-h win)))))))))
+          (window-y-set! win (min (+ dy 24 (* 30 k)) (max dy (- (+ dy dh) (window-h win))))))])))
 
 (define (windows) *windows*)
 (define (focused-window) *focus*)
@@ -162,12 +204,12 @@
 
 (define (window-set! win key val)
   (hashtable-set! (window-props win) key val)
-  (invalidate!))
+  (invalidate! win))
 
 (define (window-on! win kind proc)
   (hashtable-set! (window-handlers win) kind proc)
   (window-error-set! win #f)
-  (invalidate!))
+  (invalidate! win))
 
 (define (window-bg win) (window-ref win 'bg 'window-bg))
 
@@ -193,17 +235,21 @@
   (let-values ([(l t r b) (frame-insets win)])
     (values (- x (window-x win) l) (- y (window-y win) t))))
 
-;; Calls one of the window's handlers under the watchdog.
+;; Calls one of the window's handlers under the watchdog, with
+;; (current-window) set to win. Input invalidates the window by itself, so
+;; a handler that only changes its state is still seen.
 (define (window-call win kind . args)
   (let ([h (hashtable-ref (window-handlers win) kind #f)])
     (if (and h (not (window-error win)))
-        (safe-call kind (lambda () (apply h win args))
-                   (lambda (c) (window-crash! win kind c) #f))
+        (begin
+          (when (memq kind '(key text mouse-down mouse-up wheel)) (invalidate! win))
+          (safe-call kind (lambda () (parameterize ([current-window win]) (apply h win args)))
+                     (lambda (c) (window-crash! win kind c) #f)))
         #f)))
 
 (define (window-crash! win kind c)
   (window-error-set! win (cons kind c))
-  (invalidate!))
+  (invalidate! win))
 
 (define (focus-window! win)
   (unless (eq? win *focus*)
@@ -215,11 +261,11 @@
     (when (eq? (window-state win) 'minimized)
       (window-state-set! win (if (window-restore win) 'maximized 'normal)))
     (raise-window! win))
-  (invalidate!))
+  (request-frame!))
 
 (define (raise-window! win)
   (set! *windows* (cons win (remq win *windows*)))
-  (invalidate!))
+  (request-frame!))
 
 (define (focus-topmost!)
   (let ([w (find visible? *windows*)])
@@ -235,12 +281,12 @@
     (set! *windows* (remq win *windows*))
     (when (and *drag* (eq? (drag-win *drag*) win)) (set! *drag* #f))
     (when (eq? *focus* win) (focus-topmost!))
-    (invalidate!)))
+    (request-frame!)))
 
 (define (minimize-window! win)
   (window-state-set! win 'minimized)
   (when (eq? win *focus*) (focus-topmost!))
-  (invalidate!))
+  (request-frame!))
 
 ;; Sets the outer geometry, enforcing minimum sizes, and tells the app.
 (define (set-geometry! win x y w h)
@@ -253,7 +299,7 @@
     (window-w-set! win w)
     (window-h-set! win h)
     (when resized? (window-call win 'resize (- w l r) (- h t b)))
-    (invalidate!)))
+    (request-frame!)))
 
 (define (move-window! win x y)
   (set-geometry! win x y (window-w win) (window-h win)))
@@ -263,15 +309,15 @@
   (let-values ([(l t r b) (frame-insets win)])
     (set-geometry! win (window-x win) (window-y win) (+ w l r) (+ h t b))))
 
-;; Amiga's depth gadget: send the front window to the back, or bring a
-;; window that is behind others to the front.
+;; What a 'depth button does (the Amiga's depth gadget): send the front
+;; window to the back, or bring a window that is behind others to the front.
 (define (depth-window! win)
   (if (eq? win (find visible? *windows*))
       (begin
         (set! *windows* (append (remq win *windows*) (list win)))
         (focus-topmost!))
       (focus-window! win))
-  (invalidate!))
+  (request-frame!))
 
 (define (maximize-window! win)
   (unless (eq? (window-state win) 'maximized)
@@ -288,7 +334,7 @@
     (window-state-set! win 'normal)
     (window-restore-set! win #f)
     (when r (apply set-geometry! win r))
-    (invalidate!)))
+    (request-frame!)))
 
 (define (toggle-maximize! win)
   (if (eq? (window-state win) 'maximized) (restore-window! win) (maximize-window! win)))
@@ -325,11 +371,21 @@
               (when (eq? (window-state win) 'maximized) (restore-window! win))
               (place-window! win #f))
             (reverse *windows*))
-  (invalidate!))
+  (request-frame!))
 
 ;; The host window was resized.
+;; The screen changed size (or scale): refit maximized windows, and pull
+;; others back until their title bar can be reached.
 (define (wm-screen-resized!)
-  (for-each (lambda (w) (when (eq? (window-state w) 'maximized) (fit-maximized! w))) *windows*)
+  (unless (null? *windows*)   ; (also called while loading, before there is a canvas to measure)
+    (let-values ([(dx dy dw dh) (desktop-rect)])
+      (for-each (lambda (w)
+                  (if (eq? (window-state w) 'maximized)
+                      (fit-maximized! w)
+                      (begin
+                        (window-x-set! w (clamp (window-x w) (- (+ dx 80) (window-w w)) (max dx (- (+ dx dw) 80))))
+                        (window-y-set! w (clamp (window-y w) dy (max dy (- (+ dy dh) 30)))))))
+                *windows*)))
   (invalidate!))
 
 ;; The window style or title height changed: frames keep their outer size,
@@ -350,7 +406,7 @@
         *windows*))
 
 ;; Button kinds that act on release. A style may also list a 'resize-br
-;; button (Amiga's size gadget), which starts a resize instead.
+;; button (a classic size gadget), which starts a resize instead.
 (define window-button-kinds '(close minimize maximize depth))
 
 ;; The style's buttons: ((kind x y w h) ...) in window coordinates.
@@ -394,13 +450,13 @@
 (define (update-hover! x y)
   (let ([h (cond
              [(menu-open?) '(menu)]
-             [(< y (theme 'topbar-height)) (list 'topbar (topbar-item-at x y))]
-             [(>= y (- (screen-h) (theme 'taskbar-height))) (list 'taskbar (taskbar-item-at x y))]
+             [(< y (topbar-height)) (list 'topbar (topbar-item-at x y))]
+             [(>= y (- (screen-h) (taskbar-height))) (list 'taskbar (taskbar-item-at x y))]
              [(window-at x y) => (lambda (w) (list 'window w (window-region w x y)))]
              [else '(desktop)])])
     (unless (equal? h *hover*)
       (set! *hover* h)
-      (invalidate!))
+      (request-frame!))
     (host-set-cursor!
      (if (eq? (car h) 'window) (region-cursor (cadr h) (caddr h)) 'arrow))))
 
@@ -460,8 +516,8 @@
   (cond
     [(menu-open?)
      (if (point-in-menu? x y) (menu-mouse-down x y) (close-menu!))]
-    [(< y (theme 'topbar-height)) (topbar-click x y button)]
-    [(>= y (- (screen-h) (theme 'taskbar-height))) (taskbar-click x y button)]
+    [(< y (topbar-height)) (topbar-click x y button)]
+    [(>= y (- (screen-h) (taskbar-height))) (taskbar-click x y button)]
     [(window-at x y) => (lambda (win) (window-mouse-down win x y button clicks))]
     [else (desktop-click x y button)]))
 
@@ -483,7 +539,7 @@
       [(content)
        (cond
          [(window-error win)
-          (when (eq? button 'left) (window-error-set! win #f) (invalidate!))]
+          (when (eq? button 'left) (window-error-set! win #f) (invalidate! win))]
          [else
           (set! *drag* (make-drag 'capture win button x y 0 0 0 0))
           (let-values ([(lx ly) (window-local win x y)])
@@ -514,7 +570,7 @@
              (window-call win 'mouse-up lx ly button))]
           [else (set! *drag* #f)])))
     (update-hover! x y)
-    (invalidate!)))
+    (request-frame!)))
 
 (define (wm-wheel dx dy)
   (cond
@@ -563,9 +619,9 @@
 (define (wm-tick!)
   (for-each (lambda (w) (window-call w 'tick)) *windows*)
   (let ([s (time-second (current-time))])
-    (unless (= s *last-second*)
+    (unless (= s *last-second*)   ; a forced frame at least once a second
       (set! *last-second* s)
-      (invalidate!)))
+      (request-frame!)))
   (expire-toasts!))
 
 ;;; ------------------------------------------------------------------ drawing
@@ -573,11 +629,19 @@
 ;; The style draws the frame in two passes around the content.
 (define (draw-window win) (draw-window* win (eq? win *focus*)))
 
+;; The part of win under the mouse, and the drag kind holding it, as the
+;; style sees them (#f when none).
+(define (window-hover win)
+  (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win) (caddr *hover*)))
+
+(define (window-pressed win)
+  (and *drag* (eq? (drag-win *drag*) win) (drag-kind *drag*)))
+
 (define (draw-window* win focused?)
   (let* ([style (window-style-of win)]
          [x (window-x win)] [y (window-y win)] [w (window-w win)] [h (window-h win)]
-         [hover (and *hover* (eq? (car *hover*) 'window) (eq? (cadr *hover*) win) (caddr *hover*))]
-         [pressed (and *drag* (eq? (drag-win *drag*) win) (drag-kind *drag*))]
+         [hover (window-hover win)]
+         [pressed (window-pressed win)]
          [r ((window-style-radius style) win)])
     ((window-style-draw-under style) win x y w h focused? hover pressed)
     (let-values ([(cx cy cw ch) (content-rect win)])
@@ -596,11 +660,15 @@
 (define (draw-crash-panel win w h)
   (let ([err (window-error win)])
     (fill-rect 0 0 w h (mix 'bg-1 'red 0.10))
-    (draw-text 16 14 "This app crashed" 'red 'ui-bold)
-    (draw-text 16 34 (format "in its '~a handler:" (car err)) 'text-dim 'ui)
-    (draw-wrapped-text 16 58 (- w 32) (- h 58 (if (> h 150) 30 4)) (condition->string (cdr err)) 'text 'mono-small)
-    (when (> h 150)
-      (draw-text 16 (- h 26) "Click to retry.  Fix it live: (window-on! win 'draw ...)" 'text-faint 'ui-small))))
+    (let* ([y1 (round (+ 14 (font-line-height 'ui-bold) 5))]
+           [y2 (round (+ y1 (font-line-height 'ui) 9))]
+           [hint-h (round (+ (font-line-height 'ui-small) 13))]
+           [hint? (> h (+ y2 hint-h 66))])
+      (draw-text 16 14 "This app crashed" 'red 'ui-bold)
+      (draw-text 16 y1 (format "in its '~a handler:" (car err)) 'text-dim 'ui)
+      (draw-wrapped-text 16 y2 (- w 32) (- h y2 (if hint? (+ hint-h 4) 4)) (condition->string (cdr err)) 'text 'mono-small)
+      (when hint?
+        (draw-text 16 (- h hint-h) "Click to retry.  Fix it live: (window-on! win 'draw ...)" 'text-faint 'ui-small)))))
 
 ;; Character-wrapped text for monospace fonts; returns the y after the text.
 (define (draw-wrapped-text x y w h str color font)
@@ -623,21 +691,52 @@
                       (chunk (substring s cols (string-length s)) (cons (substring s 0 cols) acc)))))
               (string-split str #\newline))))
 
-(defvar *frame-ms* 0.0)
+(defvar *frame-ms* 0.0)      ; the last frame's time: drawing it, comparing its rows
+(defvar *frames-drawn* 0)
 
-(define (render-frame!)
-  (let ([t0 (current-time 'time-monotonic)])
-    ;; A fresh cairo context each frame, so a crashed draw can't leave
-    ;; the graphics state unbalanced.
-    (cairo-destroy *cr*)
-    (set! *cr* (cairo-create *canvas*))
-    (cairo-scale *cr* *scale* *scale*)
-    (safely 'desktop draw-desktop)
-    (for-each (lambda (w) (when (visible? w) (safely 'window (lambda () (draw-window w)))))
-              (reverse *windows*))
-    (safely 'taskbar draw-taskbar)
-    (safely 'topbar draw-topbar)
-    (safely 'menu draw-menu)
-    (safely 'toasts draw-toasts)
-    (let ([dt (time-difference (current-time 'time-monotonic) t0)])
-      (set! *frame-ms* (+ (* 1000.0 (time-second dt)) (/ (time-nanosecond dt) 1e6))))))
+(define (ms-since t0)
+  (let ([dt (time-difference (current-time 'time-monotonic) t0)])
+    (+ (* 1000.0 (time-second dt)) (/ (time-nanosecond dt) 1e6))))
+
+;; The whole screen drawn from scratch onto surface, an image the
+;; canvas's size.
+(define (render-full-into! surface)
+  ;; A fresh cairo context, so a crashed draw can't leave the graphics
+  ;; state unbalanced. Outside it *cr* only measures.
+  (let ([cr (cairo-create surface)])
+    (cairo-set-operator cr CAIRO_OPERATOR_SOURCE)   ; every pixel, the last column at 150% too
+    (cairo-set-source-rgba cr 0 0 0 1)
+    (cairo-paint cr)
+    (cairo-set-operator cr CAIRO_OPERATOR_OVER)
+    (cairo-scale cr *scale* *scale*)
+    (fluid-let ([*cr* cr])
+      (safely 'desktop draw-desktop)
+      (for-each (lambda (w) (when (visible? w) (safely 'window (lambda () (draw-window w)))))
+                (reverse *windows*))
+      (safely 'taskbar draw-taskbar)
+      (safely 'topbar draw-topbar)
+      (safely 'menu draw-menu)
+      (safely 'toasts draw-toasts))
+    (cairo-destroy cr)
+    (cairo-surface-flush surface)))
+
+;; One step's frame. If something asked for one (forced?, from *dirty*),
+;; the whole screen is drawn again from scratch into the second buffer,
+;; and the rows that changed are copied onto the screen (gfx.ss), where
+;; they wait for the host's upload. A process may be switched out at any
+;; call while the main loop draws on, so typed in a REPL (a process) or
+;; called by a handler, (render-frame!) only asks for a frame.
+(define render-frame!
+  (case-lambda
+    [() (render-frame! #t)]
+    [(forced?)
+     (cond
+       [(or (not forced?) (eqv? *canvas* 0)) (void)]
+       [(in-engine?) (request-frame!)]
+       [else
+        (let ([t0 (current-time 'time-monotonic)])
+          (refresh-status!)
+          (render-full-into! *back*)
+          (set! *upload-rows* (append (copy-changed-rows!) *upload-rows*))
+          (set! *frame-ms* (ms-since t0))
+          (set! *frames-drawn* (+ *frames-drawn* 1)))])]))

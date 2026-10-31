@@ -3,6 +3,7 @@
 (defvar *running* #f)
 (defvar *timers* '())     ; ((due-ms . thunk) ...) sorted by due time
 (defvar *injected* '())   ; synthetic events waiting to be handled
+(defvar *held-events* '())   ; events that came while a reload held the world, newest first
 (defvar *boot-ms* (now-ms))
 
 ;; (after 1000 (lambda () (notify "a second later")))
@@ -37,25 +38,51 @@
     [(key-down) (apply wm-key-down (cdr ev))]
     [(text) (wm-text (cadr ev))]
     [(resize) (wm-screen-resized!)]
-    [(expose) (invalidate!)]
-    [(mouse-leave) (set! *hover* #f) (invalidate!)]
+    [(expose) (set! *present-only?* #t)]   ; the texture still holds the screen
+    [(render-reset) (invalidate-screen!)]   ; the texture's pixels were lost
+    [(device-reset) (host-recreate-texture!) (invalidate-screen!)]
+    [(mouse-leave) (set! *hover* #f) (request-frame!)]
     [(quit) (quit!)]))
 
+;; A reload that failed or was killed: the world goes on as far as it got.
+(define (reload-ended! msg)
+  (set! *reloading* #f)
+  (safely 'reload (lambda () (invalidate!) (notify msg 'red))))
+
+;; While a process loads the sources (*reloading*, set by load-sources!),
+;; the world holds still: no event, timer, tick, frame or other process
+;; runs half-loaded code, and the screen stays as it was. A reload whose
+;; process was killed ends here.
+(define (reload-holding?)
+  (when (and *reloading* (not (memq (car *reloading*) *procs*)))
+    (reload-ended! (format "Reload stopped while loading ~a" (cdr *reloading*))))
+  (and *reloading* #t))
+
+;; Ctrl+C kills the reload and quitting quits; other events wait for it.
+(define (hold-event! ev)
+  (cond
+    [(and (eq? (car ev) 'key-down) (eqv? (cadr ev) #\c) (memq 'ctrl (caddr ev))) (kill! (car *reloading*))]
+    [(eq? (car ev) 'quit) (quit!)]
+    [else (set! *held-events* (cons ev *held-events*))]))
+
 ;; One turn of the world: events, timers, processes, ticks, and a frame
-;; if anything changed.
+;; if something asked for one.
 (define (schevana-step! wait-ms)
-  (let ([evs (host-events (if (pair? *injected*) 0 wait-ms))]
-        [inj *injected*])
+  (let* ([hold? (reload-holding?)]
+         [evs (append (if hold? '() (reverse *held-events*))
+                      (host-events (if (pair? *injected*) 0 wait-ms))
+                      *injected*)])
+    (unless hold? (set! *held-events* '()))
     (set! *injected* '())
-    (for-each (lambda (ev) (safely 'event (lambda () (handle-event! ev))))
-              (append evs inj)))
-  (safely 'timers run-timers!)
+    (for-each (lambda (ev) (safely 'event (lambda () (if hold? (hold-event! ev) (handle-event! ev))))) evs))
+  (unless (reload-holding?) (safely 'timers run-timers!))
   (safely 'procs (lambda () (run-procs! 10)))
-  (safely 'tick wm-tick!)
-  (when *dirty*
-    (set! *dirty* #f)
-    (safely 'render render-frame!)
-    (host-present!)))
+  (unless (reload-holding?)
+    (safely 'tick wm-tick!)
+    (let ([forced? *dirty*])
+      (set! *dirty* #f)
+      (safely 'render (lambda () (render-frame! forced?))))
+    (safely 'present host-present-damage!)))
 
 (define (schevana-run!)
   (set! *running* #t)
@@ -79,6 +106,8 @@
     ((ctrl shift #\n) . ,(lambda () (when *focus* (minimize-window! *focus*))))
     ((ctrl shift #\t) . ,(lambda () (tile-windows!)))
     ((ctrl shift #\r) . ,(lambda () (launch-app 'repl)))
+    ((ctrl shift #\p) . ,(lambda () (launch-app 'private-repl)))
+    ((f11) . ,(lambda () (toggle-fullscreen!)))
     ((f12) . ,(lambda () (notify (format "Saved ~a" (screenshot (next-screenshot-path))))))))
 
 (define (install-default-keys!)
@@ -97,14 +126,68 @@
   (when (file-exists? user-init-file)
     (safely 'init (lambda () (load user-init-file)))))
 
-(define (schevana-boot! mode w h)
-  (host-init! mode w h)
+;; (import (acme math)) also finds acme/math.sls here.
+(define user-library-directory
+  (format "~a/.schevana.d/lib" (or (getenv "HOME") ".")))
+
+;; Make import search dir before Chez's own library directories. It need
+;; not exist yet.
+(define (add-library-directory! dir)
+  (let ([dir (if (string-prefix? "~/" dir)
+                 (string-append (or (getenv "HOME") "") (substring dir 1 (string-length dir)))
+                 dir)])
+    (unless (exists (lambda (e) (equal? (if (pair? e) (car e) e) dir)) (library-directories))
+      (library-directories (cons (cons dir dir) (library-directories))))
+    dir))
+
+;; (schevana-boot! 'sdl 1280 800 #t) starts full screen.
+(define (schevana-boot! mode w h . fullscreen?)
+  (add-library-directory! user-library-directory)
+  (apply host-init! mode w h fullscreen?)
   (install-default-keys!)
   (install-default-status!)
   (invalidate!))
 
+(define (load-source f) (load (string-append *schevana-root* "/" f)))
+
+;; Loads files into the world (from a private REPL too). Run as a process
+;; (the launcher's "Reload sources", (reload!) in a REPL), it names itself
+;; and the file in *reloading* until it ends, so the world holds still
+;; meanwhile (schevana-step!), yet it is still preempted and Ctrl+C kills it.
+;; Not with dynamic-wind: an engine runs its exits at every preemption.
+(define (load-sources! files)
+  (let* ([p (current-proc)]
+         [outer? (and p (not (and *reloading* (eq? (car *reloading*) p))))])
+    (parameterize ([interaction-environment *world-env*])
+      (guard (c [outer? (reload-ended! (format "Reload failed in ~a: ~a" (cdr *reloading*) (condition->string c)))
+                        (raise c)])
+        (for-each (lambda (f) (when p (set! *reloading* (cons p f))) (load-source f)) files)
+        (when outer? (set! *reloading* #f))))))
+
+;; The source files load.ss lists, read from the file itself so that a
+;; reload picks up new ones.
+(define (read-source-list)
+  (guard (c [#t *schevana-sources*])
+    (call-with-input-file (string-append *schevana-root* "/load.ss")
+      (lambda (p)
+        (let loop ()
+          (let ([x (read p)])
+            (cond
+              [(eof-object? x) *schevana-sources*]
+              [(and (list? x) (= (length x) 3) (eq? (car x) 'define) (eq? (cadr x) '*schevana-sources*)
+                    (pair? (caddr x)) (eq? (car (caddr x)) 'quote) (list? (cadr (caddr x))))
+               (cadr (caddr x))]
+              [else (loop)])))))))
+
 ;; Re-read every source file. Code changes take effect; state declared
 ;; with defvar (windows, theme, processes...) survives.
 (define (reload!)
-  (for-each (lambda (f) (load (string-append *schevana-root* "/" f))) *schevana-sources*)
+  (let ([files (read-source-list)])
+    (set! *schevana-sources* files)
+    (load-sources! files))
+  (invalidate!)
   (notify "Sources reloaded" 'green))
+
+;; Loading this file (at boot, or in a reload) starts the renderer's
+;; offscreen surfaces afresh; caches make them again when needed.
+(free-owned-surfaces!)

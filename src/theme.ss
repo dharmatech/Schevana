@@ -1,12 +1,12 @@
-;;; theme.ss — colours, metrics and fonts of the world, as live data.
+;;; theme.ss — colors, metrics and fonts of the world, as live data.
 ;;;
 ;;; (theme 'accent)                 => #x7aa2f7
-;;; (set-theme! 'accent #xff9e64)   recolours everything on the next frame
+;;; (set-theme! 'accent #xff9e64)   recolors everything on the next frame
 ;;; (set-theme! 'ui-font-size 15)   fonts are theme keys too
 ;;; (apply-theme-preset! 'nord)     switch the whole palette
 ;;; (save-theme!)                   persist to *theme-file*, loaded at boot
 ;;;
-;;; Anywhere a colour is expected you may pass a theme key symbol instead.
+;;; Anywhere a color is expected you may pass a theme key symbol instead.
 
 (defvar *theme* (make-eq-hashtable))
 (defvar *theme-version* 0)
@@ -27,9 +27,12 @@
     button-close #xf7768e  button-min #xe0af68  button-max #x9ece6a  button-idle #x3b4261))
 
 (define default-metrics
-  '(title-height 30  corner-radius 9  topbar-height 28  taskbar-height 38  shadow 14
+  '(title-height 30  corner-radius 9  topbar-height 28  taskbar-height 38
+    shadow 14   ; shadow
     ui-font "sans-serif"  ui-font-size 13  mono-font "monospace"  mono-font-size 14
-    window-style mac  preset tokyo-night))
+    window-style mac  preset tokyo-night
+    desktop-pattern gradient   ; gradient, flat (desktop-top) or shade (top dotted with bottom)
+    scale 0))   ; percent; 0 follows the desktop
 
 (define default-theme (append default-colors default-metrics))
 (define color-keys (plist-keys default-colors))
@@ -45,15 +48,32 @@
   (vector->list (vector-sort (lambda (a b) (string<? (symbol->string a) (symbol->string b)))
                              (hashtable-keys *theme*))))
 
+;; The theme as it is now; theme-same? tells whether it still is, however
+;; it changed meanwhile (set-theme!, or hashtable-set! behind its back).
+(define (theme-snapshot)
+  (let-values ([(keys vals) (hashtable-entries *theme*)]) (cons keys vals)))
+
+(define (theme-same? snapshot)
+  (let ([keys (car snapshot)] [vals (cdr snapshot)])
+    (and (= (vector-length keys) (hashtable-size *theme*))
+         (let loop ([i 0])
+           (or (= i (vector-length keys))
+               (and (equal? (hashtable-ref *theme* (vector-ref keys i) keys) (vector-ref vals i))
+                    (loop (+ i 1))))))))
+
 (define (theme-changed!)
   (set! *theme-version* (+ *theme-version* 1))
+  (update-host-icon-soon!)   ; the window icon uses the theme's colors
   (invalidate!))
 
 (define (set-theme! key value)
   (hashtable-set! *theme* key value)
   (when (memq key font-theme-keys) (install-default-fonts!))
-  (when (memq key '(topbar-height taskbar-height)) (wm-screen-resized!))
-  (when (memq key '(window-style title-height)) (wm-chrome-changed!))
+  (cond
+    ;; the fonts set how tall the title bar and the panels must be
+    [(or (memq key font-theme-keys) (memq key '(window-style title-height))) (wm-chrome-changed!)]
+    [(memq key '(topbar-height taskbar-height)) (wm-screen-resized!)]
+    [(eq? key 'scale) (host-rescale!)])
   (theme-changed!))
 
 (define (set-theme-plist! plist)
@@ -65,6 +85,7 @@
 (define (reset-theme!)
   (set-theme-plist! default-theme)
   (install-default-fonts!)
+  (host-rescale!)
   (wm-chrome-changed!)
   (theme-changed!))
 
@@ -107,21 +128,47 @@
       accent #x3b6fd8 accent-2 #x8a4fd0 red #xd43f4d orange #xc96a12 yellow #xa87b00
       green #x3d8a3a cyan #x1f88a8 teal #x238a7a magenta #xb0399a
       desktop-top #xe9e5dd desktop-bottom #xc9d3e6 watermark #x000000 panel #xece9e3))
-    ;; Amiga Workbench 3.1's four pens: grey, black, white and blue.
-    (workbench "Workbench"
-     (bg-0 #xaaaaaa bg-1 #xaaaaaa bg-2 #xa0a0a0 bg-3 #x959595
-      text #x000000 text-dim #x1c1c1c text-faint #x4a4a4a
-      accent #x6688bb accent-2 #x5a3e8e red #x9a1c1c orange #x9a4400 yellow #x6a5400
-      green #x1c5a1c cyan #x0e4c6a teal #x0e564c magenta #x741c6a
-      desktop-top #xaaaaaa desktop-bottom #xaaaaaa watermark #x000000 panel #xffffff))))
+    ;; Windows 98's standard scheme: gray faces, navy to blue captions,
+    ;; the teal desktop, and the 16-color palette's darker hues.
+    (win98 "Windows 98"
+     (bg-0 #xffffff bg-1 #xc0c0c0 bg-2 #xc0c0c0 bg-3 #xa8a8a8
+      text #x000000 text-dim #x202020 text-faint #x808080
+      accent #x000080 accent-2 #x1084d0 red #x800000 orange #x804000 yellow #x808000
+      green #x008000 cyan #x008080 teal #x008080 magenta #x800080
+      desktop-top #x008080 desktop-bottom #x008080 watermark #xffffff panel #xc0c0c0
+      desktop-pattern flat))
+    ;; Interlisp-D: black ink on white paper over the dotted gray shade.
+    (interlisp "Interlisp"
+     (bg-0 #xffffff bg-1 #xffffff bg-2 #xf0f0f0 bg-3 #xd8d8d8
+      text #x000000 text-dim #x2a2a2a text-faint #x6a6a6a
+      accent #x000000 accent-2 #x555555 red #x8b0000 orange #x6b4400 yellow #x5c5c00
+      green #x1f5f1f cyan #x1f5566 teal #x1f5f55 magenta #x661f66
+      desktop-top #xffffff desktop-bottom #x000000 watermark #x000000 panel #xffffff
+      desktop-pattern shade))
+    ;; Symbolics Genera: ink on paper, a plain white screen, and the panels
+    ;; in reverse video like its mouse documentation line.
+    (genera "Genera"
+     (bg-0 #xffffff bg-1 #xffffff bg-2 #xf0f0f0 bg-3 #xd8d8d8
+      text #x000000 text-dim #x222222 text-faint #x666666
+      accent #x000000 accent-2 #x444444 red #x8b0000 orange #x6b4400 yellow #x5c5c00
+      green #x1f5f1f cyan #x1f5566 teal #x1f5f55 magenta #x661f66
+      desktop-top #xffffff desktop-bottom #xffffff watermark #x000000
+      panel #x000000 panel-text #xffffff panel-dim #xb4b4b4 panel-hover #x383838
+      desktop-pattern flat))))
 
 (define (preset-title name)
   (let ([p (assq name theme-presets)]) (if p (cadr p) (symbol->string name))))
 
+;; A preset may also give any of the derived keys itself.
 (define (derive-colors base)
   (define (ref k) (plist-ref base k #f))
+  (define (unless-given p)
+    (cond [(null? p) '()]
+          [(ref (car p)) (unless-given (cddr p))]
+          [else (cons* (car p) (cadr p) (unless-given (cddr p)))]))
   (append base
-          (list 'selection (mix (ref 'accent) (ref 'bg-1) 0.65)
+          (unless-given
+           (list 'selection (mix (ref 'accent) (ref 'bg-1) 0.65)
                 'panel-text (ref 'text) 'panel-dim (ref 'text-faint) 'panel-hover (ref 'bg-3)
                 'window-bg (ref 'bg-1)
                 'window-border (mix (ref 'bg-3) (ref 'text) 0.08)
@@ -129,15 +176,16 @@
                 'title-bg (ref 'bg-2) 'title-bg-focus (ref 'bg-3)
                 'title-text (ref 'text) 'title-text-dim (ref 'text-faint)
                 'button-close (ref 'red) 'button-min (ref 'yellow) 'button-max (ref 'green)
-                'button-idle (mix (ref 'bg-3) (ref 'text) 0.15))))
+                'button-idle (mix (ref 'bg-3) (ref 'text) 0.15)))))
 
-;; The full colour plist of a preset.
+;; The full color plist of a preset.
 (define (preset-colors name)
   (let ([p (assq name theme-presets)])
     (unless p (errorf 'preset-colors "no theme preset ~s" name))
     (if (caddr p) (derive-colors (caddr p)) default-colors)))
 
 (define (apply-theme-preset! name)
+  (hashtable-set! *theme* 'desktop-pattern (theme-default 'desktop-pattern))   ; unless the preset sets it
   (set-theme-plist! (preset-colors name))
   (hashtable-set! *theme* 'preset name)
   (theme-changed!))
@@ -192,10 +240,15 @@
                  (set! *theme-save-pending* #f)
                  (save-theme!)))))
 
+;; Names must still exist: a theme saved before a preset or window style
+;; was removed falls back to the default for that key.
 (define (valid-theme-value? key v)
   (let ([d (theme-default key)])
     (cond
       [(memq key color-keys) (or (fixnum? v) (pair? v))]
+      [(eq? key 'preset) (and (assq v theme-presets) #t)]
+      [(eq? key 'window-style) (and (symbol? v) (find-window-style v) #t)]
+      [(eq? key 'desktop-pattern) (and (memq v '(gradient flat shade)) #t)]
       [(fixnum? d) (fixnum? v)]
       [(string? d) (string? v)]
       [(symbol? d) (symbol? v)]
@@ -213,5 +266,6 @@
                           (hashtable-set! *theme* (car kv) (cdr kv))))
                       data))
           (install-default-fonts!)
+          (host-rescale!)
           (wm-chrome-changed!)
           (theme-changed!))))))

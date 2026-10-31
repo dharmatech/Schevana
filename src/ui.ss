@@ -11,6 +11,8 @@
 ;;;             (ui-button ui 'hi 20 20 120 30 "Say hi" (lambda () (notify "hi"))))
 ;;;     (ui-handlers ui))
 ;;;
+;;; Widgets invalidate the window whose handler is running, (current-window).
+;;;
 ;;; This is a first experiment toward a GUI API, not a decision.
 
 (define-record-type ui-state
@@ -60,7 +62,7 @@
       (when (ui-region-on-drag r)
         (ui-state-active-set! ui r)
         ((ui-region-on-drag r) x y)))
-    (invalidate!)
+    (invalidate! (current-window))
     (and r #t)))
 
 (define (ui-mouse-move ui x y)
@@ -68,15 +70,15 @@
   (ui-state-my-set! ui y)
   (let ([a (ui-state-active ui)])
     (if a
-        (begin ((ui-region-on-drag a) x y) (invalidate!))
+        (begin ((ui-region-on-drag a) x y) (invalidate! (current-window)))
         (let* ([r (ui-region-at ui x y)] [id (and r (ui-region-id r))])
           (unless (equal? id (ui-state-hover-id ui))
             (ui-state-hover-id-set! ui id)
-            (invalidate!))))))
+            (invalidate! (current-window)))))))
 
 (define (ui-mouse-up ui)
   (ui-state-active-set! ui #f)
-  (invalidate!))
+  (invalidate! (current-window)))
 
 ;; Mouse handler options to splice into open-window.
 (define (ui-handlers ui)

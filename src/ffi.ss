@@ -44,8 +44,10 @@
 ;;; ------------------------------------------------------------------ SDL2
 
 (define SDL_INIT_VIDEO #x20)
+(define SDL_WINDOW_HIDDEN #x8)
 (define SDL_WINDOW_RESIZABLE #x20)
 (define SDL_WINDOW_ALLOW_HIGHDPI #x2000)
+(define SDL_WINDOW_FULLSCREEN_DESKTOP #x1001)
 (define SDL_WINDOWPOS_CENTERED #x2FFF0000)
 (define SDL_RENDERER_ACCELERATED 2)
 (define SDL_RENDERER_PRESENTVSYNC 4)
@@ -65,6 +67,8 @@
 (define SDL_WINDOWEVENT_RESIZED 5)
 (define SDL_WINDOWEVENT_SIZE_CHANGED 6)
 (define SDL_WINDOWEVENT_LEAVE 11)
+(define SDL_RENDER_TARGETS_RESET #x2000)
+(define SDL_RENDER_DEVICE_RESET #x2001)
 
 (define-foreign sdl-init "SDL_Init" (unsigned-32) int)
 (define-foreign sdl-quit "SDL_Quit" () void)
@@ -74,6 +78,9 @@
 (define-foreign sdl-destroy-window "SDL_DestroyWindow" (uptr) void)
 (define-foreign sdl-set-window-title "SDL_SetWindowTitle" (uptr string) void)
 (define-foreign sdl-set-window-minimum-size "SDL_SetWindowMinimumSize" (uptr int int) void)
+(define-foreign sdl-set-window-size "SDL_SetWindowSize" (uptr int int) void)
+(define-foreign sdl-set-window-position "SDL_SetWindowPosition" (uptr int int) void)
+(define-foreign sdl-show-window "SDL_ShowWindow" (uptr) void)
 (define-foreign sdl-get-window-size "SDL_GetWindowSize" (uptr uptr uptr) void)
 (define-foreign sdl-create-renderer "SDL_CreateRenderer" (uptr int unsigned-32) uptr)
 (define-foreign sdl-destroy-renderer "SDL_DestroyRenderer" (uptr) void)
@@ -91,6 +98,33 @@
 (define-foreign sdl-free "SDL_free" (uptr) void)
 (define-foreign sdl-create-system-cursor "SDL_CreateSystemCursor" (int) uptr)
 (define-foreign sdl-set-cursor "SDL_SetCursor" (uptr) void)
+(define-foreign sdl-set-window-fullscreen "SDL_SetWindowFullscreen" (uptr unsigned-32) int)
+(define-foreign sdl-get-window-flags "SDL_GetWindowFlags" (uptr) unsigned-32)
+(define-foreign sdl-create-rgb-surface-with-format-from "SDL_CreateRGBSurfaceWithFormatFrom"
+  (uptr int int int int unsigned-32) uptr)
+(define-foreign sdl-free-surface "SDL_FreeSurface" (uptr) void)
+(define-foreign sdl-set-window-icon "SDL_SetWindowIcon" (uptr uptr) void)
+(define-foreign sdl-get-current-video-driver "SDL_GetCurrentVideoDriver" () string)
+(define-foreign sdl-memcmp "SDL_memcmp" (uptr uptr size_t) int)
+(define-foreign sdl-memcpy "SDL_memcpy" (uptr uptr size_t) uptr)
+
+;;; ------------------------------------------------------------------ Xlib
+;;; Only to read the desktop's scale (Xft.dpi) when SDL runs on X11.
+
+(define libx11
+  (guard (c [#t #f]) (load-first-library '("libX11.so.6" "libX11.so"))))
+
+;; The X server's resource database as text (what `xrdb -query` prints), or #f.
+(define x-resource-string
+  (if libx11
+      (let ([open (foreign-procedure "XOpenDisplay" (uptr) uptr)]
+            [resources (foreign-procedure "XResourceManagerString" (uptr) string)]
+            [close (foreign-procedure "XCloseDisplay" (uptr) int)])
+        (lambda ()
+          (let ([d (open 0)])
+            (and (not (= d 0))
+                 (let ([s (resources d)]) (close d) s)))))
+      (lambda () #f)))
 
 ;;; ------------------------------------------------------------------ Cairo
 
@@ -103,9 +137,14 @@
 (define CAIRO_LINE_JOIN_ROUND 1)
 
 (define-foreign cairo-image-surface-create "cairo_image_surface_create" (int int int) uptr)
+(define-foreign cairo-image-surface-create-for-data "cairo_image_surface_create_for_data"
+  (uptr int int int int) uptr)
+(define-foreign cairo-image-surface-get-width "cairo_image_surface_get_width" (uptr) int)
+(define-foreign cairo-image-surface-get-height "cairo_image_surface_get_height" (uptr) int)
 (define-foreign cairo-image-surface-get-data "cairo_image_surface_get_data" (uptr) uptr)
 (define-foreign cairo-image-surface-get-stride "cairo_image_surface_get_stride" (uptr) int)
 (define-foreign cairo-surface-flush "cairo_surface_flush" (uptr) void)
+(define-foreign cairo-surface-mark-dirty "cairo_surface_mark_dirty" (uptr) void)
 (define-foreign cairo-surface-destroy "cairo_surface_destroy" (uptr) void)
 (define-foreign cairo-surface-write-to-png "cairo_surface_write_to_png" (uptr string) int)
 (define-foreign cairo-create "cairo_create" (uptr) uptr)
@@ -116,6 +155,12 @@
 (define-foreign cairo-translate "cairo_translate" (uptr double double) void)
 (define-foreign cairo-rotate "cairo_rotate" (uptr double) void)
 (define-foreign cairo-identity-matrix "cairo_identity_matrix" (uptr) void)
+;; Writes the six doubles xx yx xy yy x0 y0 to the given address.
+(define-foreign cairo-get-matrix "cairo_get_matrix" (uptr uptr) void)
+(define CAIRO_OPERATOR_CLEAR 0)
+(define CAIRO_OPERATOR_SOURCE 1)
+(define CAIRO_OPERATOR_OVER 2)
+(define-foreign cairo-set-operator "cairo_set_operator" (uptr int) void)
 (define-foreign cairo-set-source-rgba "cairo_set_source_rgba" (uptr double double double double) void)
 (define-foreign cairo-set-source "cairo_set_source" (uptr uptr) void)
 (define-foreign cairo-set-source-surface "cairo_set_source_surface" (uptr uptr double double) void)
@@ -146,3 +191,8 @@
 (define-foreign cairo-pattern-create-radial "cairo_pattern_create_radial" (double double double double double double) uptr)
 (define-foreign cairo-pattern-add-color-stop-rgba "cairo_pattern_add_color_stop_rgba" (uptr double double double double double) void)
 (define-foreign cairo-pattern-destroy "cairo_pattern_destroy" (uptr) void)
+(define-foreign cairo-pattern-create-for-surface "cairo_pattern_create_for_surface" (uptr) uptr)
+(define-foreign cairo-pattern-set-extend "cairo_pattern_set_extend" (uptr int) void)
+(define-foreign cairo-pattern-set-filter "cairo_pattern_set_filter" (uptr int) void)
+(define CAIRO_EXTEND_REPEAT 1)
+(define CAIRO_FILTER_NEAREST 3)
