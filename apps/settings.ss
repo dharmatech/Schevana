@@ -108,9 +108,7 @@
           (mutable pane-scroll)))
 
 (define (settings-set! key value)
-  (if (eq? key 'accent)
-      (set-accent! value)   ; keeps the keys derived from the accent in step
-      (set-theme! key value))
+  (set-theme! key value)
   (save-theme-soon!))
 
 ;; Title and subtitle of a tab; returns the y where its content starts.
@@ -129,14 +127,16 @@
       (fill-rect (+ x (* i (/ w n))) y (+ 1 (/ w n)) h
                  (color-at (/ (+ i 0.5) n))))))
 
-;; Cards (presets, window styles) are wide enough for their labels.
+;; Cards (presets, window styles) are wide enough for their labels, in
+;; whole pixels (text measures in fractions).
 (define (settings-card-label-height base)
   (max base (round (+ (font-line-height 'ui) (- base 18)))))
-(define (settings-card-width labels) (max 180 (+ 24 (widest-text labels 'ui))))
+(define (settings-card-width labels)
+  (max 180 (+ 24 (exact (ceiling (widest-text labels 'ui))))))
 
 ;; Lay cards out in a grid; draw-card gets (item x y). Returns the y below.
 (define (settings-card-grid items x y w cw ch draw-card)
-  (let* ([gap 12] [cols (max 1 (quotient (+ w gap) (+ cw gap)))])
+  (let* ([gap 12] [cols (max 1 (exact (floor (/ (+ w gap) (+ cw gap)))))])
     (let loop ([is items] [i 0])
       (unless (null? is)
         (draw-card (car is) (+ x (* (mod i cols) (+ cw gap)))
@@ -152,8 +152,7 @@
          [label-h (settings-card-label-height 30)] [r 10])
     (call-with-round-clip x y w h r
       (lambda ()
-        (fill-desktop-pattern x y w h
-                              (plist-ref colors 'desktop-pattern 'gradient)
+        (fill-desktop-pattern x y w h (plist-ref colors 'wallpaper 'gradient)
                               (c 'desktop-top) (c 'desktop-bottom))
         (let ([wx (+ x 18)] [wy (+ y 14)] [ww (- w 36)] [wh (- h label-h 22)])
           (fill-round-rect wx (+ wy 3) ww wh 5 (alpha #x000000 0.25))
@@ -186,14 +185,14 @@
          [ay (+ 10 (settings-card-grid (themes) x y0 w cw ch
                      (lambda (name cx cy)
                        (draw-preset-card cx cy cw ch name
-                                         (eq? name (theme 'preset))
+                                         (eq? name (theme 'palette))
                                          (ui-hover? ui cx cy cw ch))
                        (ui-area ui (list 'preset name) cx cy cw ch
                                 (lambda ()
                                   (apply-theme-preset! name)
                                   (save-theme-soon!))))))]
-         [palette (preset-colors (theme 'preset))]
-         [per-row (max 1 (quotient (+ w 8) 36))]
+         [palette (preset-colors (theme 'palette))]
+         [per-row (max 1 (exact (floor (/ (+ w 8) 36))))]
          [cy0 (round (+ ay (font-line-height 'ui-bold) 27))])
     (draw-text x ay "Accent color" 'text 'ui-bold)
     (let loop ([ks '(accent cyan teal green yellow orange red magenta accent-2)]
@@ -323,9 +322,7 @@
       (ui-button ui 'reset-color (if reset-below? sx (+ sx bw 10))
                  (if reset-below? (+ by bh 10) by)
                  reset-w bh "Reset to preset"
-                 (lambda ()
-                   (settings-set! key (plist-ref (preset-colors (theme 'preset))
-                                                 key (theme-default key))))))
+                 (lambda () (reset-style! key))))
     (let* ([hh (vector-ref hsl 2)]
            [ss (vector-ref hsl 3)]
            [ll (vector-ref hsl 4)]
@@ -394,7 +391,7 @@
         [r 10])
     (call-with-round-clip x y w h r
       (lambda ()
-        (fill-desktop-pattern x y w h (theme 'desktop-pattern)
+        (fill-desktop-pattern x y w h (theme 'wallpaper)
                               'desktop-top 'desktop-bottom)
         (draw-window-style-preview name x y w (- h label-h) 0.5)
         (fill-rect x (- (+ y h) label-h) w label-h 'panel)

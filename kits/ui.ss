@@ -1794,7 +1794,7 @@
 ;;; ------------------------------------------------------------------
 ;;; dropdown, date field and calendar
 
-;; choices: ((label . value) ...). Opens the shell's menu under it, the
+;; choices: ((label . value) ...). Opens the desktop's menu under it, the
 ;; current choice selected. opts: 'label (shown instead of the current
 ;; choice's), 'set (the choice matters: a filter in use), 'tip.
 (define (ui-dropdown ui id x y w h choices current on-select . opts)

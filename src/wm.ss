@@ -79,7 +79,8 @@
 ;;; A window that changes by itself over time (a clock, an animation) says
 ;;; so with invalidate!; one whose change also shows outside it (its title
 ;;; in the bars, say) asks for the whole screen. Of the rest, only the top
-;;; bar, with its status segments, is drawn again once a second.
+;;; bar, with its status segments, asks for itself once a second (its
+;;; surface's tick, desktop/topbar.ss).
 
 ;; the window whose handler is running
 (defvar current-window (make-thread-parameter #f))
@@ -140,23 +141,96 @@
                   [else 0]))))
 (define (title-height)
   (max (theme 'title-height) (chrome-min-height 'title-height)))
-(define (topbar-height)
-  (max (theme 'topbar-height) (chrome-min-height 'topbar-height)))
-(define (taskbar-height)
-  (max (theme 'taskbar-height) (chrome-min-height 'taskbar-height)))
-
-;; The area between the top bar and the taskbar.
-(define (desktop-rect)
-  (let ([top (topbar-height)] [bottom (taskbar-height)])
-    (values 0 top (screen-w) (- (screen-h) top bottom))))
-
-(define (topbar-rect) (values 0 0 (screen-w) (topbar-height)))
-
-(define (taskbar-rect)
-  (let ([h (taskbar-height)]) (values 0 (- (screen-h) h) (screen-w) h)))
 
 (define (point-in? px py x y w h)
   (and (>= px x) (< px (+ x w)) (>= py y) (< py (+ y h))))
+
+;;; ------------------------------------------------------------------
+;;; surfaces
+;;; What the window manager draws and routes besides windows: the desktop
+;;; under them (depth below 0), bars, menus and toasts over them, in depth
+;;; order. They are the desktop layer's (desktop/); the core names none of
+;;; its procedures. Each field is a procedure, or the name of one looked
+;;; up at each call, so the desktop layer's procedures stay redefinable.
+
+(define-record-type surface
+  (nongenerative schevana-surface-1)
+  (fields name depth
+          draw    ; ()                           draws it
+          box     ; () -> (values x y w h)       what it covers this frame
+          at      ; (x y) -> what, or #f         what is there; #f lets
+                  ;                              the point through
+          mouse   ; (kind what x y button clicks)    kind: down or move
+          key     ; (kind value mods) -> #t if taken; kind: key or text
+          tick))  ; ()                           each step, before a frame
+
+(defvar *surfaces* '())   ; by depth
+(set! *surfaces* (filter surface? *surfaces*))
+
+(define (register-surface! name depth . opts)
+  (set! *surfaces*
+    (list-sort (lambda (a b) (< (surface-depth a) (surface-depth b)))
+               (registry-add *surfaces*
+                 (make-surface name depth
+                   (plist-ref opts 'draw void)
+                   (plist-ref opts 'box (lambda () (values 0 0 0 0)))
+                   (plist-ref opts 'at (lambda (x y) #f))
+                   (plist-ref opts 'mouse void)
+                   (plist-ref opts 'key (lambda args #f))
+                   (plist-ref opts 'tick void))
+                 surface-name)))
+  (request-frame!)
+  name)
+
+;; (define-surface topbar 20 'draw 'draw-topbar 'box 'topbar-box ...)
+;; adds a surface, or replaces the one of that name.
+(define-syntax define-surface
+  (syntax-rules ()
+    [(_ name depth opt ...) (register-surface! 'name depth opt ...)]))
+
+(define (find-surface name)
+  (find (lambda (s) (eq? (surface-name s) name)) *surfaces*))
+
+(define (surfaces) (map surface-name *surfaces*))
+
+;; Calls a surface's field: a procedure, or the name of one.
+(define (surface-call s field . args)
+  (let ([v (field s)])
+    (apply (if (symbol? v) (top-level-value v *world-env*) v) args)))
+
+(define (over-windows? s) (>= (surface-depth s) 0))
+
+;; What s covers this frame, in device pixels (x0 y0 x1 y1).
+(define (surface-pixel-box s)
+  (call-with-values (lambda () (surface-call s surface-box)) pixel-box))
+
+;;; strips
+;; (define-strip topbar 'top 'topbar-height): the area windows go in loses
+;; (topbar-height) pixels at the top; strips on one edge add up.
+(defvar *strips* '())   ; ((name edge . size) ...)
+
+(define (register-strip! name edge size)
+  (set! *strips* (registry-add *strips* (cons* name edge size) car))
+  (wm-screen-resized!)
+  name)
+
+(define-syntax define-strip
+  (syntax-rules ()
+    [(_ name edge size) (register-strip! 'name edge size)]))
+
+;; Where windows go (maximized, tiled, kept on screen): the screen less
+;; every strip.
+(define (desktop-rect)
+  (define (edge e)
+    (apply + (map (lambda (s)
+                    (if (eq? (cadr s) e)
+                        (let ([n (cddr s)])
+                          ((if (symbol? n) (top-level-value n *world-env*) n)))
+                        0))
+                  *strips*)))
+  (let ([t (edge 'top)] [b (edge 'bottom)] [l (edge 'left)]
+        [r (edge 'right)])
+    (values l t (- (screen-w) l r) (- (screen-h) t b))))
 
 ;;; ------------------------------------------------------------------ apps
 
@@ -248,8 +322,8 @@
       [else
         (let ([k (mod *cascade* 8)])
           (set! *cascade* (+ *cascade* 1))
-          (window-x-set! win (min (+ 60 (* 34 k))
-                                  (max 0 (- dw (window-w win)))))
+          (window-x-set! win (+ dx (min (+ 60 (* 34 k))
+                                        (max 0 (- dw (window-w win))))))
           (window-y-set! win (min (+ dy 24 (* 30 k))
                                   (max dy (- (+ dy dh) (window-h win))))))])))
 
@@ -547,31 +621,47 @@
 
 ;;; ------------------------------------------------------------------ mouse
 
+;; What is at screen point (x, y): (surface name what) from the topmost
+;; surface over windows that answers, else (window win region), else
+;; (surface name what) from one under them; #f where nothing is.
+(define (screen-at x y)
+  (define (answer ss)
+    (exists (lambda (s)
+              (let ([what (surface-call s surface-at x y)])
+                (and what (list 'surface (surface-name s) what))))
+            ss))
+  (let ([ss (reverse *surfaces*)])   ; topmost first
+    (or (answer (filter over-windows? ss))
+        (let ([w (window-at x y)])
+          (and w (list 'window w (window-region w x y))))
+        (answer (remp over-windows? ss)))))
+
 (define (update-hover! x y)
-  (let ([h (cond
-             [(menu-open?) '(menu)]
-             [(< y (topbar-height)) (list 'topbar (topbar-item-at x y))]
-             [(>= y (- (screen-h) (taskbar-height)))
-              (list 'taskbar (taskbar-item-at x y))]
-             [(window-at x y)
-              => (lambda (w) (list 'window w (window-region w x y)))]
-             [else '(desktop)])])
+  (let ([h (screen-at x y)])
     (unless (equal? h *hover*)
       (request-hover-frame! *hover*)
       (set! *hover* h)
       (request-hover-frame! h))
     (host-set-cursor!
-     (if (eq? (car h) 'window) (region-cursor (cadr h) (caddr h)) 'arrow))))
+     (if (and h (eq? (car h) 'window))
+         (region-cursor (cadr h) (caddr h))
+         'arrow))))
 
-;; Asks for what shows the hover h: a window's extent, a bar, nothing for
-;; the desktop; the whole screen for the menu or anything else.
+;; Asks for what shows the hover h: a window's extent, a surface's box;
+;; nothing for a surface under the windows (the desktop draws no hover).
 (define (request-hover-frame! h)
   (case (and (pair? h) (car h))
     [(window) (invalidate! (cadr h))]
-    [(topbar) (call-with-values topbar-rect request-frame!)]
-    [(taskbar) (call-with-values taskbar-rect request-frame!)]
-    [(desktop #f) (void)]
-    [else (request-frame!)]))
+    [(surface)
+     (let ([s (find-surface (cadr h))])
+       (when (and s (over-windows? s))
+         (call-with-values (lambda () (surface-call s surface-box))
+           request-frame!)))]))
+
+;; The surface of the hover h (surface name what) acts on the mouse.
+(define (surface-mouse! h kind x y button clicks)
+  (let ([s (find-surface (cadr h))])
+    (when s (surface-call s surface-mouse kind (caddr h) x y button clicks))))
 
 (define (wm-mouse-move x y)
   (set! *mouse-x* x)
@@ -580,12 +670,13 @@
     (cond
       [(not d)
        (update-hover! x y)
-       (cond
-         [(menu-open?) (menu-mouse-move x y)]
-         [(and (eq? (car *hover*) 'window) (eq? (caddr *hover*) 'content))
-          (let ([win (cadr *hover*)])
-            (let-values ([(lx ly) (window-local win x y)])
-              (window-call win 'mouse-move lx ly)))])]
+       (let ([h *hover*])
+         (case (and h (car h))
+           [(surface) (surface-mouse! h 'move x y #f 0)]
+           [(window)
+            (when (eq? (caddr h) 'content)
+              (let-values ([(lx ly) (window-local (cadr h) x y)])
+                (window-call (cadr h) 'mouse-move lx ly)))]))]
       [(eq? (drag-kind d) 'move) (drag-move! d x y)]
       [(eq? (drag-kind d) 'capture)
        (let ([win (drag-win d)])
@@ -611,7 +702,7 @@
         (let-values ([(dx dy dw dh) (desktop-rect)])
           (move-window! win
                         (clamp (+ (drag-x d) (- x (drag-mx d)))
-                               (- 80 (window-w win)) (- dw 80))
+                               (- (+ dx 80) (window-w win)) (- (+ dx dw) 80))
                         (clamp (+ (drag-y d) (- y (drag-my d)))
                                dy (- (+ dy dh) 20)))))))
 
@@ -636,14 +727,10 @@
 (define (wm-mouse-down x y button clicks)
   (set! *mouse-x* x)
   (set! *mouse-y* y)
-  (cond
-    [(menu-open?)
-     (if (point-in-menu? x y) (menu-mouse-down x y) (close-menu!))]
-    [(< y (topbar-height)) (topbar-click x y button)]
-    [(>= y (- (screen-h) (taskbar-height))) (taskbar-click x y button)]
-    [(window-at x y)
-     => (lambda (win) (window-mouse-down win x y button clicks))]
-    [else (desktop-click x y button)]))
+  (let ([h (screen-at x y)])
+    (case (and h (car h))
+      [(surface) (surface-mouse! h 'down x y button clicks)]
+      [(window) (window-mouse-down (cadr h) x y button clicks)])))
 
 (define (window-mouse-down win x y button clicks)
   (let ([region (window-region win x y)])
@@ -657,7 +744,7 @@
       [(frame) (void)]
       [(title)
        (cond
-         [(eq? button 'right) (open-window-menu! win x y)]
+         [(eq? button 'right) (open-window-menu! win x y)]   ; desktop/menu.ss
          [(and (eq? button 'left) (>= clicks 2)) (toggle-maximize! win)]
          [(eq? button 'left)
           (set! *drag* (make-drag 'move win button x y
@@ -704,13 +791,12 @@
     (update-hover! x y)
     (request-frame!)))
 
+;; The window under the pointer scrolls, unless a surface over it (a bar,
+;; an open menu) is there.
 (define (wm-wheel dx dy)
-  (cond
-    [(menu-open?) (void)]
-    [(window-at *mouse-x* *mouse-y*)
-     => (lambda (win)
-          (when (eq? (window-region win *mouse-x* *mouse-y*) 'content)
-            (window-call win 'wheel dx dy)))]))
+  (let ([h (screen-at *mouse-x* *mouse-y*)])
+    (when (and h (eq? (car h) 'window) (eq? (caddr h) 'content))
+      (window-call (cadr h) 'wheel dx dy))))
 
 ;;; ------------------------------------------------------------------ keyboard
 
@@ -732,6 +818,11 @@
            (and (= (length want) (length mods))
                 (for-all (lambda (m) (memq m mods)) want))))))
 
+;; Does a surface take the key or text (an open menu), topmost first?
+(define (surface-key! kind value mods)
+  (exists (lambda (s) (surface-call s surface-key kind value mods))
+          (reverse *surfaces*)))
+
 (define (wm-key-down key mods)
   (cond
     [(memq key '(ctrl shift alt super)) (void)]
@@ -739,25 +830,25 @@
      => (lambda (b)
           (safe-call 'key-binding (cdr b)
                      (lambda (c) (report-error! 'key-binding c))))]
-    [(menu-open?) (menu-key key mods)]
+    [(surface-key! 'key key mods)]
     [*focus* (window-call *focus* 'key key mods)]))
 
 (define (wm-text str)
   (cond
-    [(menu-open?) (menu-text str)]
+    [(surface-key! 'text str '())]
     [*focus* (window-call *focus* 'text str)]))
 
 ;;; ------------------------------------------------------------------ tick
 
-(defvar *last-second* -1)
-
+;; Windows, then the toasts' expiry, then each surface, in depth order:
+;; the last may look at the frame the step will draw (*dirty*).
 (define (wm-tick!)
   (for-each (lambda (w) (window-call w 'tick)) *windows*)
-  (let ([s (time-second (current-time))])
-    (unless (= s *last-second*)   ; the status segments, once a second
-      (set! *last-second* s)
-      (call-with-values topbar-rect request-frame!)))
-  (expire-toasts!))
+  (expire-toasts!)
+  (for-each (lambda (s)
+              (safely (surface-name s)
+                      (lambda () (surface-call s surface-tick))))
+            *surfaces*))
 
 ;;; ------------------------------------------------------------------ drawing
 
@@ -790,47 +881,9 @@
                 (lambda ()
                   (fill-rect 0 0 cw ch (window-bg win))
                   (if (window-error win)
-                      (draw-crash-panel win cw ch)
+                      (draw-crash-panel win cw ch)   ; desktop/crash.ss
                       (window-call win 'draw cw ch)))))))))
     ((window-style-draw-over style) win x y w h focused? hover pressed)))
-
-(define (draw-crash-panel win w h)
-  (let ([err (window-error win)])
-    (fill-rect 0 0 w h (mix 'bg-1 'red 0.10))
-    (let* ([y1 (round (+ 14 (font-line-height 'ui-bold) 5))]
-           [y2 (round (+ y1 (font-line-height 'ui) 9))]
-           [hint-h (round (+ (font-line-height 'ui-small) 13))]
-           [hint? (> h (+ y2 hint-h 66))])
-      (draw-text 16 14 "This app crashed" 'red 'ui-bold)
-      (draw-text 16 y1 (format "in its '~a handler:" (car err)) 'text-dim 'ui)
-      (draw-wrapped-text 16 y2 (- w 32) (- h y2 (if hint? (+ hint-h 4) 4))
-                         (condition->string (cdr err)) 'text 'mono-small)
-      (when hint?
-        (draw-text 16 (- h hint-h)
-                   "Click to retry.  Fix it live: (window-on! win 'draw ...)"
-                   'text-faint 'ui-small)))))
-
-;; Character-wrapped text for monospace fonts; returns the y after the text.
-(define (draw-wrapped-text x y w h str color font)
-  (let* ([cw (font-char-width font)] [lh (+ 2 (font-line-height font))]
-         [cols (max 1 (exact (floor (/ w cw))))]
-         [bottom (+ y h)])
-    (let loop ([rows (wrap-lines str cols)] [y y])
-      (if (or (null? rows) (> (+ y lh) bottom))
-          y
-          (begin
-            (draw-text x y (car rows) color font)
-            (loop (cdr rows) (+ y lh)))))))
-
-(define (wrap-lines str cols)
-  (apply append
-         (map (lambda (line)
-                (let chunk ([s line] [acc '()])
-                  (if (<= (string-length s) cols)
-                      (reverse (cons s acc))
-                      (chunk (substring s cols (string-length s))
-                             (cons (substring s 0 cols) acc)))))
-              (string-split str #\newline))))
 
 ;; the last frame's time: drawing it, comparing its rows
 (defvar *frame-ms* 0.0)
@@ -860,15 +913,15 @@
        (cairo-set-operator cr CAIRO_OPERATOR_OVER)
        (cairo-scale cr *scale* *scale*)
        (fluid-let ([*cr* cr])
-         (safely 'desktop draw-desktop)
-         (for-each (lambda (w)
-                     (when (visible? w)
-                       (safely 'window (lambda () (draw-window-clipped w)))))
-                   (reverse *windows*))
-         (safely 'taskbar draw-taskbar)
-         (safely 'topbar draw-topbar)
-         (safely 'menu draw-menu)
-         (safely 'toasts draw-toasts))
+         (let ([draw (lambda (s)
+                       (safely (surface-name s)
+                               (lambda () (surface-call s surface-draw))))])
+           (for-each draw (remp over-windows? *surfaces*))
+           (for-each (lambda (w)
+                       (when (visible? w)
+                         (safely 'window (lambda () (draw-window-clipped w)))))
+                     (reverse *windows*))
+           (for-each draw (filter over-windows? *surfaces*))))
        (cairo-destroy cr)
        (cairo-surface-flush surface))]))
 
@@ -904,17 +957,18 @@
        (not (holds? a b))))
 
 ;; The frame's box: the area asked for (damage: #t, or (x0 y0 x1 y1)) in
-;; device pixels, grown until it cuts no window and no bar; the whole
-;; screen while a menu or a toast shows. Cairo draws what a clip cuts a
-;; little differently from the same drawing whole (another compositing
-;; path, pixman's spans started elsewhere), so a box that cut one would
-;; not show the whole screen's drawing there.
+;; device pixels, grown until it cuts no window and no surface over them
+;; (a menu's or the toasts' box is the whole screen while they show).
+;; Cairo draws what a clip cuts a little differently from the same
+;; drawing whole (another compositing path, pixman's spans started
+;; elsewhere), so a box that cut one would not show the whole screen's
+;; drawing there.
 (define (frame-box damage)
-  (if (or (eq? damage #t) (menu-open?) (pair? *toasts*))
+  (if (eq? damage #t)
       (list 0 0 *canvas-pw* *canvas-ph*)
-      (let ([items (cons* (call-with-values topbar-rect pixel-box)
-                          (call-with-values taskbar-rect pixel-box)
-                          (map extent-box (filter visible? *windows*)))])
+      (let ([items (append (map surface-pixel-box
+                                (filter over-windows? *surfaces*))
+                           (map extent-box (filter visible? *windows*)))])
         (let grow ([b (apply (lambda (x0 y0 x1 y1)
                                (pixel-box x0 y0 (- x1 x0) (- y1 y0)))
                              damage)])
@@ -926,10 +980,11 @@
 ;; box's rows are compared with the screen's, and those that changed are
 ;; copied onto the screen (gfx.ss), where they wait for the host's upload.
 ;; That is enough because after every frame the second buffer equals the
-;; screen; a new canvas or second buffer asks for the whole screen. So
-;; does a new picture of the wallpaper. A process may be switched out at
-;; any call while the main loop draws on, so typed in a REPL (a process)
-;; or called by a handler, (render-frame!) only asks for a frame.
+;; screen; a new canvas or second buffer asks for the whole screen. (So
+;; does a new picture of the wallpaper: the desktop's tick asks.) A
+;; process may be switched out at any call while the main loop draws on,
+;; so typed in a REPL (a process) or called by a handler, (render-frame!)
+;; only asks for a frame.
 (define render-frame!
   (case-lambda
     [() (render-frame! #t)]
@@ -939,10 +994,7 @@
        [(in-engine?) (request-frame!)]
        [else
         (let* ([t0 (current-time 'time-monotonic)]
-               [box (frame-box (or (wallpaper-stale?) damage))])
-          ;; the status changes only with the top bar that shows it
-          (when (holds? box (call-with-values topbar-rect pixel-box))
-            (refresh-status!))
+               [box (frame-box damage)])
           (apply (lambda (x0 y0 x1 y1)
                    (render-full-into! *back* x0 y0 x1 y1)
                    (set! *upload-rows*

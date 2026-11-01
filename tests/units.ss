@@ -1,7 +1,8 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
 ;;; context, pixmaps, Life's generations and grid, and invalidation; the
 ;;; edit kit (editing, rows and their lazy layout), the widget kit's dates
-;;; and layout, and Tasks' own procedures.
+;;; and layout, Tasks' own procedures, and the window manager's surfaces
+;;; and strips.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -2234,6 +2235,319 @@
            (for-all (lambda (c) (and (= (car c) (caddr c))
                                      (= (cadr c) (cadddr c))))
                     counts))))
+
+;;; ------------------------------------------------------------------
+;;; surfaces and strips
+
+;; The canvas's pixel at logical point (x, y).
+(define (canvas-pixel x y)
+  (cairo-surface-flush *canvas*)
+  (pixel-at *canvas* (exact (floor (* x *scale*)))
+            (exact (floor (* y *scale*)))))
+
+;; With no surface registered (no desktop layer) the world draws its
+;; windows on black, maximizes them to the whole screen, and a press,
+;; a key or the wheel where nothing is goes nowhere.
+(let* ([ss *surfaces*] [strips *strips*] [keys 0]
+       [w (open-window "Alone" 'size '(200 . 100) 'pos '(300 . 200)
+                       'draw (lambda (win cw ch)
+                               (fill-rect 0 0 cw ch #x336699))
+                       'key (lambda (win key mods) (set! keys (+ keys 1))))])
+  (set! *surfaces* '())
+  (set! *strips* '())
+  (invalidate!)
+  (steps 1)
+  (let-values ([(cx cy cw ch) (content-rect w)])
+    (let ([inside (canvas-pixel (+ cx 50) (+ cy 50))]
+          [around (map (lambda (p) (canvas-pixel (car p) (cdr p)))
+                       '((5 . 5) (640 . 790) (1270 . 400)))])
+      (inject! '(mouse-move 20 400) '(mouse-down 20 400 left 1)
+               '(mouse-up 20 400 left) '(wheel 0 1) '(key-down #\a ()))
+      (steps 1)
+      (maximize-window! w)
+      (let ([whole (list (window-x w) (window-y w) (window-w w) (window-h w))]
+            [hover *hover*])
+        (set! *surfaces* ss)
+        (set! *strips* strips)
+        (close-window! w)
+        (steps 1)
+        (check (format "with no surface registered the windows are drawn on \
+                        black (#x~x, ~s), maximize to the screen (~s), and \
+                        input where nothing is goes nowhere (~s; keys \
+                        to the window ~a)"
+                       inside around whole hover keys)
+               (and (= inside #xff336699)
+                    (equal? around '(#xff000000 #xff000000 #xff000000))
+                    (equal? whole (list 0 0 (screen-w) (screen-h)))
+                    (not hover) (= keys 1)))))))
+
+;; A surface of one's own with a strip on the left: it is drawn over the
+;; windows, takes the presses on it, and maximized windows go beside it.
+(let* ([pressed '()]
+       [w (open-window "Beside" 'size '(200 . 100) 'pos '(300 . 200))])
+  (define-surface dock 15
+    'draw (lambda () (fill-rect 0 0 64 (screen-h) #xcc3300))
+    'box (lambda () (values 0 0 64 (screen-h)))
+    'at (lambda (x y) (and (< x 64) 'dock))
+    'mouse (lambda (kind what x y button clicks)
+             (set! pressed (cons (list kind what button) pressed))))
+  (define-strip dock 'left (lambda () 64))
+  (maximize-window! w)
+  (steps 1)
+  (let-values ([(dx dy dw dh) (desktop-rect)])
+    (let ([at (list (window-x w) (window-y w) (window-w w) (window-h w))]
+          [px (canvas-pixel 30 400)])
+      (inject! '(mouse-move 30 400) '(mouse-down 30 400 left 1)
+               '(mouse-up 30 400 left))
+      (steps 1)
+      (let ([hover *hover*])
+        (set! *surfaces* (remp (lambda (s) (eq? (surface-name s) 'dock))
+                               *surfaces*))
+        (set! *strips* (remp (lambda (s) (eq? (car s) 'dock)) *strips*))
+        (wm-screen-resized!)
+        (let ([back (window-x w)])
+          (close-window! w)
+          (steps 1)
+          (check (format "a surface with a strip on the left: maximized \
+                          windows beside it ~s, drawn over them (#x~x), \
+                          its presses ~s, hovered ~s; gone, they fill the \
+                          left again (~a)" at px pressed hover back)
+                 (and (equal? at (list 64 (topbar-height) (- (screen-w) 64)
+                                       (- (screen-h) (topbar-height)
+                                          (taskbar-height))))
+                      (equal? (list dx dy dw dh) at)
+                      (= px #xffcc3300)
+                      (equal? pressed '((down dock left) (move dock #f)))
+                      (equal? hover '(surface dock dock))
+                      (= back 0))))))))
+
+;;; ------------------------------------------------------------------
+;;; settings in layers
+
+;; thunk run with mac a style of these settings (its own options, say),
+;; as a style that gives settings is; your changes and Overrides cleared
+;; before and after.
+(define (with-mac-settings settings thunk)
+  (let ([chain style-chain])
+    (dynamic-wind
+      (lambda ()
+        (set! style-chain (lambda (name) (list (cons name settings))))
+        (set-style! 'mac)
+        (reset-theme!))
+      thunk
+      (lambda ()
+        (set! style-chain chain)
+        (reset-theme!)))))
+
+;; The accent and where it comes from, after each layer gives one.
+(check "a setting comes from the first layer that has it: the Overrides, \
+        your changes to the style, the style, its palette, the built-ins"
+       (let ([at (lambda () (list (theme 'accent) (theme-source 'accent)))])
+         (equal?
+          (list (with-mac-settings '() at)
+                (with-mac-settings '()
+                  (lambda () (set-theme! 'palette 'nord) (at)))
+                (with-mac-settings '(accent #x112233)
+                  (lambda () (set-theme! 'palette 'nord) (at)))
+                (with-mac-settings '(accent #x112233)
+                  (lambda () (set-theme! 'accent #x445566) (at)))
+                (with-mac-settings '(accent #x112233)
+                  (lambda ()
+                    (set-theme! 'accent #x445566)
+                    (override! 'accent #x778899)
+                    (let ([over (at)])
+                      (override! 'accent)
+                      (let ([cleared (at)])
+                        (reset-style! 'accent)
+                        (list over cleared (at)))))))
+          '((#x7aa2f7 (built-in #x7aa2f7))
+            (#x88c0d0 (palette nord #x88c0d0))
+            (#x112233 (style mac #x112233))
+            (#x445566 (changes mac #x445566))
+            ((#x778899 (overrides #x778899))
+             (#x445566 (changes mac #x445566))
+             (#x112233 (style mac #x112233)))))))
+
+;; A style that lists its options honors only those of the common ones:
+;; the others keep its value under your changes and Overrides; keys that
+;; are not common options are always yours.
+(check "a style honors the common options it lists, and every other key"
+       (equal?
+        (with-mac-settings '(options (accent) corner-radius 3)
+          (lambda ()
+            (override! 'corner-radius 12)
+            (set-theme! 'ui-font-size 20)
+            (override! 'accent #x778899)
+            (set-theme! 'red #x010203)
+            (map theme '(corner-radius ui-font-size accent red))))
+        '(3 13 #x778899 #x010203)))
+
+(check "a rule computed from itself is named, and the theme stays"
+       (with-mac-settings '()
+         (lambda ()
+           (set-changes! 'mac (list 'loop-a (rule (theme 'loop-b))
+                                    'loop-b (rule (theme 'loop-a))))
+           (let* ([before *theme*]
+                  [msg (guard (c [#t (condition->string c)])
+                         (theme-changed!)
+                         #f)])
+             (set-changes! 'mac '())
+             (and msg (string-contains-ci? msg "computed from itself")
+                  (or (string-contains-ci? msg "loop-a")
+                      (string-contains-ci? msg "loop-b"))
+                  (eq? *theme* before))))))
+
+(check "a base color changed re-derives what its rules derive from it"
+       (with-mac-settings '()
+         (lambda ()
+           (set-theme! 'accent #xff9e64)
+           (set-theme! 'bg-3 #x404040)
+           (and (= (theme 'selection) (mix #xff9e64 'bg-1 0.65))
+                (= (theme 'window-border-focus) (mix #x404040 #xff9e64 0.45))
+                (= (theme 'panel-hover) #x404040)
+                (= (theme 'button-idle) (mix #x404040 'text 0.15))))))
+
+;; Files today's tree wrote (tests' fixtures, from .work): Tokyo Night
+;; with an accent and a radius, Nord with a radius, Genera with its
+;; palette and an accent of its own, and one naming a style and a palette
+;; since removed. Each loads to what today's tree resolved from it: its
+;; own values, the built-in ones elsewhere; its style and palette chosen
+;; (mac and Tokyo Night where gone), and only your choices kept as changes.
+(define old-theme-files
+  '((default (accent . #xff9e64) (selection . #x6a493c)
+             (window-border-focus . #x896051) (corner-radius . 4))
+    (nord (bg-0 . #x242933) (bg-1 . #x2e3440) (bg-2 . #x353c4a)
+          (bg-3 . #x3b4252) (text . #xeceff4) (text-dim . #xd8dee9)
+          (text-faint . #x6d7a96) (accent . #x88c0d0) (accent-2 . #xb48ead)
+          (red . #xbf616a) (orange . #xd08770) (yellow . #xebcb8b)
+          (green . #xa3be8c) (cyan . #x8fbcbb) (teal . #x8fbcbb)
+          (magenta . #xb48ead) (selection . #x4e6572)
+          (desktop-top . #x252a34) (desktop-bottom . #x3a4660)
+          (panel . #x1f232b) (panel-text . #xeceff4) (panel-dim . #x6d7a96)
+          (panel-hover . #x3b4252) (window-bg . #x2e3440)
+          (window-border . #x49505f) (window-border-focus . #x5e7b8b)
+          (title-bg . #x353c4a) (title-bg-focus . #x3b4252)
+          (title-text . #xeceff4) (title-text-dim . #x6d7a96)
+          (button-close . #xbf616a) (button-min . #xebcb8b)
+          (button-max . #xa3be8c) (button-idle . #x565c6a)
+          (corner-radius . 4) (preset . nord))
+    (genera (bg-0 . #xffffff) (bg-1 . #xffffff) (bg-2 . #xf0f0f0)
+            (bg-3 . #xd8d8d8) (text . #x000000) (text-dim . #x222222)
+            (text-faint . #x666666) (accent . #x3366cc) (accent-2 . #x444444)
+            (red . #x8b0000) (orange . #x6b4400) (yellow . #x5c5c00)
+            (green . #x1f5f1f) (cyan . #x1f5566) (teal . #x1f5f55)
+            (magenta . #x661f66) (selection . #xb8c9ed)
+            (desktop-top . #xffffff) (desktop-bottom . #xffffff)
+            (watermark . #x000000) (panel . #x000000) (panel-text . #xffffff)
+            (panel-dim . #xb4b4b4) (panel-hover . #x383838)
+            (window-bg . #xffffff) (window-border . #xc7c7c7)
+            (window-border-focus . #x8ea5d3) (title-bg . #xf0f0f0)
+            (title-bg-focus . #xd8d8d8) (title-text . #x000000)
+            (title-text-dim . #x666666) (button-close . #x8b0000)
+            (button-min . #x5c5c00) (button-max . #x1f5f1f)
+            (button-idle . #xb8b8b8) (window-style . genera)
+            (preset . genera) (desktop-pattern . flat))
+    (deleted (window-style . amiga) (preset . workbench) (corner-radius . 4))))
+
+(define (write-theme-file! data)
+  (call-with-output-file *theme-file* (lambda (p) (write data p)) 'replace))
+
+(let* ([fresh (let ([t (resolve-theme 'mac '() '())])
+                (compute-rules! t)
+                t)]
+       [loaded
+        (map (lambda (f)
+               (let ([file (cdr f)])
+                 (write-theme-file! file)
+                 (load-saved-theme!)
+                 (list (car f)
+                       (for-all (lambda (k)
+                                  (equal? (theme k)
+                                          (let ([p (assq k file)])
+                                            (if p
+                                                (cdr p)
+                                                (hashtable-ref fresh k #f)))))
+                                color-keys)
+                       (theme 'window-style) (theme 'palette)
+                       (theme 'corner-radius) (theme 'wallpaper)
+                       *changes*)))
+             old-theme-files)])
+  (set-style! 'mac)
+  (reset-theme!)
+  (check (format "old theme files load to the colors today's tree resolved \
+                  from them, and your choices as the style's changes: ~s"
+                 loaded)
+         (equal? loaded
+                 '((default #t mac tokyo-night 4 gradient
+                            ((mac palette tokyo-night accent #xff9e64
+                                  corner-radius 4)))
+                   (nord #t mac nord 4 gradient
+                         ((mac palette nord corner-radius 4)))
+                   (genera #t genera genera 9 flat
+                           ((genera palette genera accent #x3366cc)))
+                   (deleted #t mac tokyo-night 4 gradient
+                            ((mac palette tokyo-night corner-radius 4)))))))
+
+;; Saved, cleared and loaded: the chosen style, the scale, the Overrides
+;; and every style's changes come back; the file is plain data, its colors
+;; in hex.
+(check "the theme file round-trips: style, scale, Overrides, changes"
+       (let ([text (lambda ()
+                     (call-with-input-file *theme-file* get-string-all))])
+         (set-style! 'genera)
+         (set-theme! 'palette 'nord)
+         (set-theme! 'corner-radius 4)
+         (set-style! 'mac)
+         (set-theme! 'accent #xff9e64)
+         (override! 'ui-font-size 15)
+         (let ([state (list *style-name* *scale-setting* *overrides*
+                            *changes*)]
+               [file (begin (save-theme!) (text))])
+           (set-style! 'windows)
+           (reset-theme!)
+           (load-saved-theme!)
+           (let ([back (list *style-name* *scale-setting* *overrides*
+                             *changes*)])
+             (reset-theme!)
+             (set-style! 'mac)
+             (and (equal? back state)
+                  (string-contains-ci? file "(accent . #xff9e64)")
+                  (string-contains-ci? file "(version . 2)")
+                  (equal? (theme 'ui-font-size) 13))))))
+
+;; Every palette, Tokyo Night too, derives what it does not give as
+;; today's tree derived it (derive-colors, as it was).
+(define (derived-as-today palette)
+  (define (ref k) (plist-ref palette k #f))
+  (define (unless-given p)
+    (cond [(null? p) '()]
+          [(ref (car p)) (unless-given (cddr p))]
+          [else (cons* (car p) (cadr p) (unless-given (cddr p)))]))
+  (append palette
+          (unless-given
+           (list 'selection (mix (ref 'accent) (ref 'bg-1) 0.65)
+                 'panel-text (ref 'text) 'panel-dim (ref 'text-faint)
+                 'panel-hover (ref 'bg-3) 'window-bg (ref 'bg-1)
+                 'window-border (mix (ref 'bg-3) (ref 'text) 0.08)
+                 'window-border-focus (mix (ref 'bg-3) (ref 'accent) 0.45)
+                 'title-bg (ref 'bg-2) 'title-bg-focus (ref 'bg-3)
+                 'title-text (ref 'text) 'title-text-dim (ref 'text-faint)
+                 'button-close (ref 'red) 'button-min (ref 'yellow)
+                 'button-max (ref 'green)
+                 'button-idle (mix (ref 'bg-3) (ref 'text) 0.15)))))
+
+(check (format "every palette resolves to its colors derived as today's \
+                tree derived them (~a)" (themes))
+       (for-all (lambda (name)
+                  (let* ([given (let ([p (palette-colors name)])
+                                  (if (null? p) base-colors p))]
+                         [today (derived-as-today given)]
+                         [now (preset-colors name)])
+                    (for-all (lambda (k)
+                               (equal? (plist-ref now k #f)
+                                       (plist-ref today k #f)))
+                             color-keys)))
+                (themes)))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)

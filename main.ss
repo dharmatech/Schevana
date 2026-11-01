@@ -14,8 +14,9 @@
     (if (string=? dir "") "." dir)))
 
 (load (string-append *schevana-root* "/load.ss"))
-;; ~/.schevana.d's kits, styles, themes, wallpapers and apps, before the
-;; saved theme is loaded: it may name a style or palette of the user's.
+;; ~/.schevana.d's kits, desktop, styles, themes, wallpapers and apps,
+;; before the saved theme is loaded: it may name a style or palette of the
+;; user's.
 (load-user-folders!)
 
 (define (parse-size s)

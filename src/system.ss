@@ -110,31 +110,6 @@
 
 ;;; ------------------------------------------------------------------ boot
 
-(define default-global-keys
-  `(((f1) . ,(lambda () (toggle-launcher!)))
-    ((ctrl tab) . ,(lambda () (cycle-windows!)))
-    ((ctrl shift #\w) . ,(lambda () (close-focused-window!)))
-    ((ctrl shift #\m) . ,(lambda () (when *focus* (toggle-maximize! *focus*))))
-    ((ctrl shift #\n) . ,(lambda () (when *focus* (minimize-window! *focus*))))
-    ((ctrl shift #\t) . ,(lambda () (tile-windows!)))
-    ((ctrl shift #\r) . ,(lambda () (launch-app 'repl)))
-    ((ctrl shift #\p) . ,(lambda () (launch-app 'private-repl)))
-    ((f11) . ,(lambda () (toggle-fullscreen!)))
-    ((f12) . ,(lambda ()
-                (notify (format "Saved ~a"
-                                (screenshot (next-screenshot-path))))))))
-
-(define (install-default-keys!)
-  (for-each (lambda (b)
-              (unless (assoc (car b) *global-keys*)
-                (bind-key! (car b) (cdr b))))
-            default-global-keys))
-
-(define (next-screenshot-path)
-  (let loop ([i 1])
-    (let ([p (format "~a/schevana-~a.png" (or (getenv "HOME") ".") i)])
-      (if (file-exists? p) (loop (+ i 1)) p))))
-
 (define user-init-file
   (format "~a/.schevana.ss" (or (getenv "HOME") ".")))
 
@@ -142,8 +117,8 @@
   (when (file-exists? user-init-file)
     (safely 'init (lambda () (load user-init-file)))))
 
-;; The user's own folder: lib for libraries, and kits, styles, themes,
-;; wallpapers and apps like the tree's (see source-folders).
+;; The user's own folder: lib for libraries, and kits, desktop, styles,
+;; themes, wallpapers and apps like the tree's (see source-folders).
 (define user-directory (format "~a/.schevana.d" (or (getenv "HOME") ".")))
 
 ;; (import (acme math)) also finds acme/math.sls here.
@@ -164,8 +139,6 @@
 ;; (schevana-boot! 'sdl 1280 800 #t) starts full screen.
 (define (schevana-boot! mode w h . fullscreen?)
   (apply host-init! mode w h fullscreen?)
-  (install-default-keys!)
-  (install-default-status!)
   (invalidate!))
 
 ;;; ------------------------------------------------------------------ sources
@@ -175,7 +148,8 @@
 ;;; folders from ~/.schevana.d.
 
 ;; The folders after the core, in load order.
-(define source-folders '("kits" "styles" "themes" "wallpapers" "apps"))
+(define source-folders
+  '("kits" "desktop" "styles" "themes" "wallpapers" "apps"))
 
 ;; main.ss turns this on: a real session loads the user's folders too, at
 ;; boot and at every (reload!). The tests never do.

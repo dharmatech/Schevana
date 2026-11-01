@@ -819,14 +819,14 @@
                       'draw (lambda (win cw ch) (car '())))])
   (let ([crashed (matches-reference? 'crashed-window)])
     (close-window! w)
-    (let ([plain refresh-status!] [frames *frames-drawn*] [u0 *upload-bytes*])
-      (set! refresh-status! (lambda () (error 'refresh-status! "on purpose")))
+    (let ([plain frame-box] [frames *frames-drawn*] [u0 *upload-bytes*])
+      (set! frame-box (lambda (damage) (error 'frame-box "on purpose")))
       (parameterize ([console-error-port (open-output-string)])
         (invalidate!)
         (steps 1))
       (let ([shown? (or (not (= frames *frames-drawn*))
                         (not (= u0 *upload-bytes*)))])
-        (set! refresh-status! plain)
+        (set! frame-box plain)
         (set! *toasts* '())
         (check (format
                 "a draw that raises crashes its window, and the frame is the \
@@ -1355,7 +1355,7 @@
                     (matches-reference? 'wallpaper-back)))))))
 
 ;; The wallpaper in use, defined again, shows on the next frame.
-(let ([pattern (theme 'desktop-pattern)] [plain *wallpapers*])
+(let ([pattern (theme 'wallpaper)] [plain *wallpapers*])
   (set-theme! 'desktop-pattern 'flat)
   (steps 1)
   (let ([px0 (desktop-pixel)])

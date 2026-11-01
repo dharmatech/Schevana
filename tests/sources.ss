@@ -4,9 +4,10 @@
 ;;;
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; every file
-;;; in a folder registers what it defines; and in the widget kit and Tasks
-;;; only the drawing procedures draw or name a color, and the edit kit
-;;; never does. Fast: it loads the world but does not boot it.
+;;; in a folder registers what it defines (a kit's names keep its prefix;
+;;; desktop/, like src/, defines plain names); and in the widget kit and
+;;; Tasks only the drawing procedures draw or name a color, and the edit
+;;; kit never does. Fast: it loads the world but does not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -111,6 +112,8 @@
           [(define-window-style) (names 'style (list head))]
           [(define-theme) (names 'theme (list head))]
           [(define-wallpaper) (names 'wallpaper (list head))]
+          [(define-surface) (names 'surface (list head))]
+          [(define-strip) (names 'strip (list head))]
           [else '()]))
       '()))
 
@@ -160,6 +163,7 @@
 
 ;; Each file in styles/, themes/ and wallpapers/ defines one of its kind,
 ;; named after the file; each in apps/ at least the app named after it.
+;; desktop/ has no kind and no prefix: its files define plain names.
 (define folder-kinds
   '(("styles" . style) ("themes" . theme) ("wallpapers" . wallpaper)
     ("apps" . app)))
@@ -172,7 +176,9 @@
     [(app) (and (memq (cdr d) (apps)) #t)]
     [(style) (and (find-window-style (cdr d)) #t)]
     [(theme) (and (assq (cdr d) *themes*) #t)]
-    [(wallpaper) (and (assq (cdr d) *wallpapers*) #t)]))
+    [(wallpaper) (and (assq (cdr d) *wallpapers*) #t)]
+    [(surface) (and (find-surface (cdr d)) #t)]
+    [(strip) (and (assq (cdr d) *strips*) #t)]))
 
 (define (folder-problems f)
   (let* ([ds (definitions f)]
@@ -184,6 +190,7 @@
             (format "~a: ~a ~a is not registered" f (car d) (cdr d)))
           (remp registered? ds))
      (cond
+       [(equal? (file-folder f) "desktop") '()]
        [(not kind)
         ;; a kit: its names start with its own (ui-, make-ui-state), or
         ;; are its record's of the same name (edit, make-edit, edit?)

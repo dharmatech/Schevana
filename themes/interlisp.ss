@@ -9,4 +9,4 @@
     green #x1f5f1f cyan #x1f5566 teal #x1f5f55 magenta #x661f66
     desktop-top #xffffff desktop-bottom #x000000 watermark #x000000
     panel #xffffff
-    desktop-pattern shade))
+    wallpaper shade))

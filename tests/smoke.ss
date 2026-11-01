@@ -543,7 +543,7 @@
                 (member '(genera . "Genera, again")
                         (named *window-styles* window-style-name
                                window-style-title))
-                (equal? (preset-colors 'nord) default-colors)
+                (equal? (preset-colors 'nord) (preset-colors 'tokyo-night))
                 (equal? (preset-title 'nord) "Nord, again")
                 (member '(flat . "Flat, again") (named *wallpapers* car cadr))
                 (member '(clock . "Clock, again")
@@ -554,14 +554,16 @@
   (set! *apps* apps0)
   (wm-chrome-changed!))
 
+;; a palette is a change to the style chosen
+(set-theme! 'window-style 'interlisp)
 (apply-theme-preset! 'interlisp)
 (style-scene! 'interlisp)
 (screenshot (string-append out-dir "/style-interlisp-palette.png"))
 (check "the interlisp palette shades the desktop"
-       (eq? (theme 'desktop-pattern) 'shade))
+       (eq? (theme 'wallpaper) 'shade))
 (apply-theme-preset! 'nord)
 (check "and other palettes go back to the gradient"
-       (eq? (theme 'desktop-pattern) 'gradient))
+       (eq? (theme 'wallpaper) 'gradient))
 ;; A theme saved before Amiga and Workbench were removed still loads.
 (reset-theme!)
 (call-with-output-file *theme-file*
@@ -571,7 +573,7 @@
 (load-saved-theme!)
 (check
  "a saved theme naming a removed style or palette falls back to the defaults"
- (and (eq? (theme 'window-style) 'mac) (eq? (theme 'preset) 'tokyo-night)
+ (and (eq? (theme 'window-style) 'mac) (eq? (theme 'palette) 'tokyo-night)
       (= 4 (theme 'corner-radius))))
 (delete-file *theme-file*)
 (reset-theme!)
@@ -592,7 +594,7 @@
 (check "settings is single-instance" (eq? s (settings)))
 (click-ui! s '(preset nord))
 (check "clicking a preset applies it"
-       (and (= (theme 'accent) #x88c0d0) (eq? (theme 'preset) 'nord)))
+       (and (= (theme 'accent) #x88c0d0) (eq? (theme 'palette) 'nord)))
 (screenshot (string-append out-dir "/settings-theme.png"))
 (click-ui! s '(accent orange))
 (check "accent swatch sets the accent" (= (theme 'accent) #xd08770))
@@ -689,7 +691,7 @@
   (load-saved-theme!)
   (check "saved theme loads back"
          (and (= (theme 'accent) saved-accent) (= 0 (theme 'corner-radius))
-              (eq? (theme 'preset) 'nord)
+              (eq? (theme 'palette) 'nord)
               (equal? (theme 'ui-font) "serif"))))
 (apply-theme-preset! 'paper)
 (set-theme! 'title-height 30)

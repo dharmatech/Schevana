@@ -27,7 +27,7 @@
 (defvar *headless-size* '(1280 . 800))
 
 ;; Who the host window is to the desktop: its app id under Wayland, its
-;; class under X11. The desktop entry (src/shell.ss) names it too.
+;; class under X11. The desktop entry (desktop/icon.ss) names it too.
 (define host-app-id "schevana")
 
 ;;; ------------------------------------------------------------------ scale

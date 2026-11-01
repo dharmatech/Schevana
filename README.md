@@ -103,11 +103,13 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolor everything
-; or: tokyo-night catppuccin nord gruvbox interlisp genera
-(apply-theme-preset! 'paper)
 (set-theme! 'window-style 'cons)           ; or: mac genera fold ...
+; or: tokyo-night catppuccin nord gruvbox interlisp genera
+(set-theme! 'palette 'paper)               ; remembered for cons
 (open-window "Odd one out" 'window-style 'windows)   ; per-window override
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
+(override! 'ui-font-size 15)               ; ... in every style
+(theme-source 'accent)                     ; which layer gives it
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
 (bind-key! '(ctrl shift #\l) life)
 ; watch it in (monitor); Ctrl+C or kill!
@@ -151,12 +153,12 @@ name again and the new definition takes the old one's place.
     cyan #x89ddff teal #x80cbc4 magenta #xc792ea
     desktop-top #x1c1a26 desktop-bottom #x3a2a40 watermark #xffffff
     panel #x111017))
-(apply-theme-preset! 'dusk)                ; or click it in Settings
+(set-theme! 'palette 'dusk)                ; or click it in Settings
 (define-wallpaper stripes "Stripes"
   (lambda (x y w h top bottom)
     (fill-rect x y w h top)
     (do ([i 0 (+ i 24)]) ((>= i h)) (fill-rect x (+ y i) w 12 bottom))))
-(set-theme! 'desktop-pattern 'stripes)
+(set-theme! 'wallpaper 'stripes)
 (define-window-style bare "Bare"
   'insets (lambda (win) (values 0 8 0 0))
   'draw-under (lambda (win x y w h focused? hover pressed)
@@ -166,12 +168,13 @@ name again and the new definition takes the old one's place.
 
 To keep one, drop it into a file of its own in `~/.schevana.d/`, under
 `apps/`, `styles/`, `themes/` or `wallpapers/`, with any code your apps
-share under `kits/`. These folders load at boot after Schevana's own
-(`kits` first, then `styles`, `themes`, `wallpapers` and `apps`, each in
+share under `kits/` and your own bars, menus or keys under `desktop/`.
+These folders load at boot after Schevana's own (`kits` first, then
+`desktop`, `styles`, `themes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
 styles and themes with the others, and the saved look may name them.
-`(apps)`, `(window-styles)`, `(themes)` and `(wallpapers)` list what is
-registered.
+`(apps)`, `(window-styles)`, `(themes)`, `(wallpapers)` and
+`(surfaces)` list what is registered.
 
 ## Architecture
 
@@ -183,29 +186,52 @@ themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
              tokyo-night
 styles/      window styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
+desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
+             toasts; status segments, the crash panel, the app icon, the
+             default keys
 kits/        edit: text editing, pure, and a text's rows, computed only as
              far as they are shown; ui: immediate-mode widgets (buttons,
              text fields and areas, dropdowns, tabs, checkboxes, a table,
              a tree, chips, a date picker, scroll views, tooltips, a
              dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
-src/shell    wallpapers, top bar + status segments, taskbar, menus, toasts
 src/styles   window styles: the record, the registry, previews
-src/wm       window records, z-order, focus, hit testing, drag/resize, dispatch
-src/proc     processes + watchdog (Chez engines)
+src/wm       window records, z-order, focus, hit testing, drag/resize,
+             dispatch; the registries of surfaces and strips
+src/proc     processes + watchdog (Chez engines); notify, report-error!
 src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors, fonts, layers; the two
              screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
-src/theme    colors, metrics and fonts as data; themes; save/load
+src/theme    settings in layers, rules, palettes; save/load
 src/ffi      the only file that knows about C (SDL3 + Cairo)
 ```
 
 `src/` is the core, the explicit, ordered list in `load.ss`. Its last
-file loads the folders: `kits/`, `styles/`, `themes/`, `wallpapers/` and
-`apps/`, one definition per file, each folder in file-name order. A file
-dropped into a folder loads at the next boot or `(reload!)`, with no list
-to edit, and `(source-files)` lists them all.
+file loads the folders: `kits/`, `desktop/`, `styles/`, `themes/`,
+`wallpapers/` and `apps/`, one definition per file (`desktop/` aside),
+each folder in file-name order. A file dropped into a folder loads at the
+next boot or `(reload!)`, with no list to edit, and `(source-files)`
+lists them all.
+
+The core names almost nothing of the desktop layer's (the crash panel
+and the window menu are still called by name). It keeps two registries:
+the screen's **surfaces**, drawn and given input in depth order (the
+desktop under the windows; the taskbar, top bar, menu and toasts over
+them), and the **strips** they reserve at the screen's edges, which
+`desktop-rect` (where windows go) leaves out:
+
+```scheme
+(define-surface dock 15                      ; over the taskbar
+  'draw (lambda () (fill-rect 0 0 64 (screen-h) 'panel))
+  'box (lambda () (values 0 0 64 (screen-h)))   ; what a frame redraws
+  'at (lambda (x y) (and (< x 64) 'dock))       ; takes the points there
+  'mouse (lambda (kind what x y button clicks) (notify "dock")))
+(define-strip dock 'left (lambda () 64))     ; maximized windows beside it
+```
+
+A field may name a procedure instead (`'draw 'draw-taskbar`), looked up
+at each call, so redefining it at the REPL shows on the next frame.
 
 Decisions worth keeping in mind for the real design:
 
@@ -243,17 +269,27 @@ Decisions worth keeping in mind for the real design:
   `(mouse-down 120 40 left 1)` and `(key-down #\w (ctrl shift))`.
   `(inject! ...)` feeds the same lists in, which is how the tests drive the
   world.
-- **Settings are theme keys.** Colors, sizes and fonts all live in one
-  table. The Settings app is only a front end to `set-theme!`, so anything
-  it does can be scripted from the REPL, and the saved file is just the
-  keys that differ from the defaults.
+- **Settings are theme keys, in layers.** Colors, sizes and fonts all
+  live in one table, `(theme key)`, resolved from layers whenever one
+  changes: your Overrides (`override!`, in every style), your changes to
+  the chosen window style (`set-theme!`: switch styles and back, and
+  yours come back), the style, its palette (the setting `palette`), and
+  the built-in defaults. A rule is a setting computed from others then,
+  never per frame: the built-in `selection` is `(rule (mix 'accent 'bg-1
+  0.65))`, so a palette gives twenty colors and the rest follow it, and
+  so does your accent. `(theme-source key)` says which layer gives one.
+  The Settings app is only a front end to `set-theme!`, so anything it
+  does can be scripted from the REPL. The saved file is plain data: the
+  style, the scale, the Overrides and your changes per style; an older,
+  flat file loads as the saved style's changes.
 - **Logical pixels.** All layout is in logical pixels; the canvas is
   drawn `*scale*` times bigger with a single `cairo-scale`, so text and
   shapes are rendered from outlines at full resolution. The scale follows
   the desktop (SDL's display scale for the window: the pixel ratio on
   macOS and Wayland, `Xft.dpi` under X11, which is how GNOME publishes
-  200% and SDL reads once, as it starts), and the theme key `scale` (a
-  percentage; 0 for automatic, in Settings → Display) overrides it.
+  200% and SDL reads once, as it starts), and the display's `scale` (a
+  percentage; 0 for automatic, in Settings → Display, saved apart from
+  any style's settings) overrides it.
   Mouse positions are converted at the host boundary, so apps never see
   physical pixels.
 - **Sizes follow the fonts.** Title bars, panels, menus, the apps' bars
@@ -274,7 +310,7 @@ Decisions worth keeping in mind for the real design:
   specify, with the window's label in the bottom-left corner, which is
   also where you drag it: a style can list any area as its `'title`. Each
   pairs with the palette of the same name; the Interlisp one brings back
-  the dotted desktop shade (the `desktop-pattern` theme key).
+  the dotted desktop shade (the `wallpaper` theme key).
 - **Every frame is drawn from scratch, where something changed.** The
   canvas is the exact screen. A change says where it shows: input to a
   window and `(invalidate! win)` ask for the window's extent (its frame
@@ -283,7 +319,7 @@ Decisions worth keeping in mind for the real design:
   redone; the hover for the window or bar it leaves and the one it
   enters; moving or resizing a window for where it was and where it is;
   the clock, once a second, for the top bar; `(invalidate!)` and the rest
-  of what the window manager or the shell changes, the menus and toasts
+  of what the window manager or the desktop changes, the menus and toasts
   included, for the whole screen. The next frame draws the wallpaper,
   every window from the bottom up (each clipped to its extent, so nothing
   it draws lies outside what it asks for), the panels, the menu and the
@@ -432,8 +468,9 @@ scheme --script tests/sources.ss
 This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
 two files, `src/` stays within its size budget (raise it on purpose),
-every file in a folder registers what it defines, under its own name,
-in the widget kit and Tasks only the drawing procedures (`ui-draw-…`,
+every file in a folder registers what it defines, under its own name
+(a kit's with its prefix, the desktop's plain), in the widget kit and
+Tasks only the drawing procedures (`ui-draw-…`,
 `tasks-draw-…`) draw or name a theme color, and the edit kit never does.
 
 ```bash

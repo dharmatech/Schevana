@@ -8,6 +8,7 @@
 ;;;
 ;;; Every app handler (draw, key, tick, ...) also runs under a fuel budget via
 ;;; safe-call: if it loops forever or raises, only that window "crashes".
+;;; System code reports its errors as notifications (report-error!).
 
 ;; defvar, not define: a reload must not swap out parameters that running
 ;; engines are still parameterizing.
@@ -42,6 +43,42 @@
 ;; For trusted system code: errors are reported, but there is no fuel limit.
 (define (safely who thunk)
   (guard (c [#t (report-error! who c)]) (thunk)))
+
+;;; ------------------------------------------------------------------
+;;; notifications
+;;; The queue is the core's; how a toast looks is the desktop's.
+
+(defvar *toasts* '())   ; (#(expires-at text color) ...)
+
+(define notify
+  (case-lambda
+    [(msg) (notify msg 'accent)]
+    [(msg color)
+     (let ([text (list->string
+                  (map (lambda (c) (if (char=? c #\newline) #\space c))
+                       (string->list
+                        (if (string? msg) msg (format "~a" msg)))))])
+       (set! *toasts*
+         (append *toasts* (list (vector (+ (now-ms) 5000) text color))))
+       (when (> (length *toasts*) 5) (set! *toasts* (cdr *toasts*)))
+       (request-frame!))]))
+
+(define (expire-toasts!)
+  (let ([now (now-ms)])
+    (when (exists (lambda (t) (< (vector-ref t 0) now)) *toasts*)
+      (set! *toasts* (filter (lambda (t) (>= (vector-ref t 0) now)) *toasts*))
+      (request-frame!))))
+
+(defvar *last-error* (cons "" 0))
+
+;; System-level errors become a red notification (and a line on stderr).
+(define (report-error! who c)
+  (let ([msg (format "~a: ~a" who (condition->string c))])
+    (unless (and (string=? msg (car *last-error*))
+                 (< (- (now-ms) (cdr *last-error*)) 5000))
+      (set! *last-error* (cons msg (now-ms)))
+      (notify msg 'red)
+      (fprintf (console-error-port) "schevana: ~a\n" msg))))
 
 ;;; ------------------------------------------------------------------ processes
 

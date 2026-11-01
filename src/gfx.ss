@@ -324,7 +324,7 @@
 
 ;; Draw str word-wrapped to width w, one line every step pixels (default:
 ;; the font's line height). Returns the y just below the last line.
-;; (draw-wrapped-text in wm.ss breaks monospace text at any character.)
+;; (draw-wrapped-text, desktop/crash.ss, breaks monospace text anywhere.)
 (define (draw-paragraph x y w str color font . step)
   (let ([step (if (pair? step) (car step) (font-line-height font))])
     (fold-left (lambda (y line) (draw-text x y line color font) (+ y step))

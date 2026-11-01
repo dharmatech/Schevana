@@ -10,4 +10,4 @@
     green #x1f5f1f cyan #x1f5566 teal #x1f5f55 magenta #x661f66
     desktop-top #xffffff desktop-bottom #xffffff watermark #x000000
     panel #x000000 panel-text #xffffff panel-dim #xb4b4b4 panel-hover #x383838
-    desktop-pattern flat))
+    wallpaper flat))
