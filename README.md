@@ -115,6 +115,9 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (tasks)                                    ; a task manager; tasks are data
 (add-task! "Fix the menu" 'priority 'high 'tags '("ui"))   ; shows at once
 (set-task! "Fix the" 'status 'review)      ; by title, id (27) or "TASK-27"
+(set-task! 22 'blocked-by '(14 "TASK-24")) ; 22 waits for them; no cycles
+(tasks-tree)                               ; what waits for what, nested
+; in a task's description, Ctrl+E opens it in a window of its own
 (tasks-list 'status 'doing 'assignee "Pavel")
 (define (draw-wallpaper w h) (fill-gradient 0 0 w h #x102030 #x301020))
 ; every window looks focused; (reload!) undoes it
@@ -180,9 +183,11 @@ themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
              tokyo-night
 styles/      window styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
-kits/        ui: immediate-mode widgets (buttons, text fields and areas,
-             dropdowns, tabs, checkboxes, a table, chips, a date picker,
-             scroll views, tooltips, a dialog), keyboard focus, text editing
+kits/        edit: text editing, pure, and a text's rows, computed only as
+             far as they are shown; ui: immediate-mode widgets (buttons,
+             text fields and areas, dropdowns, tabs, checkboxes, a table,
+             a tree, chips, a date picker, scroll views, tooltips, a
+             dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/shell    wallpapers, top bar + status segments, taskbar, menus, toasts
 src/styles   window styles: the record, the registry, previews
@@ -209,14 +214,13 @@ Decisions worth keeping in mind for the real design:
   `draw-window` or `draw-wallpaper` at the REPL changes the running system
   on the next frame. State that must survive `(reload!)` is declared with
   `defvar`, and record types are `nongenerative`.
-- **Folders, not lists.** Apart from the core, a definition is found by
-  its folder. Each kind has a definer shaped like `define-app` that
-  registers it by name, in a list kept in registration order, and a query
-  that lists them. Kits are world code shared by apps: they load at boot,
-  stay top-level and keep a name prefix (`ui-`). Code moves out of an app
-  into a kit when a second app needs it, not before. R6RS libraries are
-  one-way black boxes, like C libraries: the world imports them, they
-  never call into the world.
+- **Folders, not lists.** Apart from the core, a definition is found by its
+  folder. Each kind has a definer shaped like `define-app` that registers it by
+  name, in a list kept in registration order, and a query that lists them. Kits
+  are world code shared by apps: they load at boot, stay top-level and keep a
+  name prefix (`ui-`, `edit-`). Code moves out of an app into a kit when a
+  second app needs it, not before. R6RS libraries are one-way black boxes, like
+  C libraries: the world imports them, they never call into the world.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
@@ -325,31 +329,63 @@ mkdir -p out
 scheme --script tests/smoke.ss out
 ```
 
-This boots the world headlessly, types into the REPL, defines an app,
-crashes windows, runs away in loops, drags and resizes windows, uses the
-launcher, presses every button of each window style, clicks and drags
-through every Settings tab (checking the theme file round-trips), uses
-Tasks by mouse and keys (typing with selection, the clipboard and Tab,
-the focused field kept in view, dropdowns, the calendar, tags, the
-checklist, dragging cards, sorting, searching, filters, the context menu,
-the delete dialog, tooltips, the narrow page) and from the REPL's
-procedures, reloads the sources, runs the host's SDL code (uploads,
-presents, resize events, the window's size) against a stand-in that
-replaces every SDL call, so no window opens, and writes screenshots to
-the given folder. It never touches your real `~/.schevana-theme.ss`, and
-no test reads `~/.schevana.d`.
+This boots the world headlessly, types into the REPL, defines an app, crashes
+windows, runs away in loops, drags and resizes windows, uses the launcher,
+presses every button of each window style, clicks and drags through every
+Settings tab (checking the theme file round-trips), uses Tasks by mouse and
+keys (typing with selection, the clipboard and Tab, the focused field kept in
+view, dropdowns, the calendar, tags, the checklist, dragging cards, sorting,
+searching, filters, the context menu, the delete dialog, tooltips, the narrow
+page, a description's 65,536 characters, its scroll bar, Ctrl+End and
+Ctrl+Home, Page Down and Up scrolling as far as the caret moves, typing
+that compares no texts, a key typed in another window that runs no scan,
+and its editor's window: Save, Cancel and its question, its line and
+column, Tasks waiting under a scrim, maximized, Save into a task deleted
+meanwhile; what a task waits for and what waits for it in its details,
+Add's menu of what makes no cycle, as much of it as fits on the screen
+with many tasks (an id typed first), a choice the REPL made a cycle
+meanwhile refused with a plain toast, a cycle the REPL refuses, a
+blocked task moved to Done or added done; the Tree, its twisties and
+keys, a shared blocker's later rows, a later row a change takes away, a
+collapse that hides the selection, a search dimming rows or leaving
+nothing to show, a keystroke that works out no tree again, a task
+deleted there, the keys listed; a reload that changes the task record
+and keeps every task) and from the REPL's procedures, reloads the
+sources, runs the host's SDL code (uploads, presents, resize events, the
+window's size) against a stand-in that replaces every SDL call, so no
+window opens, and writes screenshots to the given folder. It never
+touches your real `~/.schevana-theme.ss`, and no test reads
+`~/.schevana.d`.
 
 ```bash
 scheme --script tests/units.ss out
 ```
 
-This tests the drawing layer piece by piece: the measuring
-context, cached shadows against the stacked ones, pixmaps, Life's
+This tests the drawing layer piece by piece: the measuring context,
+text cut to fit measuring no more of a long text than its width could
+show, cached shadows against the stacked ones, pixmaps, Life's
 generations against a plain reference (a step allocates nothing), its
 grid against one rectangle per cell, and the invalidation calls; and,
-with no window, the widget kit's text editing (insertion, erasing, caret
-moves, words, selection, wrapping against a plain rule), dates, flow and
-table keys, and Tasks' sorting, filtering, moving and the REPL's checks.
+with no window, the edit kit (insertion, erasing, caret moves, words,
+selection, pages, the most characters a text may hold, what an edit
+changed, wrapping against a plain rule with even and uneven widths and
+against breaking a character at a time, the rows a layout keeps and
+takes back through thousands of random edits, a keystroke's measures in
+each worst case bounded by the rows in view, an edit's rows past it
+taken back, not measured, and a keystroke's work in an engine's ticks
+bounded by the rows in view at any length), dates, flow and table keys,
+and Tasks' sorting, filtering, moving, a search looked through once for
+each change, the editor's line and column against a plain count, the
+REPL's checks, the seed's long descriptions, what a task waits for (each
+once, a cycle refused and named, whom it blocks worked out, a deleted
+task forgotten), the tree of what waits for what with blockers shared,
+the seed's links and what Add offers, what is kept until a link or a
+status changes, Add's entries for what is typed, ids and later rows'
+notes as wide as they fit, a task record from before a reload carried
+over, the tree widget's rows (only expanded nodes' children asked for),
+keys, indentation and dimmed rows, and the characters a keystroke in
+Tasks measures, the same with a title of 100,000 characters as with one
+of 10,000.
 
 ```bash
 scheme --script tests/frame.ss out
@@ -383,7 +419,11 @@ Tasks shows the reference after typing, the caret's blink, hover and a
 tooltip, a drag, the wheel, a field scrolled back into view, a menu, the
 calendar, the dialog, a change from the REPL and the narrow page, at 100,
 150 and 200%, and asks for no frame once its window loses the focus, or
-while the dialog covers a field that had the keyboard.
+while the dialog covers a field that had the keyboard, and so does its
+Tree (hover, twisties, keys, the wheel, a later row, dimmed rows, links,
+the Add menu); and a long description's scroll bar, drawn from an
+estimate, settles when idle steps finish its rows, and when its editor's
+caret row brings them to the end in the same draw.
 
 ```bash
 scheme --script tests/sources.ss
@@ -393,8 +433,8 @@ This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
 two files, `src/` stays within its size budget (raise it on purpose),
 every file in a folder registers what it defines, under its own name,
-and in the widget kit and Tasks only the drawing procedures (`ui-draw-…`,
-`tasks-draw-…`) draw or name a theme color.
+in the widget kit and Tasks only the drawing procedures (`ui-draw-…`,
+`tasks-draw-…`) draw or name a theme color, and the edit kit never does.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]
@@ -410,8 +450,15 @@ stay under 0.2 ms and upload nothing), a theme change, and the clock's
 second with no window and a keystroke in a REPL alone (at 100% and
 200%, and on a 1920 × 1080 screen at 200%, a 4K one), Tasks maximized
 on that screen (an idle step, a keystroke in a title, two in one step, a
-card dragged), and prints how much of the main thread a busy REPL
-evaluation gets while 30 Life windows animate at 200%.
+card dragged), a keystroke in a long description's worst cases there,
+in the details and in its editor maximized, against the same in an
+empty one (the least of three rounds each: it must stay within 1.25
+times the empty one's in the details and 1.6 times in the editor, which
+draws a screenful of text, and a jump within 2.5 times), the Tree there
+with the seed and with 2,000 tasks more in chains (a key, Space and the
+wheel, the least of three rounds: within 1.5 times the seed's), and
+prints how much of the main thread a busy REPL evaluation gets while 30
+Life windows animate at 200%.
 
 ## Conventions
 
@@ -454,8 +501,41 @@ evaluation gets while 30 Life windows animate at 200%.
   trees as data?
 - Tasks redraws its whole window for a keystroke: about 9 ms on a 4K
   screen at 200%, maximized (half of it is any maximized window's frame:
-  the wallpaper under it, its rows compared).
-- REPL lacks selection and copy, and there is no text editor app yet.
+  the wallpaper under it, its rows compared). In a description of 65,536
+  characters a keystroke costs within a millisecond of that: a text's
+  rows are computed only as far as they show, and kept; after an edit,
+  those past it are taken back from before it, and the edit says where
+  the text changed, so no keystroke looks at the whole text (the text
+  and its rows' starts are still copied, by memcpy: about 0.02 ms at 64k
+  characters). Only rows that do change are measured again, all those in
+  view when an edit moves every row's break (a paragraph with no spaces,
+  or rows exactly full). A jump far ahead (Ctrl+End, the scroll bar's
+  thumb, a paste of the whole text) computes the rows to there once, 5
+  to 8 ms; idle steps compute the rest for the scroll bar, a millisecond
+  at a time. The description's editor, maximized, draws Tasks under it
+  too, and a screenful of text: about 4 ms more a keystroke. With a
+  search, Tasks looks through a task's texts only when they change:
+  typing in a long description searches that one again at each keystroke
+  (0.2 ms a word at 64k).
+- Tasks keeps what it works out from which tasks there are, their
+  order, statuses and links (the board order, whom each blocks, the
+  Tree's shape and rows) until one of those changes, so typing costs
+  nothing for them; it still passes over every task at each draw for
+  its filters, the toolbar's names and tags, and the List's and Tree's
+  assignee column, which measures every name, and the Board lays out
+  every card of a column: with 2,000 tasks more in chains of 50, a
+  keystroke in the List or the Tree costs within a millisecond of what
+  it costs with the seed, in the Board about 6 ms more (with 8,000, 2
+  and 18 ms more). Text cut to fit (a title, a tooltip, a menu entry)
+  measures no more of it than its room could show. The details' Add
+  shows the best matches that fit on the screen, then how many more:
+  typing narrows them.
+- The description's editor asks before Escape or Cancel drops changes,
+  but its window's close button drops them without asking: the window
+  manager closes a window at once and cannot ask it first.
+- REPL lacks selection and copy, and there is no text editor app yet:
+  the edit kit and Tasks' description editor are its start (undo, find
+  and files come next).
 - No persistence. Windows and state vanish on exit (`fasl-write` of app
   state is a natural first step).
 - Portability: library names for macOS and Windows are in `ffi.ss` but have

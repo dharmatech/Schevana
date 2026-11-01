@@ -46,7 +46,12 @@
 ;;;                 wheel, a menu, the calendar, the dialog, a REPL change
 ;;;                 and the narrow page leave the reference at 100, 150 and
 ;;;                 200%; unfocused, or with the dialog over a field that
-;;;                 had the keyboard, Tasks asks for no frame
+;;;                 had the keyboard, Tasks asks for no frame; the Tree's
+;;;                 hover, twisties, keys, wheel, later rows, dimmed rows,
+;;;                 links and Add menu too
+;;;   a long text   a description's scroll bar shows an estimate until idle
+;;;                 steps have computed its rows; the step that finishes
+;;;                 draws it again, and the screen is the reference
 ;;;
 ;;; output-dir receives a scratch theme file and a screenshot of a failure.
 
@@ -455,12 +460,19 @@
         (list (compared-only?
                (cons 0 (exact (ceiling (* (topbar-height) *scale*)))) u0))))
     (try! 'tick)
-    ;; (invalidate! win)
+    ;; (invalidate! win), in a step within one second of the real clock:
+    ;; a second starting during it adds the top bar (wm-tick!), which is
+    ;; right but not what this measures, so such a step is measured again
     (set! c-ink #x60a040)
-    (invalidate! c)
-    (let ([u0 *upload-bytes*])
-      (steps 1)
-      (set! shown (append shown (list (compared-only? (extent-rows c) u0)))))
+    (let again ()
+      (let ([s (time-second (current-time))] [u0 *upload-bytes*])
+        (set! *last-second* s)
+        (invalidate! c)
+        (steps 1)
+        (if (= s (time-second (current-time)))
+            (set! shown
+              (append shown (list (compared-only? (extent-rows c) u0))))
+            (again))))
     (try! 'invalidate)
     (set! c-sub #x4040e0)
     (invalidate! c 11 13 47 29)
@@ -997,6 +1009,193 @@
            (null? bad))))
 
 (for-each tasks-scene '(100 150 200))
+(set-theme! 'scale 100)
+(tasks-reset!)
+
+;;; The Tree: hover over its rows and twisties, a twisty that collapses
+;;; and expands, keys that move the selection and expand, the wheel (rows
+;;; moved under a still pointer), a later row picked and Return going to
+;;; its task's own row, a search dimming rows, a chip in the details, the
+;;; Add menu, the narrow page. After each step the screen is the
+;;; reference, at 100, 150 and 200%.
+
+(define (tree-scene pct)
+  (set-theme! 'scale pct)
+  (clear-world!)
+  (tasks-reset!)
+  (let* ([w (tasks)] [ui (window-ref w 'ui)] [bad '()])
+    (define (try! label)
+      (unless (matches-reference? (list pct label))
+        (set! bad (cons label bad))))
+    (define (rows) (ui-memo ui '(tree rows) '#()))
+    (define (row-id node) (list 'tree 'row (ui-tree-index (rows) node)))
+    (define (point id . twisty?)   ; region id's middle, or its twisty's
+      (let ([r (ui-find ui id)])
+        (unless r (errorf 'tree-scene "no ~s at ~a%" id pct))
+        (let-values ([(cx cy cw ch) (content-rect w)])
+          (values
+           (exact (floor
+                   (+ cx (if (pair? twisty?)
+                             (let ([t (cdr (assq 'twisty
+                                                 (ui-tree-areas
+                                                  (ui-region-x r) 0 1000 0
+                                                  (car twisty?))))])
+                               (+ (car t) (/ (caddr t) 2)))
+                             (+ (ui-region-x r) (/ (ui-region-w r) 2))))))
+           (exact (floor (+ cy (ui-region-y r) (/ (ui-region-h r) 2))))))))
+    (define (move! label id . twisty?)
+      (let-values ([(x y) (apply point id twisty?)])
+        (inject! `(mouse-move ,x ,y)))
+      (steps 1)
+      (try! label))
+    (define (click! label id . twisty?)
+      (let-values ([(x y) (apply point id twisty?)])
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                 `(mouse-up ,x ,y left)))
+      (steps 1)
+      (try! label))
+    (define (key! label key . mods)
+      (inject! `(key-down ,key ,mods))
+      (steps 1)
+      (try! label))
+    (fixed-status!)
+    (resize-window! w 1100 600)
+    (move-window! w 20 70)
+    (steps 1)
+    (click! 'tree '(view tree))
+    (move! 'hover-row (row-id 11))
+    (move! 'hover-twisty (row-id 13) 0)
+    (click! 'collapsed (row-id 13) 0)
+    (click! 'expanded (row-id 13) 0)
+    (click! 'select (row-id 22))
+    (key! 'down 'down)
+    (key! 'left 'left)
+    (key! 'collapse 'left)
+    (key! 'right 'right)
+    (key! 'space #\space)
+    (key! 'space-again #\space)
+    (click! 'later (row-id '(17 . 31)))
+    (key! 'later-down 'down)
+    (key! 'later-up 'up)
+    (key! 'own-row 'return)
+    (let-values ([(x y) (point '(tree body))])
+      (inject! `(mouse-move ,x ,y) '(wheel 0 -3))
+      (steps 1)
+      (try! 'wheel))
+    (for-each (lambda (c) (inject! `(text ,(string c)))) (string->list "/gpu"))
+    (steps 1)
+    (try! 'dimmed)
+    (key! 'search-left 'escape)
+    (click! 'cleared 'clear)
+    (click! 'chip '(blocks 13))
+    (click! 'add '(blocked-by add))
+    (key! 'add-closed 'escape)
+    (set-task! 12 'blocked-by '(16))
+    (steps 1)
+    (try! 'repl)
+    (resize-window! w 760 600)
+    (steps 1)
+    (try! 'narrow)
+    (click! 'page (row-id 13))
+    (key! 'page-closed 'escape)
+    (close-window! w)
+    (check (format "the Tree at ~a%: hover, a twisty, keys, the wheel, a \
+                    later row and Return, a search dimming rows, a chip, the \
+                    Add menu, a REPL change and the narrow page show the \
+                    reference~a"
+                   pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
+           (null? bad))))
+
+(for-each tree-scene '(100 150 200))
+(set-theme! 'scale 100)
+(tasks-reset!)
+
+;;; ------------------------------------------------------------------
+;;; a long text
+;;; A description whose first rows are long and the rest short: its first
+;;; frame shows its scroll bar from the characters per row seen so far,
+;;; far from the true count. Idle steps compute the rest of its rows, and
+;;; the one that finishes draws the window again: the screen is then the
+;;; reference, its bar where the whole count puts it. Were that frame not
+;;; asked for, the estimate would stay on the screen.
+
+(define (scan-scene pct)
+  (set-theme! 'scale pct)
+  (clear-world!)
+  (tasks-reset!)
+  (let* ([w (tasks)] [ui (window-ref w 'ui)] [v (window-ref w 'state)]
+         [text (string-append
+                (apply string-append (make-list 60 "rows that are long, "))
+                (apply string-append (make-list 60 "x\n")))]
+         [t (add-task! "Scanned" 'status 'review 'description text)])
+    (fixed-status!)
+    (resize-window! w 1100 600)
+    (move-window! w 20 70)
+    (steps 1)
+    (tasks-select! v t)
+    (invalidate! w)
+    (steps 1)
+    (let* ([lay (ui-memo ui '(description rows) #f)]
+           [estimate (edit-layout-total lay)]
+           [pending? (pair? (ui-state-scans ui))]
+           [first? (shows-reference? (list pct 'estimate))])
+      (let loop ([n 0])
+        (when (and (< n 100) (pair? (ui-state-scans ui)))
+          (steps 1)
+          (loop (+ n 1))))
+      (let ([settled? (shows-reference? (list pct 'settled))])
+        (close-window! w)
+        (check (format "a long text at ~a%: its bar shows an estimate (~a \
+                        rows) until idle steps have its ~a rows, and \
+                        then the screen is the reference"
+                       pct estimate (edit-layout-count lay))
+               (and pending? first? (edit-layout-done? lay)
+                    (> (edit-layout-count lay) (* 2 estimate)) settled?))))))
+
+(for-each scan-scene '(100 200))
+(set-theme! 'scale 100)
+(tasks-reset!)
+
+;; The description's editor scrolled to its top, its caret at the end,
+;; then maximized: its first draw at the new width takes the bar's total
+;; from the rows in view, and only then does the caret's row bring the
+;; rows to the end. The bar so drawn shows the estimate, so an idle step
+;; must draw it again, though no rows are left to compute; were that
+;; frame not asked for, the estimate would stay on the screen.
+
+(define (caret-scene pct)
+  (set-theme! 'scale pct)
+  (clear-world!)
+  (tasks-reset!)
+  (let* ([w (tasks)] [v (window-ref w 'state)]
+         [text (string-append
+                (apply string-append (make-list 30 "x\n"))
+                (apply string-append (make-list 200 "rows that are long, ")))]
+         [t (add-task! "Caret at the end" 'status 'review 'description text)])
+    (fixed-status!)
+    (tasks-select! v t)
+    (steps 2)
+    (let* ([ed (tasks-open-editor! v t (string-length text))]
+           [eui (window-ref ed 'ui)])
+      (steps 2)
+      (let ([r (ui-find eui 'text)])
+        (let-values ([(cx cy cw ch) (content-rect ed)])
+          (inject! `(mouse-move ,(exact (floor (+ cx (ui-region-x r) 20)))
+                                ,(exact (floor (+ cy (ui-region-y r) 20)))))
+          (do ([i 0 (+ i 1)]) ((= i 30)) (inject! '(wheel 0 10)))))
+      (steps 2)
+      (toggle-maximize! ed)
+      (steps 6)
+      (let ([settled? (shows-reference? (list pct 'maximized))])
+        (close-window! ed)
+        (close-window! w)
+        (check (format "the description's editor at ~a%, scrolled to its \
+                        top, its caret at the end, maximized: an idle step \
+                        draws its bar again from the whole count"
+                       pct)
+               settled?)))))
+
+(for-each caret-scene '(100 200))
 (set-theme! 'scale 100)
 (tasks-reset!)
 

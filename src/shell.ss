@@ -293,11 +293,12 @@
   (request-frame!))
 
 (define (menu-entries m)
-  (let ([f (menu-filter m)])
-    (if (string=? f "")
-        (menu-items m)
-        (filter (lambda (e) (and (pair? e) (string-contains-ci? (car e) f)))
-                (menu-items m)))))
+  (let ([f (menu-filter m)] [items (menu-items m)])
+    (cond [(procedure? items) (items f)]   ; (lambda (filter) entries)
+          [(string=? f "") items]
+          [else (filter (lambda (e)
+                          (and (pair? e) (string-contains-ci? (car e) f)))
+                        items)])))
 
 (define (menu-header-height m)
   (if (menu-filter? m) (+ (menu-field-height) 8) 0))

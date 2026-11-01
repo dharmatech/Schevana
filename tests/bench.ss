@@ -25,11 +25,16 @@
 ;;; again), the clock's second with no window and a keystroke in a REPL
 ;;; alone (each step one of them, at 100% and 200%, and at 200% on a
 ;;; 1920 × 1080 screen, a 4K one), Tasks maximized on that screen (an idle
-;;; step, a keystroke in a title, two in one step, a card dragged), and a
-;;; busy process's share of the main thread while S30T animates at 200%
-;;; (printed, not bounded). Fails (exit 1) unless every measured step drew
-;;; a frame, an idle step takes under 0.2 ms and uploads nothing (with
-;;; Tasks open too), and the busy process and the animation both go on.
+;;; step, a keystroke in a title, two in one step, a card dragged), a
+;;; keystroke in a long text's worst cases there, in the details and in
+;;; the description's editor, maximized, the Tree there with the seed and
+;;; with 2,000 tasks more in chains, and a busy process's share of the
+;;; main thread while S30T animates at 200% (printed, not bounded). Fails
+;;; (exit 1) unless every measured step drew a frame, an idle step takes
+;;; under 0.2 ms and uploads nothing (with Tasks open too), a keystroke in
+;;; a long text keeps within its budget, a step of the Tree with 2,000
+;;; tasks within 1.5 times one with the seed, and the busy process and the
+;;; animation both go on.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -442,6 +447,256 @@
 (screen! 1280 800 100)
 
 ;;; ------------------------------------------------------------------
+;;; the Tree, in Tasks maximized on a 1920 × 1080 screen at 200%
+;;; With the seed, and with 2,000 tasks more in 40 chains of 50 (each
+;;; waits for the one before it, and every fifth also for its neighbor in
+;;; the chain before: blockers shared), every node expanded: steps that
+;;; each move the selection a row (Down, then Up), collapse or expand a
+;;; chain (Space), or wheel the rows (down, then up), each drawing the
+;;; window. The rows drawn are the rows in view; what grows with the tasks
+;;; is walking the expanded nodes and Tasks' own passes over the tasks
+;;; (its filters, the tree's shape): a step must stay within 1.5 times
+;;; the seed's (the least of three rounds each).
+
+;; The seed and 2,000 tasks in chains after it; => the first chain's top.
+(define (chained-tasks!)
+  (tasks-reset!)
+  (let ([base *tasks-next-id*] [now (tasks-now)])
+    (set! *tasks*
+      (append *tasks*
+              (map (lambda (i)
+                     (let ([c (quotient i 50)] [k (remainder i 50)]
+                           [id (+ base i)])
+                       (make-task id (format "Chain ~a, link ~a" c k) ""
+                                  'todo 'feature 'normal #f '() #f '()
+                                  (append (if (> k 0) (list (- id 1)) '())
+                                          (if (and (> c 0) (> k 0)
+                                                   (= 0 (remainder k 5)))
+                                              (list (- id 50))
+                                              '()))
+                                  now now)))
+                   (iota 2000))))
+    (set! *tasks-next-id* (+ base 2000))
+    (tasks-changed!)
+    (find-task (+ base 49))))
+
+;; => (key space wheel rows): the median main-thread ms of each kind of
+;; step, and the rows the tree showed.
+(define (tree-steps chained?)
+  (screen! 1920 1080 200)
+  (clear-world!)
+  (fixed-status!)
+  (let* ([top (if chained? (chained-tasks!) (begin (tasks-reset!)
+                                                   (find-task 13)))]
+         [win (tasks)] [v (window-ref win 'state)] [ui (window-ref win 'ui)])
+    (maximize-window! win)
+    (tasks-view-mode-set! v 'tree)
+    (tasks-select! v top)
+    (invalidate! win)
+    (steps 2 17)
+    (let*-values
+        ([(rows) (vector-length (ui-memo ui '(tree rows) '#()))]
+         [(key-main key-wall key-up)
+          (frame-steps (lambda (i)
+                         (inject! (if (even? i)
+                                      '(key-down down ())
+                                      '(key-down up ())))))]
+         [(space-main space-wall space-up)
+          (frame-steps (lambda (i) (inject! '(key-down #\space ()))))]
+         [(wheel-main wheel-wall wheel-up)
+          (let ([r (ui-find ui '(tree body))])
+            (let-values ([(cx cy cw ch) (content-rect win)])
+              (inject! `(mouse-move ,(exact (floor (+ cx (ui-region-x r) 40)))
+                                    ,(exact (floor (+ cy (ui-region-y r)
+                                                      200))))))
+            (frame-steps (lambda (i)
+                           (inject! (if (even? i)
+                                        '(wheel 0 -1)
+                                        '(wheel 0 1))))))])
+      (close-window! win)
+      (tasks-reset!)
+      (list key-main space-main wheel-main rows))))
+
+(define tree-rounds 3)
+
+;; ((seed key space wheel rows) (chained key space wheel rows)): each
+;; kind's least of the rounds.
+(define tree-results
+  (let ([rounds (map (lambda (i) (list (tree-steps #f) (tree-steps #t)))
+                     (iota tree-rounds))])
+    (map (lambda (which j)
+           (cons which
+                 (map (lambda (k)
+                        (if (= k 3)
+                            (list-ref (list-ref (car rounds) j) 3)
+                            (apply min (map (lambda (r)
+                                              (list-ref (list-ref r j) k))
+                                            rounds))))
+                      '(0 1 2 3))))
+         '(seed chained) '(0 1))))
+(screen! 1280 800 100)
+(for-each (lambda (r)
+            (printf "the Tree in Tasks maximized on 1920x1080 at 200%, ~a \
+                     (~a rows): a key ~,2f ms (main), Space ~,2f, the wheel \
+                     ~,2f (the least of ~a rounds)\n"
+                    (car r) (list-ref r 4) (cadr r) (caddr r) (cadddr r)
+                    tree-rounds))
+          tree-results)
+
+;;; ------------------------------------------------------------------
+;;; a long text, in Tasks maximized on a 1920 × 1080 screen at 200%
+;;; A description of 65,535 characters under a title as long, in each
+;;; worst case: one paragraph of words; no spaces at all (broken by
+;;; character); every row exactly full, so that a key typed at its start
+;;; moves a word down every row (a cascade). Keystrokes, each in a step of
+;;; its own, as in the details and as in the editor maximized: typing (and
+;;; Backspace) at the start, the middle and the end, Delete, everything
+;;; selected and deleted. Each against the same in an empty text, in the
+;;; same window: a keystroke's text work depends on the rows in view, so
+;;; it costs what the empty one does, plus drawing the rows of text it
+;;; shows. A jump far ahead, Ctrl+End or a paste of the whole text,
+;;; computes the rows up to its target once (printed, with a looser
+;;; budget). Every case is measured in three rounds, each round all of
+;;; them, and keeps its least: a load on the machine that slows a round
+;;; leaves the others. The budgets are ratios to the empty text's, so a
+;;; load that slows every round slows both sides alike.
+
+(define (long-text which n width)
+  (let ([o (open-output-string)]
+        [words '#("the " "quick " "brown " "fox " "jumps " "over " "a "
+                  "lazy " "dog " "keystroke ")]
+        [fits? (lambda (s) (<= (text-width s 'ui) width))])
+    (define (put! s len) (put-string o s) (+ len (string-length s)))
+    (let loop ([i 0] [len 0] [row ""])
+      (if (>= len n)
+          (substring (get-output-string o) 0 n)
+          (let ([w (vector-ref words (mod (* i 7) 10))])
+            (case which
+              [(words) (loop (+ i 1) (put! w len) row)]
+              [(none) (loop (+ i 1) (put! (number->string (* i 7919) 16) len)
+                            row)]
+              [else   ; words while they fit, the last grown to fill the row
+               (if (fits? (string-append
+                           row (substring w 0 (- (string-length w) 1))))
+                   (loop (+ i 1) len (string-append row w))
+                   (let grow ([r (substring row 0 (- (string-length row) 1))])
+                     (if (fits? (string-append r "x"))
+                         (grow (string-append r "x"))
+                         (loop i (put! (string-append r " ") len) ""))))]))))))
+
+;; Steps, each handling the next of keys (event lists, in turn): the
+;; median main-thread ms of the steps at each place in the turn.
+(define (key-turns keys turns)
+  (steps 2 0)
+  (let loop ([i 0] [times (map (lambda (k) '()) keys)])
+    (if (= i (* turns (length keys)))
+        (map median times)
+        (let ([m0 (main-ms)] [j (mod i (length keys))])
+          (apply inject! (list-ref keys j))
+          (schevana-step! 0)
+          (let ([dt (- (main-ms) m0)])
+            (loop (+ i 1)
+                  (map (lambda (ts k) (if (= k j) (cons dt ts) ts))
+                       times (iota (length keys)))))))))
+
+(define type-keys '(((text "a")) ((key-down backspace ()))))
+
+(define long-text-rounds 3)
+
+(define (long-text-bench)
+  (screen! 1920 1080 200)
+  (clear-world!)
+  (fixed-status!)
+  (tasks-reset!)
+  (let* ([win (tasks)] [v (window-ref win 'state)] [tui (window-ref win 'ui)]
+         [title (long-text 'words 65535 1000)]
+         [t (add-task! title 'status 'review)]
+         [texts (make-hashtable equal-hash equal?)])   ; made once a case
+    ;; the text, its caret at k, in the details or the editor: its window
+    ;; and ui, the text's id, and its width
+    (define (show! where text k)
+      (tasks-close-editor! v)
+      (set-task! t 'description text)
+      (tasks-select! v t)
+      (ui-focus! tui #f)
+      (ui-forget! tui 'description)
+      (steps 1 0)
+      (case where
+        [(details)
+         (ui-focus! tui 'description k)
+         (invalidate! win)
+         (steps 2 0)
+         (values win tui 'description)]
+        [else
+         (let ([ed (tasks-open-editor! v t k)])
+           (maximize-window! ed)
+           (steps 2 0)
+           (values ed (window-ref ed 'ui) 'text))]))
+    (define (width where)
+      (let-values ([(w ui id) (show! where "" 0)])
+        (let ([r (ui-find ui id)])
+          (list-ref (car (ui-text-box-areas 0 0 (ui-region-w r) 0 '())) 3))))
+    (define (run where which)
+      (let* ([text (or (hashtable-ref texts (cons where which) #f)
+                       (let ([s (if (eq? which 'empty)
+                                    ""
+                                    (long-text which 65535 (width where)))])
+                         (hashtable-set! texts (cons where which) s)
+                         s))]
+             [n (string-length text)]
+             [at (lambda (k keys)
+                   (show! where text k)
+                   (key-turns keys 10))]
+             [typing (apply max (map (lambda (k) (apply max (at k type-keys)))
+                                     (list 0 (quotient n 2) n)))]
+             [delete (car (at (quotient n 2)
+                              '(((key-down delete ())) ((text "a"))
+                                ((key-down left ())))))]
+             [all (begin (clipboard-set! text)
+                         (at n '(((key-down #\a (ctrl)))
+                                 ((key-down backspace ()))
+                                 ((key-down #\v (ctrl))))))]
+             [jump (median
+                    (map (lambda (i)
+                           (show! where text 0)
+                           (let ([m0 (main-ms)])
+                             (inject! '(key-down end (ctrl)))
+                             (schevana-step! 0)
+                             (- (main-ms) m0)))
+                         (iota 5)))])
+        ;; typing, Delete, everything selected and deleted; jumps
+        (list where which (max typing delete (car all) (cadr all))
+              (max jump (caddr all)))))
+    (maximize-window! win)
+    (tasks-select! v t)
+    (steps 2 17)
+    (let* ([cases (apply append
+                         (map (lambda (where)
+                                (map (lambda (which) (cons where which))
+                                     '(empty words none full)))
+                              '(details editor)))]
+           [rounds (map (lambda (i)
+                          (map (lambda (c) (run (car c) (cdr c))) cases))
+                        (iota long-text-rounds))])
+      (tasks-close-editor! v)
+      (close-window! win)
+      ;; each case's least keystroke and jump
+      (apply map
+             (lambda rs
+               (list (car (car rs)) (cadr (car rs))
+                     (apply min (map caddr rs)) (apply min (map cadddr rs))))
+             rounds))))
+
+(define long-text-results (long-text-bench))
+(screen! 1280 800 100)
+(for-each (lambda (r)
+            (printf "a long text in Tasks maximized on 1920x1080 at 200%, ~a, \
+                     ~a: a keystroke at most ~,2f ms (main), a jump ~,2f \
+                     (the least of ~a rounds)\n"
+                    (car r) (cadr r) (caddr r) (cadddr r) long-text-rounds))
+          long-text-results)
+
+;;; ------------------------------------------------------------------
 ;;; a busy process
 
 ;; A REPL evaluation that computes (a loop counting) while S30T animates,
@@ -494,6 +749,28 @@
 (assert! (format "with Tasks open and nothing focused, an idle step takes \
                   under 0.2 ms (~,3f) and uploads nothing" tasks-idle)
          (and (< tasks-idle 0.2) (= 0 tasks-idle-up)))
+(let ([budget
+       (lambda (where key ratio)
+         (let ([empty (key (find (lambda (r) (and (eq? (car r) where)
+                                                  (eq? (cadr r) 'empty)))
+                                 long-text-results))])
+           (for-all (lambda (r)
+                      (or (not (eq? (car r) where))
+                          (<= (key r) (* ratio empty))))
+                    long-text-results)))])
+  (assert! "a keystroke in a long text's worst cases costs at most 1.25 \
+            times what it costs in an empty text in the details, 1.6 times \
+            in the editor maximized (drawing its screenful of rows), and a \
+            jump at most 2.5 times"
+           (and (budget 'details caddr 1.25) (budget 'editor caddr 1.6)
+                (budget 'details cadddr 2.5) (budget 'editor cadddr 2.5))))
+(assert! "a step of the Tree with 2,000 tasks more, in chains, costs at most \
+          1.5 times one with the seed: a key, Space and the wheel"
+         (let ([seed (cdr (assq 'seed tree-results))]
+               [chained (cdr (assq 'chained tree-results))])
+           (for-all (lambda (k) (<= (list-ref chained k)
+                                    (* 1.5 (list-ref seed k))))
+                    '(0 1 2))))
 (assert! "a busy process and S30T's animation both go on"
          (and (> busy-loops 0) (> busy-fps 1)))
 (printf "S30T main per frame: ~,2f ms at 100%, ~,2f ms at 200%\n"

@@ -1,6 +1,7 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
 ;;; context, pixmaps, Life's generations and grid, and invalidation; the
-;;; widget kit's text editing, dates and layout, and Tasks' own procedures.
+;;; edit kit (editing, rows and their lazy layout), the widget kit's dates
+;;; and layout, and Tasks' own procedures.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -958,6 +959,43 @@
                              'ui)
                  300))))
 
+;; The characters text-width is given while thunk runs.
+(define (characters-measured thunk)
+  (let ([n 0] [plain text-width])
+    (dynamic-wind
+      (lambda ()
+        (set! text-width
+              (case-lambda
+                [(s) (set! n (+ n (string-length s))) (plain s)]
+                [(s f) (set! n (+ n (string-length s))) (plain s f)])))
+      thunk
+      (lambda () (set! text-width plain)))
+    n))
+
+;; words, then spaces, to n characters: "words words wo".
+(define (words-of n)
+  (substring (apply string-append (make-list (+ 1 (quotient n 6)) "words "))
+             0 n))
+
+(check "fit-text looks at no more characters than its width could show: as \
+        many measured to fit 100,000 characters into 300 pixels as to fit \
+        2,000, with words or without"
+       (for-all (lambda (make)
+                  (= (characters-measured
+                      (lambda () (fit-text (make 2000) 300 'ui)))
+                     (characters-measured
+                      (lambda () (fit-text (make 100000) 300 'ui)))))
+                (list words-of (lambda (n) (make-string n #\W)))))
+
+(check "text-within: a string cut to one character more than its width in \
+        pixels, the string itself when it is no longer"
+       (let ([s "a short one"])
+         (and (equal? (text-within (make-string 500 #\i) 40.7)
+                      (make-string 41 #\i))
+              (eq? (text-within s 40) s) (eq? (text-within s 10) s)
+              (equal? (text-within s 3) "a sh")
+              (equal? (text-within s -5) "a"))))
+
 (check "Reticle's spaced title: cut with … to its room, and an empty one \
         stays empty however little room is left"
        (and (equal? (reticle-label "Tasks" 1000) "TASKS")
@@ -995,25 +1033,58 @@
               (within-fuel? (lambda () (string-contains-ci? s w))))))
 
 ;;; ------------------------------------------------------------------
-;;; the widget kit and Tasks, pure
-;;; Text editing, wrapping, dates, flow and table keys, and Tasks' own
+;;; the edit kit, the widget kit and Tasks, pure
+;;; Text editing, rows, dates, flow and table keys, and Tasks' own
 ;;; procedures, with no window: text measures 7 px a character.
 
 (define (m7 s) (* 7 (string-length s)))
+(define (lay-of text width . measure)
+  (edit-layout-of #f text width #f (if (pair? measure) (car measure) m7) #f))
 (define (ed text caret . anchor)
-  (make-ui-edit text caret (if (pair? anchor) (car anchor) caret) #f))
-(define (state e) (list (ui-edit-text e) (ui-edit-caret e) (ui-edit-anchor e)))
+  (make-edit text caret (if (pair? anchor) (car anchor) caret) #f #f))
+(define (state e) (list (edit-text e) (edit-caret e) (edit-anchor e)))
 (define (key e k . mods)
-  (ui-edit-key e k mods (ui-wrap (ui-edit-text e) 1000 m7) m7))
+  (edit-key e k mods (lay-of (edit-text e) 1000) 1))
 (define fbq "foo-bar  baz.qux")
 
 (check "insert at a caret, over a selection, at both ends, into empty text"
-       (and (equal? (state (ui-edit-insert (ed "abc" 1) "X")) '("aXbc" 2 2))
-            (equal? (state (ui-edit-insert (ed "abcd" 1 3) "X")) '("aXd" 2 2))
-            (equal? (state (ui-edit-insert (ed "abc" 0) "X")) '("Xabc" 1 1))
-            (equal? (state (ui-edit-insert (ed "abc" 3) "X")) '("abcX" 4 4))
-            (equal? (state (ui-edit-insert (ed "" 0) "X")) '("X" 1 1))
-            (equal? (state (ui-edit-insert (ed "abc" 1 2) "")) '("ac" 1 1))))
+       (and (equal? (state (edit-insert (ed "abc" 1) "X")) '("aXbc" 2 2))
+            (equal? (state (edit-insert (ed "abcd" 1 3) "X")) '("aXd" 2 2))
+            (equal? (state (edit-insert (ed "abc" 0) "X")) '("Xabc" 1 1))
+            (equal? (state (edit-insert (ed "abc" 3) "X")) '("abcX" 4 4))
+            (equal? (state (edit-insert (ed "" 0) "X")) '("X" 1 1))
+            (equal? (state (edit-insert (ed "abc" 1 2) "")) '("ac" 1 1))))
+
+(check "with a most, typing stops at it, a paste is cut to fit, and a \
+        selection makes room; no most is no limit"
+       (and (equal? (state (edit-insert (ed "abc" 3) "X" 3)) '("abc" 3 3))
+            (equal? (state (edit-insert (ed "abc" 1) "XYZ" 5)) '("aXYbc" 3 3))
+            (equal? (state (edit-insert (ed "abcd" 1 3) "XYZ" 4))
+                    '("aXYd" 3 3))
+            (equal? (state (edit-insert (ed "abc" 3) "XY" #f))
+                    '("abcXY" 5 5))))
+
+(check "what changes nothing keeps the very string: an empty insert, an \
+        erase of nothing, a move, a text clean already"
+       (let ([t "abc"])
+         (and (eq? t (edit-text (edit-insert (ed t 1) "")))
+              (eq? t (edit-text (key (ed t 0) 'backspace)))
+              (eq? t (edit-text (key (ed t 1) 'right)))
+              (eq? t (edit-text (edit-insert (ed t 3) "X" 3)))
+              (eq? t (edit-clean t #t)))))
+
+(check "an edit says what it changed, the text before and the range \
+        replaced; a caret move keeps that word, and so does an edit \
+        that changes nothing"
+       (let* ([t "abcdef"] [e1 (edit-insert (ed t 2 4) "XYZ")]
+              [e2 (key e1 'left)] [e3 (edit-insert e2 "")]
+              [e4 (key (ed t 3) 'backspace)])
+         (and (equal? (edit-change e1) (list t 2 4))
+              (eq? (car (edit-change e1)) t)
+              (eq? (edit-change e2) (edit-change e1))
+              (eq? (edit-change e3) (edit-change e1))
+              (equal? (edit-change e4) (list t 2 3))
+              (not (edit-change (ed t 3))))))
 
 (check "Backspace at the start and Delete at the end change nothing; \
         they erase a character, a selection, or a word with Ctrl"
@@ -1047,27 +1118,28 @@
 (define (bounds f text i) (call-with-values (lambda () (f text i)) list))
 (check "a double click's word: at its start, end and inside, on spaces, \
         across - and _, on a word's last character; a triple click's line"
-       (and (equal? (bounds ui-word-bounds "foo bar" 0) '(0 3))
-            (equal? (bounds ui-word-bounds "foo bar" 7) '(4 7))
-            (equal? (bounds ui-word-bounds "foo bar" 1) '(0 3))
-            (equal? (bounds ui-word-bounds "foo bar" 3) '(0 3))
-            (equal? (bounds ui-word-bounds "a   b" 2) '(1 4))
-            (equal? (bounds ui-word-bounds "foo-bar_baz qux" 5) '(0 11))
-            (equal? (bounds ui-word-bounds "a.b" 1) '(0 1))
-            (equal? (bounds ui-word-bounds "a.b" 2) '(2 3))
-            (equal? (bounds ui-line-bounds "ab\ncd\nef" 4) '(3 5))))
+       (and (equal? (bounds edit-word-bounds "foo bar" 0) '(0 3))
+            (equal? (bounds edit-word-bounds "foo bar" 7) '(4 7))
+            (equal? (bounds edit-word-bounds "foo bar" 1) '(0 3))
+            (equal? (bounds edit-word-bounds "foo bar" 3) '(0 3))
+            (equal? (bounds edit-word-bounds "a   b" 2) '(1 4))
+            (equal? (bounds edit-word-bounds "foo-bar_baz qux" 5) '(0 11))
+            (equal? (bounds edit-word-bounds "a.b" 1) '(0 1))
+            (equal? (bounds edit-word-bounds "a.b" 2) '(2 3))
+            (equal? (bounds edit-line-bounds "ab\ncd\nef" 4) '(3 5))))
 
 (check "Ctrl+A selects everything; λ is one character"
        (let ([e (key (ed "λx y" 1) #\a 'ctrl)])
          (and (equal? (state e) '("λx y" 4 0))
-              (equal? (ui-edit-selection e) "λx y")
+              (equal? (edit-selection e) "λx y")
               (equal? (state (key (ed "λx" 0) 'right)) '("λx" 1 1)))))
 
-(check "ui-edit-key leaves Return, Escape, Tab, typed keys and Ctrl+C"
+(check "edit-key leaves Return, Escape, Tab, typed keys and Ctrl+C"
        (for-all (lambda (k) (not (apply key (ed "abc" 1) k)))
                 '((return) (escape) (tab) (#\a) (#\c ctrl))))
 
-(define (wrap text width) (vector->list (ui-wrap text width m7)))
+(define (wrap text width . measure)
+  (vector->list (edit-wrap text width (if (pair? measure) (car measure) m7))))
 (check "wrapping: a row, newlines, empty text, a trailing newline; a soft \
         break keeps its space; a word wider than the width, and a width \
         under one character, break between characters; a last space \
@@ -1082,11 +1154,23 @@
             (equal? (wrap "abc" 3) '((0 . 1) (1 . 2) (2 . 3)))
             (equal? (wrap "hello " 35) '((0 . 6)))))
 
+;; Widths that differ: a space and narrow letters 3, wide ones 11, the
+;; rest 7.
+(define (mp s)
+  (let loop ([i 0] [w 0])
+    (if (= i (string-length s))
+        w
+        (loop (+ i 1) (+ w (case (string-ref s i)
+                             [(#\space #\i #\l) 3]
+                             [(#\m #\w) 11]
+                             [else 7]))))))
+
 ;; The wrapping rule as plainly as it can be said: each row measures the
 ;; rest of its paragraph, then every space, then every prefix.
-(define (wrap-plainly text width)
+(define (wrap-plainly text width . measure)
   (let* ([n (string-length text)]
-         [fits? (lambda (s e) (<= (m7 (substring text s e)) width))]
+         [m (if (pair? measure) (car measure) m7)]
+         [fits? (lambda (s e) (<= (m (substring text s e)) width))]
          [end (lambda (p)
                 (let loop ([q p])
                   (if (or (= q n) (char=? (string-ref text q) #\newline))
@@ -1112,83 +1196,395 @@
                                  j)))])
                (row e (cons (cons s e) rows)))]))))))
 
+(define (next-random x) (mod (+ (* x 1103515245) 12345) 2147483648))
+
+;; A made-up text of len characters from seed, of the letters in abc.
+(define (made-up len seed abc)
+  (let fill ([k 0] [x seed] [acc '()])
+    (if (= k len)
+        (values (list->string acc) x)
+        (fill (+ k 1) (next-random x)
+              (cons (string-ref abc (mod (quotient x 9) (string-length abc)))
+                    acc)))))
+
+;; The rows as a typist breaks them, a character at a time, sharing no
+;; code or search with the kit: a row takes characters while what it
+;; holds fits, minding the last space before which it fit; at one that
+;; does not fit, it breaks after that space (which hangs past the width),
+;; else before the character, keeping one at least. A newline ends a row.
+(define (wrap-by-character text width m)
+  (let ([n (string-length text)])
+    (define (end? j) (or (= j n) (char=? (string-ref text j) #\newline)))
+    (define (fits? s e) (<= (m (substring text s e)) width))
+    (let row ([s 0] [p 0] [rows '()])   ; a row from s, its paragraph's p
+      (if (and (> s p) (end? s))   ; a break ended the paragraph
+          (if (= s n) (reverse rows) (row (+ s 1) (+ s 1) rows))
+          (let walk ([j s] [space #f])   ; [s, j) fits
+            (if (end? j)
+                (let ([rows (cons (cons s j) rows)])
+                  (if (= j n) (reverse rows) (row (+ j 1) (+ j 1) rows)))
+                (let ([space (if (char=? (string-ref text j) #\space)
+                                 j
+                                 space)])
+                  (if (fits? s (+ j 1))
+                      (walk (+ j 1) space)
+                      (let ([e (if space (+ space 1) (max j (+ s 1)))])
+                        (row e p (cons (cons s e) rows)))))))))))
+
+(check "a character at a time breaks the made-up texts where the plain \
+        rule does"
+       (let loop ([i 0] [seed 5])
+         (or (= i 500)
+             (let-values ([(text x) (made-up (mod (quotient seed 7) 41) seed
+                                             "aimw  \n")])
+               (let ([width (mod x 78)] [m (if (even? i) m7 mp)])
+                 (and (equal? (wrap-by-character text width m)
+                              (wrap-plainly text width m))
+                      (loop (+ i 1) (next-random x))))))))
+
 (check "wrapping breaks every text where the plain rule does: 2000 made-up \
         texts of letters, spaces and newlines, at widths from 0 to 11 \
-        characters"
+        characters, measured alike and unlike"
        (let loop ([i 0] [seed 7])
          (or (= i 2000)
-             (let* ([next (lambda (x) (mod (+ (* x 1103515245) 12345)
-                                           2147483648))]
-                    [len (mod (quotient seed 7) 41)]
-                    [chars (let fill ([k 0] [x seed] [acc '()])
-                             (if (= k len)
-                                 (cons x acc)
-                                 (fill (+ k 1) (next x)
-                                       (cons (string-ref "aab  \n"
-                                                         (mod (quotient x 9) 6))
-                                             acc))))]
-                    [text (list->string (cdr chars))]
-                    [width (mod (car chars) 78)])
-               (and (equal? (wrap text width) (wrap-plainly text width))
-                    (loop (+ i 1) (next (car chars))))))))
+             (let-values ([(text x) (made-up (mod (quotient seed 7) 41) seed
+                                             "aimw  \n")])
+               (let ([width (mod x 78)] [m (if (even? i) m7 mp)])
+                 (and (equal? (wrap text width m) (wrap-plainly text width m))
+                      (loop (+ i 1) (next-random x))))))))
+
+;; A layout's rows, computed to the end.
+(define (rows-of lay)
+  (edit-layout-extend! lay (string-length (edit-layout-text lay)))
+  (map (lambda (r) (call-with-values (lambda () (edit-row lay r)) cons))
+       (iota (edit-layout-count lay))))
+
+(check "the lazy layout follows edits: after each of 3000 random \
+        insertions, deletions and replacements, told where or not, the \
+        rows it keeps, takes back and computes, partly or to the end, are \
+        those a character at a time finds"
+       (let loop ([i 0] [seed 11] [text ""] [lay #f] [width 40] [m m7])
+         (cond
+           [(= i 3000) #t]
+           [(zero? (mod i 100))   ; a new width and measure, a new text
+            (let-values ([(t x) (made-up 300 seed "aaimw  \n")])
+              (loop (+ i 1) (next-random x) t #f (+ 10 (mod x 90))
+                    (if (even? (quotient i 100)) m7 mp)))]
+           [else
+            (let*-values ([(n) (string-length text)]
+                          [(lo) (mod seed (+ n 1))]
+                          [(hi) (if (zero? (mod i 3))   ; an insertion
+                                    lo
+                                    (min n (+ lo (mod (quotient seed 5)
+                                                      (if (zero? (mod i 11))
+                                                          90
+                                                          9)))))]
+                          [(ins x) (made-up (if (= (mod i 3) 1)
+                                                0
+                                                (mod (quotient seed 3) 7))
+                                            (next-random seed) "aimw \n")]
+                          [(new) (string-append (substring text 0 lo) ins
+                                                (substring text hi n))]
+                          ;; told where, as by an edit, or compared
+                          [(lay) (edit-layout-of lay new width #f m
+                                                 (and (even? (quotient i 2))
+                                                      (list text lo hi)))])
+              ;; as a draw would: rows as far as some index, sometimes all
+              (if (zero? (mod x 5))
+                  (edit-layout-extend! lay (string-length new))
+                  (edit-row-at lay (mod x (+ 1 (string-length new)))))
+              (and (or (not (zero? (mod i 7)))
+                       (equal? (rows-of (lay-of new width m)) (rows-of lay)))
+                   (equal? (wrap-by-character new width m) (rows-of lay))
+                   (loop (+ i 1) (next-random x) new lay width m)))])))
+
+(check "a layout computes rows only as far as they are asked for, and \
+        remembers them; its total is a count once they reach the end, \
+        an estimate before"
+       (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
+              [text (apply string-append (make-list 2000 "words of a row "))]
+              [lay (lay-of text 280 count)])
+         (edit-layout-extend! lay 14)
+         (let ([first (edit-layout-count lay)]
+               [estimate (edit-layout-total lay)])
+           (edit-row-at lay 3000)
+           (let ([again n])
+             (edit-row-at lay 3000)
+             (and (= first 15) (= again n) (not (edit-layout-done? lay))
+                  (edit-layout-scan! lay 1000) (edit-layout-done? lay)
+                  (= (edit-layout-total lay) (edit-layout-count lay)
+                     (length (wrap text 280)))
+                  (< (abs (- estimate (edit-layout-count lay)))
+                     (* 1/10 (edit-layout-count lay))))))))
+
+;; The worst cases' texts at m7 and 280 px (40 characters a row): one
+;; paragraph of words; no spaces; every row exactly full, so that a
+;; character typed at its start moves a word down each row (a cascade).
+(define (worst-case which n)
+  (let ([o (open-output-string)])
+    (let loop ([i 0])
+      (when (< i n)
+        (case which
+          [(words) (put-string o (vector-ref '#("the " "quick " "brown "
+                                                 "fox " "jumps " "a ")
+                                             (mod i 6)))]
+          [(none) (put-string o "0123456789abcdef")]
+          [(full) (put-string o "aaaaaaaaa bbbbbbbbb ccccccccc dddddddddd ")])
+        (loop (+ i 1))))
+    (substring (get-output-string o) 0 n)))
+
+;; What a keystroke measures, as a text area 14 rows high does it: the
+;; layout follows the new text, the rows down to the caret's view are
+;; computed (the view follows the caret), and the caret's x. Before it,
+;; the view showed the caret at k: rows to there were computed then.
+(define (keystroke-measures text k op)
+  (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
+         [lay (lay-of text 280 count)])
+    (define (view! lay caret)
+      (edit-layout-extend! lay (+ (edit-row-at lay caret) 15))
+      (edit-caret-x lay caret))
+    (view! lay k)
+    (set! n 0)
+    (let* ([e (op (ed text k) lay)]
+           [lay (edit-layout-of lay (edit-text e) 280 #f count
+                                (edit-change e))])
+      (view! lay (edit-caret e))
+      n)))
+
+(check "a keystroke in each worst case measures in proportion to the rows \
+        in view, at most 4 a row, at 16,384 characters as at 65,536: \
+        typing at the start, middle and end, Backspace, Delete, a paste of \
+        a few words, everything selected and deleted, the wheel"
+       (let ([ops
+              (list (cons 0 (lambda (e lay) (edit-insert e "x")))
+                    (cons 1/2 (lambda (e lay) (edit-insert e "x")))
+                    (cons 1 (lambda (e lay) (edit-insert e "x")))
+                    (cons 1/2 (lambda (e lay)
+                                (edit-key e 'backspace '() lay 14)))
+                    (cons 1/2 (lambda (e lay) (edit-key e 'delete '() lay 14)))
+                    (cons 1/2 (lambda (e lay) (edit-insert e "pasted words ")))
+                    (cons 1/2 (lambda (e lay)
+                                (edit-key (edit-all (edit-text e)) 'backspace
+                                          '() lay 14)))
+                    (cons 0 (lambda (e lay)   ; three rows down, no change
+                              (edit-move e (edit-row-last lay 3) #f))))])
+         (for-all
+          (lambda (which)
+            (for-all
+             (lambda (op)
+               (let ([at (lambda (n)
+                           (let ([text (worst-case which n)])
+                             (keystroke-measures
+                              text (exact (floor (* (car op) n))) (cdr op))))])
+                 (let ([small (at 16384)] [big (at 65536)])
+                   (or (and (<= small (* 4 17)) (<= big (* 4 17)))
+                       (begin (printf "  ~a: ~a then ~a measures\n" which
+                                      small big)
+                              #f)))))
+             ops))
+          '(words none full))))
+
+(check "Ctrl+End computes the rows to the end once, and a second one \
+        measures none of them again"
+       (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
+              [text (worst-case 'words 65536)]
+              [lay (lay-of text 280 count)])
+         (edit-layout-extend! lay 15)
+         (let* ([e (edit-key (ed text 0) 'end '(ctrl) lay 14)]
+                [r (edit-row-at lay (edit-caret e))] [first n])
+           (edit-row-at lay (edit-caret e))
+           (edit-key (ed text 0) 'end '(ctrl) lay 14)
+           (and (= (edit-caret e) 65536) (edit-layout-done? lay)
+                (> first 1000) (= n first)))))
+
+;; Short lines, as in a log or base64: each a paragraph of its own.
+(define (short-lines n)
+  (substring (apply string-append
+                    (map (lambda (i) (format "line ~a of short lines\n" i))
+                         (iota (quotient n 20))))
+             0 n))
+
+(check "an edit takes back the rows past it: typed at the start or the \
+        middle of 65,536 characters of words, or of short lines, or a \
+        line deleted there, the rows to the end come back with a few \
+        measured, and they are a whole wrap's"
+       (for-all
+        (lambda (text op)
+          (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
+                 [lay (lay-of text 280 count)])
+            (edit-layout-extend! lay (string-length text))
+            (set! n 0)
+            (let* ([e (op text)]
+                   [lay (edit-layout-of lay (edit-text e) 280 #f count
+                                        (edit-change e))])
+              (edit-layout-extend! lay (string-length (edit-text e)))
+              (or (and (<= n 20) (edit-layout-done? lay)
+                       (equal? (rows-of lay)
+                               (rows-of (lay-of (edit-text e) 280))))
+                  (begin (printf "  ~a measures, ~a\n" n
+                                 (substring (edit-text e) 0 50))
+                         #f)))))
+        (list (worst-case 'words 65536) (worst-case 'words 65536)
+              (short-lines 65536) (short-lines 65536) (short-lines 65536))
+        (list (lambda (t) (edit-insert (ed t 0) "x"))
+              (lambda (t) (edit-insert (ed t 32768) "x"))
+              (lambda (t) (edit-insert (ed t 3) "x"))
+              (lambda (t) (edit-erase (ed t 30000) 30001))
+              (lambda (t) (edit-erase (ed t 40 63) 0)))))
+
+;; What an engine counts of a thunk: a tick for each procedure call or
+;; turn of a loop, so a character looked at in a loop is one; a copy
+;; (string-copy!, fxvector-copy) is one call.
+(define (ticks thunk)
+  ((make-engine thunk) 1000000000 (lambda (left . r) (- 1000000000 left))
+   (lambda (e) +inf.0)))
+
+(check "a keystroke's text work, in an engine's ticks, is about 500 a row \
+        in view (8,500 for 17 rows) at 65,535 characters as at 16,383, in \
+        each worst case, where a look at every character would be 16,383 \
+        at least: the edit (as a description's box makes it), Tasks taking \
+        the text from the box, the rows that follow it to the caret's \
+        view, and the editor's line and column"
+       (let ([ops (list (cons 0 (lambda (e lay) (edit-insert e "x" 65536)))
+                        (cons 1/2 (lambda (e lay) (edit-insert e "x" 65536)))
+                        (cons 1 (lambda (e lay) (edit-insert e "x" 65536)))
+                        (cons 1/2 (lambda (e lay)
+                                    (edit-insert e "\n" 65536)))
+                        (cons 1/2 (lambda (e lay)
+                                    (edit-key e 'backspace '() lay 14)))
+                        (cons 1 (lambda (e lay)
+                                  (edit-key e 'backspace '() lay 14)))
+                        (cons 1/2 (lambda (e lay)
+                                    (edit-key e 'delete '() lay 14))))])
+         (define (work text k op)   ; the ticks of op at k in text
+           (let* ([lay (lay-of text 280)]
+                  [view! (lambda (lay caret)
+                           (edit-layout-extend! lay (+ (edit-row-at lay caret)
+                                                       15))
+                           (edit-caret-x lay caret))]
+                  [editor (make-tasks-editor #f #f #f text text #f #f)]
+                  [e (ed text k)])
+             (view! lay k)
+             (tasks-editor-line-column editor e)
+             (ticks (lambda ()
+                      (let* ([e (op e lay)]
+                             [d (tasks-normalize 'task-set! 'description
+                                                 (edit-text e))]
+                             [lay (edit-layout-of lay d 280 #f m7
+                                                  (edit-change e))])
+                        (view! lay (edit-caret e))
+                        (tasks-editor-line-column editor e))))))
+         (for-all
+          (lambda (which)
+            (for-all
+             (lambda (op)
+               (let ([at (lambda (n)
+                           (let ([text (worst-case which n)])
+                             (work text (exact (floor (* (car op) n)))
+                                   (cdr op))))])
+                 (let ([small (at 16383)] [big (at 65535)])
+                   (or (< (max small big) (* 500 17))
+                       (begin (printf "  ~a: ~a then ~a ticks\n" which
+                                      small big)
+                              #f)))))
+             ops))
+          '(words none full))))
+
+(check "the editor's line and column, counted on from the last count, are \
+        a plain count's through 3000 random edits, moves and clicks, \
+        counted after each or after two"
+       (let ([editor (make-tasks-editor #f #f #f "" "" #f #f)])
+         (define (plainly t c)
+           (let loop ([i 0] [line 1] [column 1])
+             (cond [(= i c) (list line column)]
+                   [(char=? (string-ref t i) #\newline)
+                    (loop (+ i 1) (+ line 1) 1)]
+                   [else (loop (+ i 1) line (+ column 1))])))
+         (define (next e seed)   ; an edit, a move or a click
+           (let*-values ([(t) (edit-text e)] [(n) (string-length t)]
+                         [(ins x) (made-up (mod seed 5) seed "ab\n\n")])
+             (values (case (mod (quotient seed 7) 6)
+                       [(0 1) (edit-insert e ins)]
+                       [(2) (edit-erase e (- (edit-caret e) 1))]
+                       [(3) (edit-erase e (+ (edit-caret e) 1))]
+                       [(4) (edit-move e (mod x (+ n 1)) (odd? x))]
+                       [else (edit-at t (mod x (+ n 1)))])
+                     (next-random x))))
+         (let loop ([i 0] [seed 3] [e (ed "" 0)])
+           (or (= i 3000)
+               (let-values ([(line column)
+                             (tasks-editor-line-column editor e)])
+                 (and (equal? (list line column)
+                              (plainly (edit-text e) (edit-caret e)))
+                      (let*-values ([(e seed) (next e seed)]
+                                    [(e seed) (if (zero? (mod i 5))
+                                                  (next e seed)
+                                                  (values e seed))])
+                        (loop (+ i 1) seed e))))))))
+
+(check "a search looks through a task's texts once for each change of \
+        them: matched again, a 65,536-character description is not \
+        searched, and changed, it is"
+       (let ([t (make-task 0 "Title" (worst-case 'words 65536) 'todo
+                           'feature 'normal #f '() #f '() '() 0 0)]
+             [words (tasks-words "zebra")])
+         (define (match) (tasks-match? t words #f #f #f #f #t))
+         (let* ([first (ticks match)] [again (ticks match)])
+           (task-description-set! t (string-append (task-description t)
+                                                   " zebra"))
+           (and (> first 65536) (< again 100) (match)))))
 
 (check "wrapping measures a row about twice, not the paragraph's rest: a \
         6000-character paragraph and a 2000-character word measure under \
-        20 characters per character"
+        5 characters per character"
        (let* ([n 0]
               [count (lambda (s) (set! n (+ n (string-length s))) (m7 s))]
               [measured (lambda (text)
                           (set! n 0)
-                          (ui-wrap text 280 count)
+                          (edit-wrap text 280 count)
                           (/ n (string-length text)))])
          (and (< (measured (apply string-append (make-list 1200 "word ")))
-                 20)
-              (< (measured (make-string 2000 #\W)) 20))))
+                 5)
+              (< (measured (make-string 2000 #\W)) 5))))
 
 (check "wrapping scans a row, not the rest of a long word: 100,000 \
         characters wrap within a handler's fuel, as one word or as words"
-       (and (within-fuel? (lambda () (ui-wrap (make-string 100000 #\W) 280 m7)))
+       (and (within-fuel? (lambda () (edit-wrap (make-string 100000 #\W) 280
+                                                m7)))
             (within-fuel?
              (lambda ()
-               (ui-wrap (apply string-append (make-list 20000 "word ")) 280
-                        m7)))))
-
-(check "wrapping with a most stops after that many rows: the whole \
-        wrap's first rows"
-       (let ([text "aaa bbb ccc\nddd eee\n\nf"])
-         (for-all (lambda (k)
-                    (equal? (vector->list (ui-wrap text 42 m7 k))
-                            (list-head (wrap text 42)
-                                       (min k (length (wrap text 42))))))
-                  '(1 2 3 4 5 6 9))))
+               (edit-wrap (apply string-append (make-list 20000 "word ")) 280
+                          m7)))))
 
 ;; The index nearest x as plainly as it can be said: a character at a time.
-(define (index-plainly text rows r x)
-  (let ([s (car (vector-ref rows r))] [last (ui-row-last rows r)])
-    (let loop ([j s])
-      (if (or (>= j last)
-              (< x (/ (+ (m7 (substring text s j))
-                         (m7 (substring text s (+ j 1))))
-                      2)))
-          j
-          (loop (+ j 1))))))
+(define (index-plainly lay r x)
+  (let-values ([(s e) (edit-row lay r)])
+    (let ([text (edit-layout-text lay)] [last (edit-row-last lay r)])
+      (let loop ([j s])
+        (if (or (>= j last)
+                (< x (/ (+ (m7 (substring text s j))
+                           (m7 (substring text s (+ j 1))))
+                        2)))
+            j
+            (loop (+ j 1)))))))
 
 (check "a click lands where a character at a time finds it, in log n \
         measures: 34 at most in a row of 100,000 characters"
        (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
               [long (make-string 100000 #\W)]
-              [at (ui-index-at long (vector (cons 0 100000)) 0 350003 count)])
+              [at (edit-index-at (lay-of long #f count) 0 350003)])
          (and (= at 50000) (<= n 34)
               (for-all
                (lambda (text)
-                 (let ([rows (ui-wrap text 30 m7)])
+                 (let ([lay (lay-of text 30)])
+                   (edit-layout-extend! lay (string-length text))
                    (for-all
                     (lambda (r)
                       (for-all (lambda (x)
-                                 (= (ui-index-at text rows r x m7)
-                                    (index-plainly text rows r x)))
+                                 (= (edit-index-at lay r x)
+                                    (index-plainly lay r x)))
                                (map (lambda (i) (- (/ i 2) 5)) (iota 90))))
-                    (iota (vector-length rows)))))
+                    (iota (edit-layout-count lay)))))
                '("" "a" "abc def" "aaa bbb ccc ddd" "ab\ncd\n"
                  "abcdefghijk")))))
 
@@ -1203,32 +1599,50 @@
                       (wrap-text "No task matches this, with Kind: Bug."
                                  120 'ui)))))
 
-(let ([soft (ui-wrap "aaa bbb ccc" 42 m7)] [hard (ui-wrap "ab\ncd" 100 m7)]
-      [three (ui-wrap "abcdef\nab\nabcdef" 100 m7)])
-  (define (vert e rows dir) (state (ui-edit-vertical e rows dir m7 #f)))
+(let ([soft (lay-of "aaa bbb ccc" 42)] [hard (lay-of "ab\ncd" 100)]
+      [three (lay-of "abcdef\nab\nabcdef" 100)])
+  (define (vert e lay dir) (state (edit-vertical e lay dir #f)))
   (check "a caret at a soft break shows on the next row, at a hard break on \
           its own; a click lands nearest a character's middle"
-         (and (= 1 (ui-row-at soft 4)) (= 0 (ui-row-at soft 3))
-              (= 0 (ui-row-at hard 2)) (= 1 (ui-row-at hard 3))
-              (= 1 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 10 m7))
-              (= 2 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 11 m7))
-              (= 0 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 3 m7))))
+         (and (= 1 (edit-row-at soft 4)) (= 0 (edit-row-at soft 3))
+              (= 0 (edit-row-at hard 2)) (= 1 (edit-row-at hard 3))
+              (= 1 (edit-index-at (lay-of "abcd" 100) 0 10))
+              (= 2 (edit-index-at (lay-of "abcd" 100) 0 11))
+              (= 0 (edit-index-at (lay-of "abcd" 100) 0 3))))
   (check "Up and Down keep the goal across a short row; Up from the first \
           row goes to 0, Down from the last to the end; End stops before a \
           soft row's space"
          (let* ([e (ed "abcdef\nab\nabcdef" 5)]
-                [d1 (ui-edit-vertical e three 1 m7 #f)]
-                [d2 (ui-edit-vertical d1 three 1 m7 #f)])
-           (and (= 9 (ui-edit-caret d1)) (= 15 (ui-edit-caret d2))
+                [d1 (edit-vertical e three 1 #f)]
+                [d2 (edit-vertical d1 three 1 #f)])
+           (and (= 9 (edit-caret d1)) (= 15 (edit-caret d2))
                 (equal? (vert e three -1) '("abcdef\nab\nabcdef" 0 0))
                 (equal? (vert d2 three 1) '("abcdef\nab\nabcdef" 16 16))
-                (= 7 (ui-edit-caret (ui-edit-key (ed "aaa bbb ccc" 4) 'end '()
-                                                 soft m7)))))))
+                (= 7 (edit-caret (edit-key (ed "aaa bbb ccc" 4) 'end '()
+                                           soft 1)))))))
 
-(check "ui-text-clean drops control characters, but a tab becomes a \
+(check "Page Down and Up move a page of rows keeping the goal; past the \
+        first or last row a page goes to it, and from it to the text's \
+        start or end"
+       (let* ([text (apply string-append
+                           (map (lambda (i) (format "line ~2,'0d\n" i))
+                                (iota 30)))]
+              [lay (lay-of text 1000)]
+              [at (lambda (line column) (+ (* 8 line) column))]
+              [page (lambda (c k) (edit-caret (edit-key (ed text c) k '() lay
+                                                        10)))])
+         (and (= (page (at 2 3) 'page-down) (at 12 3))
+              (= (page (at 12 3) 'page-up) (at 2 3))
+              (= (page (at 5 3) 'page-up) (at 0 3))
+              (= (page (at 0 3) 'page-up) 0)
+              (= (page (at 25 3) 'page-down) (at 30 0))
+              (= (page (at 30 0) 'page-down) (string-length text)))))
+
+(check "edit-clean drops control characters, but a tab becomes a \
         space; without newlines they do too"
-       (and (equal? (ui-text-clean "a\tb\r\nc\x1;" #t) "a b\nc")
-            (equal? (ui-text-clean "a\tb\r\nc" #f) "a b c")))
+       (and (equal? (edit-clean "a\tb\r\nc\x1;" #t) "a b\nc")
+            (equal? (edit-clean "a\tb\r\nc" #f) "a b c")
+            (equal? (edit-clean "a\x7f;b" #t) "ab")))
 
 (check "ui-flow places, wraps and centers"
        (and (equal? (call-with-values
@@ -1266,7 +1680,7 @@
 
 (define (mk id title status kind priority who tags due . description)
   (make-task id title (if (pair? description) (car description) "") status
-             kind priority who tags due '() 0 id))
+             kind priority who tags due '() '() 0 id))
 (define t1 (mk 1 "Fix the menu" 'todo 'bug 'high "Pavel" '("ui") '(2026 11 2)))
 (define t2 (mk 2 "Style system" 'doing 'feature 'urgent #f '("style" "kit") #f
                "parts and derived styles"))
@@ -1441,6 +1855,41 @@
            (delete-task! t)
            ok)))
 
+(check "a description holds at most 65,536 characters: what the REPL \
+        gives is cut to them"
+       (let ([t (add-task! "Long" 'description (make-string 70000 #\a))])
+         (let ([n (string-length (task-description t))])
+           (set-task! t 'description (make-string 65536 #\b))
+           (let ([ok (and (= n 65536)
+                          (= 65536 (string-length (task-description t))))])
+             (delete-task! t)
+             ok))))
+
+(check "the seed's long descriptions: the README as it is, the kit's \
+        source cut to the most, the backlog as one paragraph and a base64 \
+        blob with no spaces, the same at every seeding; with the files \
+        gone, the paragraph"
+       (let* ([text (lambda (what) (tasks-seed-text what))]
+              [readme (call-with-input-file
+                        (string-append *schevana-root* "/README.md")
+                        get-string-all)]
+              [has? (lambda (s c)
+                      (exists (lambda (i) (char=? (string-ref s i) c))
+                              (iota (string-length s))))]
+              [blob (text 'blob)] [paragraph (text 'changelog)]
+              [gone (fluid-let ([*schevana-root* "/no/such/tree"])
+                      (text 'readme))])
+         (and (equal? (text 'readme) readme)
+              (= 65536 (string-length (text 'kit-source)))
+              (= 65536 (string-length paragraph) (string-length blob))
+              (not (has? paragraph #\newline)) (not (has? blob #\space))
+              (string-prefix? "Ozs7IGtpdHMvdWkuc3M" blob)   ; ";;; kits/ui.ss"
+              (equal? blob (text 'blob)) (equal? gone paragraph)
+              (for-all (lambda (id)
+                         (<= (string-length (task-description (find-task id)))
+                             tasks-description-max))
+                       '(27 28 29 30)))))
+
 (check "a tooltip and a dialog show at most six lines of a long text, the \
         last cut with …"
        (let ([long (apply string-append (make-list 300 "words "))])
@@ -1456,6 +1905,281 @@
                 (equal? all '("a b")) (not whole?)
                 (= th (+ 10 (* 6 (font-line-height 'ui-small))))
                 (< (abs (- dh dh1 (* 5 (font-line-height 'ui)))) 1)))))
+
+(check "blocked-by: ids, each once, of tasks named any way; whom a task \
+        blocks worked out; a cycle refused, the error naming it, and the \
+        task unchanged; a deleted task blocks nothing"
+       (let* ([a (add-task! "Dep A")]
+              [b (add-task! "Dep B" 'blocked-by (list a))]
+              [c (add-task! "Dep C" 'blocked-by (list (task-id b) (task-label a)
+                                                      (task-id b)))]
+              [refused (lambda (x ids)
+                         (guard (e [#t (condition->string e)])
+                           (set-task! x 'blocked-by ids)))]
+              [cycle (lambda ts
+                       (format "Exception in set-task!: ~a would wait for \
+                                itself: ~a (each waits for the next)"
+                               (task-label (car ts))
+                               (string-join (map task-label ts) " → ")))])
+         (let ([ok (and (equal? (task-blocked-by c) (map task-id (list b a)))
+                        (equal? (task-blockers c) (list b a))
+                        (equal? (task-blocks a) (list b c))
+                        (null? (task-blocks c))
+                        (equal? (refused a (list c)) (cycle a c b a))
+                        (equal? (refused a (list a)) (cycle a a))
+                        (null? (task-blocked-by a))
+                        (raises? (lambda () (set-task! a 'blocked-by '(0))))
+                        (raises? (lambda () (set-task! a 'blocked-by 3)))
+                        (begin (delete-task! b)
+                               (and (equal? (task-blocked-by c)
+                                            (list (task-id a)))
+                                    (equal? (task-blocks a) (list c)))))])
+           (for-each delete-task! (list a c))
+           ok)))
+
+;; Made-up tasks: id, then the ids it waits for.
+(define (linked . specs)
+  (map (lambda (s)
+         (let ([t (mk (car s) (format "T~a" (car s)) 'todo 'bug 'low #f '()
+                      #f)])
+           (task-blocked-by-set! t (cdr s))
+           t))
+       specs))
+
+(check "tasks-forest: the roots are the tasks nothing waits for, then any \
+        cycle left over; a blocker shared by several shows its own under \
+        the first, depth first; tasks-cycle finds the path back"
+       (let ([ts (linked '(1 2 3) '(2) '(3 5) '(4 3) '(5) '(6) '(7 8) '(8 7))])
+         (let-values ([(roots homes order) (tasks-forest ts)])
+           (let ([by-id (tasks-id-table ts)])
+             (and (equal? roots '(1 4 6 7))
+                  (equal? order '(1 2 3 5 4 6 7 8))
+                  (equal? (map (lambda (id) (hashtable-ref homes id 'none))
+                               '(1 2 3 5 4 6 7 8))
+                          '(#f 1 1 3 #f #f #f 7))
+                  (equal? (ids (tasks-cycle by-id (list-ref ts 2) '(4)))
+                          '(3 4 3))
+                  (equal? (ids (tasks-cycle by-id (list-ref ts 4) '(1)))
+                          '(5 1 3 5))
+                  (not (tasks-cycle by-id (car ts) '(6)))
+                  (equal? (sort < (vector->list
+                                   (hashtable-keys
+                                    (tasks-waiters (tasks-inverse ts)
+                                                   (list-ref ts 4)))))
+                          '(1 3 4))
+                  (equal? (ids (hashtable-ref (tasks-inverse ts) 3 '()))
+                          '(1 4)))))))
+
+(check "the seed's links: no cycle; (tasks-tree) nests what each task waits \
+        for, a shared blocker under its first waiter and its id under the \
+        others; Add offers what would make no cycle, nor is done"
+       (let ([tree (tasks-tree)] [choices (map task-id (tasks-blocker-choices
+                                                       (find-task 14)))])
+         (let-values ([(roots homes order)
+                       (tasks-forest (tasks-board-order *tasks*))])
+           (and (= (length order) (length *tasks*))
+                (for-all (lambda (id) (null? (task-blocks id))) roots)
+                (equal? (assv 11 tree) '(11 (9)))
+                (equal? (assv 13 tree) '(13 (31) (10)))
+                (equal? (assv 17 tree) '(17 31))
+                (equal? (assv 22 tree) '(22 (14 (33 9))))
+                (equal? (assv 15 tree) '(15 (32)))
+                (not (find (lambda (id) (memv id '(14 22 33 1 32))) choices))
+                (memv 9 choices) (memv 16 choices) #t))))
+
+(check "what is worked out from which tasks there are, their order, \
+        statuses and links is kept while only a title or a description \
+        changes, and worked out again when a link or a status does"
+       (let* ([forest (tasks-whole-forest)] [order (tasks-ordered)]
+              [kept? (begin (set-task! 13 'title "Kept" 'description "x")
+                            (and (eq? forest (tasks-whole-forest))
+                                 (eq? order (tasks-ordered))))]
+              [linked (begin (set-task! 16 'blocked-by '(12))
+                             (tasks-whole-forest))]
+              [blocks (task-blocks 12)])
+         (set-task! 16 'blocked-by '())
+         (let* ([moved (begin (set-task! 16 'status 'review) (tasks-ordered))]
+                [ok (and kept? (not (eq? linked forest))
+                         (memq (find-task 16) blocks) (not (eq? moved order))
+                         (eq? (find-task 16)
+                              (car (last-pair (tasks-in 'review moved)))))])
+           (tasks-reset!)
+           ok)))
+
+(check "Add's menu: the choices whose id or title holds what was typed, \
+        the one it names by id first, as many as there is room for, the \
+        last saying how many more"
+       (let* ([cs (map (lambda (i)
+                         (mk (+ 1 i) (format "Chain ~a" (- 30 i)) 'todo
+                             'feature 'normal #f '() #f))
+                       (iota 30))]
+              [picked #f]
+              [labels (lambda (f room)
+                        (map car (tasks-blocker-entries
+                                  cs f room (lambda (c) (set! picked c)))))])
+         (and (equal? (labels "" 4)
+                      '("TASK-1  Chain 30" "TASK-2  Chain 29" "TASK-3  Chain 28"
+                        "… 27 more: type to narrow"))
+              (equal? (labels "chain 2" 3)
+                      '("TASK-2  Chain 29" "TASK-3  Chain 28"
+                        "… 9 more: type to narrow"))
+              (equal? (labels "task-12" 30) '("TASK-12  Chain 19"))
+              (equal? (labels "20" 3)
+                      '("TASK-20  Chain 11" "TASK-11  Chain 20"))
+              (null? (labels "zz" 5))
+              (let ([pick (cdar (tasks-blocker-entries
+                                 cs "TASK-7" 5 (lambda (c) (set! picked c))))])
+                (pick)
+                (eq? picked (list-ref cs 6))))))
+
+;; What a draw by thunk shows as text: ((x . string) ...), in order.
+(define (texts-drawn thunk)
+  (let ([drawn '()] [plain draw-text])
+    (dynamic-wind
+      (lambda ()
+        (set! draw-text (lambda (x y s . more)
+                          (set! drawn (cons (cons x s) drawn))
+                          (apply plain x y s more))))
+      (lambda () (image 400 40 1 thunk))
+      (lambda () (set! draw-text plain)))
+    (reverse drawn)))
+(define (strings-drawn thunk) (map cdr (texts-drawn thunk)))
+
+(check "four-digit ids keep clear of the titles in the Tree, three digits \
+        wide at least"
+       (let ([next *tasks-next-id*] [t (find-task 31)])
+         (define (room)   ; from the id's start to the title's
+           (let ([texts (texts-drawn
+                         (lambda () (tasks-draw-node 0 0 400 30 '() t #f)))])
+             (- (car (cadr texts)) (car (car texts)))))
+         (let ([seed (room)])
+           (set! *tasks-next-id* 1234)
+           (let* ([new (add-task! "Four digits")] [wide (room)])
+             (delete-task! new)
+             (set! *tasks-next-id* next)
+             (and (= seed (+ 8 (text-width "TASK-000" 'mono-small)))
+                  (>= wide (+ 8 (text-width "TASK-1234" 'mono-small)))
+                  (= (room) seed))))))
+
+(check "a later row's title keeps at least half its room: the note where \
+        its own row is gets shorter, then goes, as the cell narrows"
+       (let* ([t (find-task 31)] [title (tasks-shown-title t)]
+              [long (text-width "↑ under TASK-13" 'ui-small)]
+              [short (text-width "↑ TASK-13" 'ui-small)]
+              [w (lambda (room)   ; the cell's width for that room
+                   (+ room (* 2 (tasks-cell-inset)) 8
+                      (text-width "TASK-100" 'mono-small)))]   ; the seed's
+              [shown (lambda (room)   ; => (title-shown note ...)
+                       (cdr (strings-drawn
+                             (lambda ()
+                               (tasks-draw-node 0 0 (w room) 30 '(reference)
+                                                t "TASK-13")))))]
+              [rooms (list 1000 (+ long short 16) (+ short 8))]
+              [all (map shown rooms)])
+         (and (equal? (map cdr all)
+                      '(("↑ under TASK-13") ("↑ TASK-13") ()))
+              (> (text-width title 'ui) (/ (+ long short 16) 2))
+              (for-all (lambda (s room)   ; less at most what a cut takes
+                         (>= (+ (text-width (car s) 'ui) (text-width "W…" 'ui))
+                             (min (text-width title 'ui) (/ room 2))))
+                       all rooms))))
+
+(check "a record of task's from before a reload that changed its fields is \
+        carried over by name, a new field empty"
+       (let ([rtd (make-record-type-descriptor
+                   'task #f 'units-old-task #f #f
+                   '#((immutable id) (immutable title) (immutable checklist)
+                      (immutable created)))])
+         (let ([t (tasks-carried ((record-constructor
+                                   (make-record-constructor-descriptor
+                                    rtd #f #f))
+                                  7 "Kept" '(("a" . #t)) 99))])
+           (and (task? t) (= 7 (task-id t)) (equal? "Kept" (task-title t))
+                (equal? '(("a" . #t)) (task-checklist t))
+                (null? (task-blocked-by t)) (= 99 (task-created t))
+                (eq? 'todo (task-status t)) (eq? t (tasks-carried t))))))
+
+;; A tree of symbols: what each has under it.
+(define tree-kids '((a b c) (b d) (c) (d)))
+(define (tree-rows expanded?)
+  (map (lambda (r) (list (ui-tree-row-node r) (ui-tree-row-depth r)
+                         (ui-tree-row-parent r) (ui-tree-row-kids? r)
+                         (ui-tree-row-expanded? r)))
+       (vector->list (ui-tree-rows '(a) (lambda (n) (cdr (assq n tree-kids)))
+                                   expanded?))))
+
+(check "a tree's rows: the expanded nodes' children, depth first, and only \
+        theirs asked for; a key's step: Up, Down, End and Page Down as a \
+        table's, Right expands or goes to the first child, Left collapses or \
+        goes to the parent, Space toggles, Return opens"
+       (let* ([asked '()]
+              [rows (ui-tree-rows '(a)
+                                  (lambda (n)
+                                    (set! asked (cons n asked))
+                                    (cdr (assq n tree-kids)))
+                                  (lambda (n) (not (eq? n 'b))))]
+              [all (ui-tree-rows '(a) (lambda (n) (cdr (assq n tree-kids)))
+                                 (lambda (n) #t))]
+              [step (lambda (i key) (ui-tree-step all i 2 key))])
+         (and (equal? (tree-rows (lambda (n) #t))
+                      '((a 0 #f #t #t) (b 1 0 #t #t) (d 2 1 #f #f)
+                        (c 1 0 #f #f)))
+              (equal? (tree-rows (lambda (n) #f)) '((a 0 #f #t #f)))
+              (= 3 (vector-length rows)) (not (memq 'd asked))
+              (equal? (map (lambda (a) (apply step a))
+                           '((0 down) (0 up) (#f down) (1 end) (0 page-down)
+                             (0 right) (1 right) (2 right) (0 left) (2 left)
+                             (3 left) (1 #\space) (2 #\space) (2 return)
+                             (#f right) (#f left)))
+                      '((select . 1) (select . 0) (select . 0) (select . 3)
+                        (select . 2) (select . 1) (select . 2) #f
+                        (collapse . 0) (select . 1) (select . 0)
+                        (collapse . 1) #f (open . 2) #f #f))
+              (equal? (ui-tree-step rows 1 2 'right) '(expand . 1))
+              (equal? (ui-tree-step rows 1 2 #\space) '(expand . 1))
+              (= 1 (ui-tree-index rows 'b)) (not (ui-tree-index rows 'd)))))
+
+(check "a row under another at any depth, and not under its siblings"
+       (let ([all (ui-tree-rows '(a) (lambda (n) (cdr (assq n tree-kids)))
+                                (lambda (n) #t))])   ; a b d c
+         (and (ui-tree-under? all 2 0) (ui-tree-under? all 2 1)
+              (ui-tree-under? all 3 0) (not (ui-tree-under? all 3 1))
+              (not (ui-tree-under? all 1 2)) (not (ui-tree-under? all 0 0))
+              (not (ui-tree-under? all #f 0)))))
+
+(check "a dimmed tree row shades its indentation and twisty as the cells \
+        shade themselves, and nothing of its cell; selected, it is not \
+        dimmed"
+       (let* ([cx (cadr (assq 'cell (ui-tree-areas 0 0 200 30 1)))]
+              [row (lambda (flags)
+                     (image 300 30 1
+                            (lambda ()
+                              (fill-rect 0 0 300 30 'bg-1)
+                              (ui-draw-tree-row 0 0 300 30 flags 200 1))))]
+              [cell (lambda (flags)
+                      (image 300 30 1
+                             (lambda ()
+                               (fill-rect 0 0 300 30 'bg-1)
+                               (ui-draw-dim 0 0 cx 30 flags))))]
+              [plain (row '(kids expanded))] [dim (row '(kids expanded dim))]
+              [picked (row '(kids expanded selected))]
+              [dim-picked (row '(kids expanded dim selected))]
+              [shade (cell '(dim))])
+         (and (> (max-diff plain dim (list cx 0 300 30)) 0)
+              (= 0 (max-diff plain dim (list 0 0 cx 30)))
+              (= 0 (max-diff picked dim-picked))
+              (= (pixel-at dim 2 2) (pixel-at shade 2 2))
+              (not (= (pixel-at dim 2 2) (pixel-at plain 2 2))))))
+
+(check "a deep row's indentation stops at half its column, so its cell \
+        keeps room"
+       (let* ([at (lambda (depth k)
+                    (cdr (assq k (ui-tree-areas 0 0 200 20 depth))))]
+              [twisty (at 1 'twisty)] [cell (at 1 'cell)] [deep (at 500 'cell)])
+         (and (< (car twisty) (car cell))
+              (= (+ (car cell) (caddr cell)) 200)
+              (>= (caddr deep) 80)
+              (equal? deep (at 1000 'cell)))))
 
 (let ([at (lambda (key)
             (cdr (assq key (ui-calendar-areas 0 0 230 0))))])
@@ -1478,6 +2202,38 @@
       (check "tasks-layout: the details beside the view when they fit, at 13 \
               and 24 px fonts"
              (equal? (list at-13 at-24) '((wide narrow) (narrow wide)))))))
+
+;; A keystroke in 13's description, Tasks maximized, with a long title on
+;; TASK-10, which 13 and others wait for (cards, rows and tooltips fit its
+;; title): the characters it measures do not grow with that title.
+(let* ([w (tasks)] [v (window-ref w 'state)] [ui (window-ref w 'ui)])
+  (define (measured mode title)
+    (set-task! 10 'title title)
+    (set-task! 13 'description "")
+    (tasks-view-mode-set! v mode)
+    (tasks-select! v (find-task 13))
+    (ui-focus! ui 'description 0)
+    (invalidate! w)
+    (steps 3)
+    (characters-measured (lambda () (inject! '(text "a")) (steps 1))))
+  (maximize-window! w)
+  (steps 2)
+  (let ([counts (map (lambda (mode)
+                       (map (lambda (make) (measured mode (make 10000)))
+                            (list words-of (lambda (n) (make-string n #\W))
+                                  (lambda (n) (words-of (* 10 n)))
+                                  (lambda (n) (make-string (* 10 n) #\W)))))
+                     '(board list tree))])
+    (tasks-reset!)
+    (close-window! w)
+    (steps 2)
+    (check (format "a keystroke in Tasks measures as many characters with a \
+                    100,000-character title on a task others wait for as \
+                    with one of 10,000, in the Board, the List and the Tree, \
+                    words or one long word: ~a" counts)
+           (for-all (lambda (c) (and (= (car c) (caddr c))
+                                     (= (cadr c) (cadddr c))))
+                    counts))))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)

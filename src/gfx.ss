@@ -284,16 +284,23 @@
   (let ([tw (text-width str font)] [th (font-line-height font)])
     (draw-text (+ x (/ (- w tw) 2)) (+ y (/ (- h th) 2)) str color font)))
 
+;; str cut to as many characters as w pixels could show (no glyph but a
+;; zero-width one is narrower than about a pixel): all a fit measures.
+(define (text-within str w)
+  (let ([n (+ 1 (max 0 (exact (floor w))))])
+    (if (> (string-length str) n) (substring str 0 n) str)))
+
 ;; Shorten str with an ellipsis until it fits in max-w: the longest prefix
-;; that does, found by halving the lengths left (log n measures, not n).
+;; of str within max-w that does, found by halving (log n measures, not n).
 ;; measure, if given, is (lambda (s) width) instead of text-width in font.
 (define (fit-text str max-w font . measure)
-  (let ([width (if (pair? measure) (car measure)
-                   (lambda (s) (text-width s font)))]
-        [cut (lambda (n) (string-append (substring str 0 n) "…"))])
-    (if (<= (width str) max-w)
+  (let* ([width (if (pair? measure) (car measure)
+                    (lambda (s) (text-width s font)))]
+         [s (text-within str max-w)]
+         [cut (lambda (n) (string-append (substring s 0 n) "…"))])
+    (if (and (eq? s str) (<= (width str) max-w))
         str
-        (let loop ([lo 0] [hi (- (string-length str) 1)])   ; lo fits, or is 0
+        (let loop ([lo 0] [hi (- (string-length s) 1)])   ; lo fits, or is 0
           (let ([mid (quotient (+ lo hi 1) 2)])
             (cond [(>= lo hi) (cut lo)]
                   [(<= (width (cut mid)) max-w) (loop mid hi)]

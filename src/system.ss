@@ -5,6 +5,9 @@
 (defvar *injected* '())   ; synthetic events waiting to be handled
 ;; events that came while a reload held the world, newest first
 (defvar *held-events* '())
+;; whether this step handled events: work that can wait (a text's rows
+;; for its scroll bar) waits, so that input's frame comes first
+(defvar *input-step?* #f)
 (defvar *boot-ms* (now-ms))
 
 ;; (after 1000 (lambda () (notify "a second later")))
@@ -78,6 +81,7 @@
                       *injected*)])
     (unless hold? (set! *held-events* '()))
     (set! *injected* '())
+    (set! *input-step?* (pair? evs))
     (for-each
      (lambda (ev)
        (safely 'event

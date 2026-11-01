@@ -23,7 +23,8 @@
 ;;;
 ;;; Keyboard focus: one focused widget per ui. A click focuses what takes
 ;;; typing; Tab and Shift+Tab go through every widget in draw order; Escape
-;;; leaves. Text editing is pure (ui-edit-*), so the tests need no window.
+;;; leaves. Text editing is pure (kits/edit.ss), so the tests need no
+;;; window.
 
 ;;; ------------------------------------------------------------------ state
 
@@ -38,7 +39,7 @@
           modal?))     ; covers the window: what lies under it is not live
 
 (define-record-type ui-state
-  (nongenerative schevana-ui-state-2)
+  (nongenerative schevana-ui-state-3)
   (fields (mutable regions)  ; this draw's, newest (topmost) first
           (mutable active)   ; the region the left button holds, or #f
           (mutable hover-id) ; the topmost live region under the pointer
@@ -49,7 +50,8 @@
                              ; used the tooltip up
           (mutable clip)     ; (x y w h) new regions are cut to, or #f
           (mutable focus)    ; id of the focused widget, or #f
-          (mutable edit)     ; the focused text's ui-edit, or #f, or all
+          (mutable edit)     ; the focused text's edit, or #f; all, or a
+                             ; caret index, for a new focus
           (mutable blink-at) ; ms of the last caret change: phase 0
           (mutable reveal)   ; (id . span) to scroll into view at the next
                              ; draw, or #f; span: (top . bottom) within
@@ -59,11 +61,13 @@
           (mutable later)    ; overlays for ui-end!, newest first
           (mutable due)      ; ms when the window next looks different
           (mutable fresh?)   ; nothing handled since the last layout
+          (mutable scans)    ; text layouts a scroll bar waits on: the
+                             ; ticks compute their rows to the end
           memo))             ; per-id kit memory (scroll offsets, ...)
 
 (define (make-ui)
   (make-ui-state '() #f #f -1 -1 1 (list 0 -1 -1) #f #f #f 0 #f #f '() #f #t
-                 (make-hashtable equal-hash equal?)))
+                 '() (make-hashtable equal-hash equal?)))
 
 (define (ui-memo ui key default) (hashtable-ref (ui-state-memo ui) key default))
 (define (ui-memo! ui key value) (hashtable-set! (ui-state-memo ui) key value))
@@ -177,16 +181,25 @@
 ;;; ------------------------------------------------------------------ focus
 
 ;; Focuses id (#f: nothing), and scrolls it into view at the next draw. A
-;; new focus starts its caret at the end, or with everything selected
-;; when all? is given.
-(define (ui-focus! ui id . all?)
+;; new focus starts its caret at the end; at, when given, is #t to select
+;; everything, or the caret's index.
+(define (ui-focus! ui id . at)
   (unless (equal? id (ui-state-focus ui))
     (ui-state-focus-set! ui id)
-    (ui-state-edit-set! ui (and (pair? all?) (car all?) 'all))
+    (ui-state-edit-set! ui (and (pair? at) (if (eq? (car at) #t) 'all
+                                               (car at))))
     (ui-state-blink-at-set! ui (now-ms)))
   (when id (ui-state-reveal-set! ui (cons id #f))))
 
 (define (ui-focused ui) (ui-state-focus ui))
+
+;; The edit of the text that has the keyboard, as its last draw left it,
+;; or #f; and its caret.
+(define (ui-edit ui)
+  (let ([e (ui-state-edit ui)]) (and (edit? e) e)))
+
+(define (ui-caret ui)
+  (let ([e (ui-edit ui)]) (and e (edit-caret e))))
 
 ;; The focus moves to the next (dir 1) or previous (-1) live Tab stop in
 ;; draw order, wrapping; #f when there is none.
@@ -210,10 +223,20 @@
   (let ([d (ui-state-due ui)])
     (when (or (not d) (< ms d)) (ui-state-due-set! ui ms))))
 
+;; Also, a scroll bar over a text whose rows are not all computed shows
+;; an estimate: each tick computes some more of them, a millisecond's
+;; worth, but not in a step that brought any window input (never on a
+;; keystroke's frame); once they reach the end the window is drawn again,
+;; so the bar settles.
 (define (ui-tick ui win)
   (let ([d (ui-state-due ui)])
     (when (and d (>= (now-ms) d))
       (ui-state-due-set! ui #f)
+      (invalidate! win)))
+  (let ([scans (ui-state-scans ui)])
+    (when (and (pair? scans) (not *input-step?*)
+               (edit-layout-scan! (car scans) 1))
+      (ui-state-scans-set! ui (cdr scans))
       (invalidate! win))))
 
 ;; Whether a focused caret shows now; asks for its next flip.
@@ -417,6 +440,7 @@
   (ui-state-clip-set! ui #f)
   (ui-state-later-set! ui '())
   (ui-state-due-set! ui #f)
+  (ui-state-scans-set! ui '())
   (ui-state-fresh?-set! ui #t))
 
 ;; proc: (lambda (w h) ...), drawn by ui-end! above everything.
@@ -467,22 +491,26 @@
 
 ;; open-menu! at a point of the current window's content. Each entry's
 ;; thunk runs with current-window set to this window, then marks the ui
-;; stale; once the window is closed, an entry does nothing.
+;; stale; once the window is closed, an entry does nothing. With 'filter,
+;; entries may be (lambda (filter) entries): the menu's own filtering.
 (define (ui-open-menu! ui x y entries . opts)
   (let ([win (current-window)])
+    (define (wrap es)
+      (map (lambda (e)
+             (if (pair? e)
+                 (cons (car e)
+                       (lambda ()
+                         (when (memq win (windows))
+                           (parameterize ([current-window win]) ((cdr e)))
+                           (ui-stale! ui)
+                           (invalidate! win))))
+                 e))
+           es))
     (let-values ([(cx cy cw ch) (content-rect win)])
       (apply open-menu! (+ cx x) (+ cy y)
-             (map (lambda (e)
-                    (if (pair? e)
-                        (cons (car e)
-                              (lambda ()
-                                (when (memq win (windows))
-                                  (parameterize ([current-window win])
-                                    ((cdr e)))
-                                  (ui-stale! ui)
-                                  (invalidate! win))))
-                        e))
-                  entries)
+             (if (procedure? entries)
+                 (lambda (f) (wrap (entries f)))
+                 (wrap entries))
              opts))))
 
 ;;; ------------------------------------------------------------------
@@ -528,251 +556,6 @@
                                         (+ ry (floor (/ (- rh (cddr it)) 2)))))
                                 (car rows)))
                           acc)))))))
-
-;;; ------------------------------------------------------------------
-;;; text editing, pure: no window, ui or font. measure is (lambda (str)
-;;; width). Indices are character indices; the selection is [min(caret,
-;;; anchor), max(caret, anchor)).
-
-(define-record-type ui-edit
-  (nongenerative schevana-ui-edit-1)
-  (fields text caret anchor goal))   ; goal: the x Up/Down keep, or #f
-
-(define (ui-edit-at text i)
-  (let ([i (clamp i 0 (string-length text))]) (make-ui-edit text i i #f)))
-
-(define (ui-edit-all text) (make-ui-edit text (string-length text) 0 #f))
-
-(define (ui-edit-range e)
-  (values (min (ui-edit-caret e) (ui-edit-anchor e))
-          (max (ui-edit-caret e) (ui-edit-anchor e))))
-
-(define (ui-edit-selection e)
-  (let-values ([(lo hi) (ui-edit-range e)]) (substring (ui-edit-text e) lo hi)))
-
-;; The selection replaced by str, the caret after it.
-(define (ui-edit-insert e str)
-  (let-values ([(lo hi) (ui-edit-range e)])
-    (let ([t (ui-edit-text e)] [c (+ lo (string-length str))])
-      (make-ui-edit (string-append (substring t 0 lo) str
-                                   (substring t hi (string-length t)))
-                    c c #f))))
-
-;; The selection deleted; with none, [caret, to) either way.
-(define (ui-edit-erase e to)
-  (let*-values ([(t) (ui-edit-text e)] [(n) (string-length t)]
-                [(lo hi) (ui-edit-range e)]
-                [(lo hi) (if (< lo hi)
-                             (values lo hi)
-                             (let ([to (clamp to 0 n)] [c (ui-edit-caret e)])
-                               (values (min c to) (max c to))))])
-    (make-ui-edit (string-append (substring t 0 lo) (substring t hi n))
-                  lo lo #f)))
-
-(define (ui-edit-move e to extend?)
-  (let ([to (clamp to 0 (string-length (ui-edit-text e)))])
-    (make-ui-edit (ui-edit-text e) to (if extend? (ui-edit-anchor e) to) #f)))
-
-(define (ui-edit-select e from to)
-  (let ([n (string-length (ui-edit-text e))])
-    (make-ui-edit (ui-edit-text e) (clamp to 0 n) (clamp from 0 n) #f)))
-
-;; Letters, digits, - and _: Lisp names are words.
-(define (ui-word-char? c)
-  (or (char-alphabetic? c) (char-numeric? c) (memv c '(#\- #\_))))
-
-(define (ui-word-left text i)
-  (let loop ([i i] [in-word? #f])
-    (cond [(<= i 0) 0]
-          [(ui-word-char? (string-ref text (- i 1))) (loop (- i 1) #t)]
-          [in-word? i]
-          [else (loop (- i 1) #f)])))
-
-(define (ui-word-right text i)
-  (let ([n (string-length text)])
-    (let loop ([i i] [in-word? #f])
-      (cond [(>= i n) n]
-            [(ui-word-char? (string-ref text i)) (loop (+ i 1) #t)]
-            [in-word? i]
-            [else (loop (+ i 1) #f)]))))
-
-;; The run of characters that pred accepts around index j (pred accepts
-;; j's): (values lo hi).
-(define (ui-run text j pred)
-  (let ([n (string-length text)])
-    (values (let loop ([i j])
-              (if (and (> i 0) (pred (string-ref text (- i 1))))
-                  (loop (- i 1))
-                  i))
-            (let loop ([i (+ j 1)])
-              (if (and (< i n) (pred (string-ref text i))) (loop (+ i 1)) i)))))
-
-;; A double click at i: the word touching i (the character after i first,
-;; then the one before), else the run of spaces there, else the character
-;; after i.
-(define (ui-word-bounds text i)
-  (let* ([n (string-length text)]
-         [after (and (< i n) (string-ref text i))]
-         [before (and (> i 0) (string-ref text (- i 1)))]
-         [space? (lambda (c) (memv c '(#\space #\tab)))])
-    (cond [(and after (ui-word-char? after)) (ui-run text i ui-word-char?)]
-          [(and before (ui-word-char? before))
-           (ui-run text (- i 1) ui-word-char?)]
-          [(and after (space? after)) (ui-run text i space?)]
-          [(and before (space? before)) (ui-run text (- i 1) space?)]
-          [after (values i (+ i 1))]
-          [else (values i i)])))
-
-;; A triple click at i: the line between newlines.
-(define (ui-line-bounds text i)
-  (let ([n (string-length text)])
-    (values (let loop ([j i])
-              (if (and (> j 0)
-                       (not (char=? (string-ref text (- j 1)) #\newline)))
-                  (loop (- j 1))
-                  j))
-            (let loop ([j i])
-              (if (and (< j n) (not (char=? (string-ref text j) #\newline)))
-                  (loop (+ j 1))
-                  j)))))
-
-;; Rows of text wrapped at width: a vector of (start . end). A newline
-;; ends a row (end is its index); a paragraph breaks after the last space
-;; that fits, which stays on its row (end is the next row's start: a soft
-;; break), or between characters inside a word wider than width. A space
-;; at a paragraph's end hangs past the width rather than start a row.
-;; Nothing measures or scans much more than a row, so long text wraps in
-;; about linear time: a paragraph is measured whole only on its first row
-;; (most are one row). With most, it stops after that many rows.
-(define (ui-wrap text width measure . most)
-  (let ([n (string-length text)] [most (and (pair? most) (car most))])
-    (define (full? rows) (and most (>= (length rows) most)))
-    (define (para-end p)
-      (let loop ([q p])
-        (if (or (= q n) (char=? (string-ref text q) #\newline))
-            q
-            (loop (+ q 1)))))
-    (define (fits? s e) (<= (measure (substring text s e)) width))
-    ;; the most characters from s that fit before q, at least one: lengths
-    ;; doubled while they fit, then halved
-    (define (chars s q)
-      (let grow ([lo (+ s 1)] [step 1])   ; [s, lo) fits, or is one character
-        (let ([hi (min q (+ lo step))])
-          (if (and (> hi lo) (fits? s hi))
-              (grow hi (* step 2))
-              (let halve ([lo lo] [hi hi])   ; [s, hi) does not fit, or is lo
-                (if (<= (- hi lo) 1)
-                    lo
-                    (let ([mid (quotient (+ lo hi) 2)])
-                      (if (fits? s mid) (halve mid hi) (halve lo mid)))))))))
-    ;; where the row from s ends: q when the rest fits, else after the last
-    ;; space that fits, else inside the word
-    (define (row-end s q)
-      (let ([e (chars s q)])
-        (if (= e q)
-            q
-            (let loop ([k e])   ; back from the most that fits
-              (cond [(< k s) e]
-                    [(and (char=? (string-ref text k) #\space) (fits? s k))
-                     (+ k 1)]
-                    [else (loop (- k 1))])))))
-    (let para ([p 0] [rows '()])
-      (let ([q (para-end p)])
-        (define (next rows)
-          (if (and (< q n) (not (full? rows)))
-              (para (+ q 1) rows)
-              (list->vector (reverse rows))))
-        (let row ([s p] [rows rows])
-          (cond [(or (and (= s q) (> s p))   ; a break ended it
-                     (full? rows))
-                 (next rows)]
-                [(or (= s q) (and (= s p) (fits? s q)))
-                 (next (cons (cons s q) rows))]
-                [else (let ([e (row-end s q)])
-                        (if (= e q)
-                            (next (cons (cons s q) rows))
-                            (row e (cons (cons s e) rows))))]))))))
-
-;; The last row whose start is at most i.
-(define (ui-row-at rows i)
-  (let loop ([r (- (vector-length rows) 1)])
-    (if (or (= r 0) (<= (car (vector-ref rows r)) i)) r (loop (- r 1)))))
-
-;; The last caret index of row r: a soft row stops before its trailing
-;; space (or last character).
-(define (ui-row-last rows r)
-  (let ([row (vector-ref rows r)])
-    (if (and (< (+ r 1) (vector-length rows))
-             (= (cdr row) (car (vector-ref rows (+ r 1)))))
-        (max (car row) (- (cdr row) 1))
-        (cdr row))))
-
-(define (ui-caret-x text rows i measure)
-  (let ([s (car (vector-ref rows (ui-row-at rows i)))])
-    (measure (substring text s (max s i)))))
-
-;; The index in row r nearest x: past half a character goes after it.
-;; Found by halving, so a long row takes log n measures, not n.
-(define (ui-index-at text rows r x measure)
-  (let* ([s (car (vector-ref rows r))]
-         [w (lambda (j) (measure (substring text s j)))])
-    (let loop ([lo s] [hi (ui-row-last rows r)])   ; the index is in [lo, hi]
-      (let ([j (quotient (+ lo hi) 2)])
-        (cond [(>= lo hi) lo]
-              [(< x (/ (+ (w j) (w (+ j 1))) 2)) (loop lo j)]
-              [else (loop (+ j 1) hi)])))))
-
-;; Up (-1) or Down (1) a row, keeping the goal x; from the first row Up
-;; goes to 0, from the last Down goes to the end.
-(define (ui-edit-vertical e rows dir measure extend?)
-  (let* ([t (ui-edit-text e)] [c (ui-edit-caret e)] [r (ui-row-at rows c)]
-         [goal (or (ui-edit-goal e) (ui-caret-x t rows c measure))]
-         [to (cond [(and (< dir 0) (= r 0)) 0]
-                   [(and (> dir 0) (= r (- (vector-length rows) 1)))
-                    (string-length t)]
-                   [else (ui-index-at t rows (+ r dir) goal measure)])])
-    (make-ui-edit t to (if extend? (ui-edit-anchor e) to) goal)))
-
-;; The edit after an editing key, or #f for any other (Return, Escape,
-;; Tab, printable keys, whose text comes as 'text, and the clipboard's).
-(define (ui-edit-key e key mods rows measure)
-  (let* ([t (ui-edit-text e)] [c (ui-edit-caret e)]
-         [shift? (and (memq 'shift mods) #t)]
-         [ctrl? (and (memq 'ctrl mods) #t)])
-    (let-values ([(lo hi) (ui-edit-range e)])
-      (case key
-        [(left) (cond [ctrl? (ui-edit-move e (ui-word-left t c) shift?)]
-                      [(and (not shift?) (< lo hi)) (ui-edit-move e lo #f)]
-                      [else (ui-edit-move e (- c 1) shift?)])]
-        [(right) (cond [ctrl? (ui-edit-move e (ui-word-right t c) shift?)]
-                       [(and (not shift?) (< lo hi)) (ui-edit-move e hi #f)]
-                       [else (ui-edit-move e (+ c 1) shift?)])]
-        [(home) (ui-edit-move
-                 e (if ctrl? 0 (car (vector-ref rows (ui-row-at rows c))))
-                 shift?)]
-        [(end) (ui-edit-move e (if ctrl?
-                                   (string-length t)
-                                   (ui-row-last rows (ui-row-at rows c)))
-                             shift?)]
-        [(up) (ui-edit-vertical e rows -1 measure shift?)]
-        [(down) (ui-edit-vertical e rows 1 measure shift?)]
-        [(backspace) (ui-edit-erase e (if ctrl? (ui-word-left t c) (- c 1)))]
-        [(delete) (ui-edit-erase e (if ctrl? (ui-word-right t c) (+ c 1)))]
-        [(#\a) (and (equal? mods '(ctrl)) (ui-edit-all t))]
-        [else #f]))))
-
-;; Text made insertable: a tab becomes a space, so pasted words stay apart;
-;; other control characters but newline go, and without newlines?,
-;; newlines become spaces.
-(define (ui-text-clean str newlines?)
-  (list->string
-   (filter-map (lambda (c)
-                 (cond [(char=? c #\newline) (if newlines? c #\space)]
-                       [(char=? c #\tab) #\space]
-                       [(char<? c #\space) #f]
-                       [(char=? c #\delete) #f]
-                       [else c]))
-               (string->list str))))
 
 ;;; ------------------------------------------------------------------
 ;;; dates, pure: (year month day), and day numbers since 1970-01-01
@@ -845,7 +628,7 @@
                          (if (memq 'hover flags) 'text-faint 'window-border))))
 
 ;; Vector glyphs, no font: check cross plus chevron-down chevron-left
-;; chevron-right sort-up sort-down search, centered in the box.
+;; chevron-right sort-up sort-down search expand, centered in the box.
 (define (ui-draw-glyph x y w h flags name)
   (let* ([s (min w h)] [ox (+ x (/ (- w s) 2))] [oy (+ y (/ (- h s) 2))]
          [p (lambda (fx fy) (cons (+ ox (* fx s)) (+ oy (* fy s))))]
@@ -870,7 +653,12 @@
        (fill-polygon (list (p 0.5 0.7) (p 0.8 0.3) (p 0.2 0.3)) ink)]
       [(search)
        (stroke-circle (+ ox (* 0.43 s)) (+ oy (* 0.43 s)) (* 0.25 s) ink lw)
-       (line (p 0.62 0.62) (p 0.82 0.82))])))
+       (line (p 0.62 0.62) (p 0.82 0.82))]
+      [(expand)   ; two arrows out to opposite corners
+       (line (p 0.56 0.2) (p 0.8 0.2) (p 0.8 0.44))
+       (line (p 0.8 0.2) (p 0.55 0.45))
+       (line (p 0.44 0.8) (p 0.2 0.8) (p 0.2 0.56))
+       (line (p 0.2 0.8) (p 0.45 0.55))])))
 
 ;;; ------------------------------------------------------------------ button
 
@@ -1110,7 +898,7 @@
         (values w (* lh (length (ui-label-lines text w font))))
         (values (text-width text font) lh))))
 
-;; A wrapped label's lines at w, broken as ui-wrap breaks them (a word
+;; A wrapped label's lines at w, broken as text boxes break them (a word
 ;; wider than w too), without the space a line ends in at a soft break.
 (define (ui-label-lines text w font)
   (let ([n (string-length text)])
@@ -1122,24 +910,27 @@
                                  (not (char=? (string-ref text e) #\newline)))
                             (- e 1)
                             e))))
-         (vector->list (ui-wrap text w (lambda (s) (text-width s font)))))))
+         (vector->list (edit-wrap text w (lambda (s) (text-width s font)))))))
 
-;; text wrapped at w in font as ui-wrap wraps it (a long word breaks): at
-;; most n lines, the last ending in "…" when more follow.
-;; => (values lines cut?)
+;; text wrapped at w in font as text boxes wrap it (a long word breaks):
+;; at most n lines, the last ending in "…" when more follow. Only the
+;; rows shown are computed. => (values lines cut?)
 (define (ui-wrap-lines text w font n)
-  (let* ([rows (ui-wrap text w (lambda (s) (text-width s font)) (+ n 1))]
-         [cut? (> (vector-length rows) n)]
-         [k (min n (vector-length rows))])
-    (values (map (lambda (r)
-                   (let ([s (car (vector-ref rows r))])
-                     (if (and cut? (= r (- k 1)))
-                         (fit-text (string-append
-                                    (substring text s (ui-row-last rows r)) "…")
-                                   w font)
-                         (substring text s (cdr (vector-ref rows r))))))
-                 (iota k))
-            cut?)))
+  (let ([lay (edit-layout-of #f text w #f (lambda (s) (text-width s font))
+                             #f)])
+    (edit-layout-extend! lay n)
+    (let* ([cut? (> (edit-layout-count lay) n)]
+           [k (min n (edit-layout-count lay))])
+      (values (map (lambda (r)
+                     (let-values ([(s e) (edit-row lay r)])
+                       (if (and cut? (= r (- k 1)))
+                           (fit-text (string-append
+                                      (substring text s (edit-row-last lay r))
+                                      "…")
+                                     w font)
+                           (substring text s e))))
+                   (iota k))
+              cut?))))
 
 ;; flags: page, toolbar (a line below), side (a line at the left), well.
 (define (ui-draw-surface x y w h flags)
@@ -1154,11 +945,15 @@
 ;;; ------------------------------------------------------------------
 ;;; text field and text area: one box, a row or wrapped rows
 
-;; The box's inner rect and font: ((edit tx ty tw th font)).
+;; The box's inner rect and font, and where an area's scroll bar goes:
+;; over its right padding, its thumb a pixel clear of a full row's end.
+;; ((edit tx ty tw th font) (bar x y w h))
 (define (ui-text-box-areas x y w h flags)
-  (let ([left (if (memq 'search flags) (+ (ui-glyph-size) 14) 8)])
+  (let ([left (if (memq 'search flags) (+ (ui-glyph-size) 14) 8)]
+        [bw (ui-scrollbar-width)])
     (list (list 'edit (+ x left) (+ y 6) (max 0 (- w left 8)) (max 0 (- h 12))
-                (if (memq 'large flags) 'heading 'ui)))))
+                (if (memq 'large flags) 'heading 'ui))
+          (list 'bar (+ x w 1 (- bw)) (+ y 3) bw (max 0 (- h 6))))))
 
 ;; How far in from the box's left edge its text starts: a bare box set that
 ;; much to the left lines its text up with what is above and below it.
@@ -1174,15 +969,29 @@
                 (round (+ 12 (* rows (font-line-height
                                       (if large? 'heading 'ui)))))))))
 
-;; A text area as tall as text wrapped at w needs, within the row counts.
-(define (ui-text-area-size flags w text min-rows max-rows)
-  (let* ([a (car (ui-text-box-areas 0 0 w 0 flags))] [font (list-ref a 5)])
+;; The rows of box id's text, tw wide in font (a field's: unwrapped). The
+;; kit keeps them, so the layout pass and the frame share them, and a draw
+;; computes only the rows it shows. The text the focused box's edit made
+;; says where it changed, so that the rows need not compare the texts.
+(define (ui-text-layout ui id text tw font area?)
+  (let* ([e (ui-edit ui)]
+         [lay (edit-layout-of (ui-memo ui (list id 'rows) #f) text
+                              (and area? tw) (cons (get-font font) *scale*)
+                              (lambda (s) (text-width s font))
+                              (and e (equal? (ui-state-focus ui) id)
+                                   (eq? (edit-text e) text)
+                                   (edit-change e)))])
+    (ui-memo! ui (list id 'rows) lay)
+    lay))
+
+;; The text area id as tall as text wrapped at w needs, within the row
+;; counts: only rows up to max-rows are computed, which the box draws.
+(define (ui-text-area-size ui id flags w text min-rows max-rows)
+  (let* ([a (car (ui-text-box-areas 0 0 w 0 flags))]
+         [lay (ui-text-layout ui id text (list-ref a 3) (list-ref a 5) #t)])
+    (edit-layout-extend! lay (- max-rows 1))
     (ui-text-box-size flags w
-                      (clamp (vector-length
-                              (ui-wrap text (list-ref a 3)
-                                       (lambda (s) (text-width s font))
-                                       max-rows))
-                             min-rows max-rows))))
+                      (clamp (edit-layout-count lay) min-rows max-rows))))
 
 (define (ui-text-field ui id x y w h text on-change . opts)
   (ui-text-box ui id x y w h text on-change #f opts))
@@ -1191,106 +1000,127 @@
   (ui-text-box ui id x y w h text on-change #t opts))
 
 ;; The focused text's edit, of text: kept, or clamped to text when it
-;; changed elsewhere; #f puts the caret at the end, all selects all.
-(define (ui-edit-for ui text)
+;; changed elsewhere. A new focus puts the caret at the end, or where
+;; ui-focus! said.
+(define (ui-text-edit ui text)
   (let* ([e (ui-state-edit ui)] [n (string-length text)]
-         [e (cond [(ui-edit? e)
-                   (if (string=? (ui-edit-text e) text)
+         [e (cond [(edit? e)
+                   (if (eq? (edit-text e) text)
                        e
-                       (make-ui-edit text (min (ui-edit-caret e) n)
-                                     (min (ui-edit-anchor e) n) #f))]
-                  [(eq? e 'all) (ui-edit-all text)]
-                  [else (ui-edit-at text n)])])
+                       (make-edit text (min (edit-caret e) n)
+                                  (min (edit-anchor e) n) #f #f))]
+                  [(eq? e 'all) (edit-all text)]
+                  [(fixnum? e) (edit-at text e)]
+                  [else (edit-at text n)])])
     (ui-state-edit-set! ui e)
     e))
 
-;; opts: 'placeholder 'tip 'on-enter (a thunk for Return), 'on-key
-;; ((lambda (key mods text) ...), true when it acted), and the flags
-;; 'large 'bare 'search 'single (an area whose Return is not a newline)
-;; 'inner (inside another widget's box: never a box of its own).
+;; opts: 'placeholder 'tip 'max (the most characters the text may hold),
+;; 'on-enter (a thunk for Return), 'on-key ((lambda (key mods text) ...),
+;; true when it acted), and the flags 'large 'bare 'search 'single (an
+;; area whose Return is not a newline) 'inner (inside another widget's
+;; box: never a box of its own). An area of lines taller than its box
+;; has a scroll bar.
 (define (ui-text-box ui id x y w h text on-change area? opts)
   (let* ([own (ui-opt-flags opts '(large bare search single inner))]
-         [a (car (ui-text-box-areas x y w h own))]
-         [tx (list-ref a 1)] [ty (list-ref a 2)] [tw (list-ref a 3)]
-         [th (list-ref a 4)] [font (list-ref a 5)]
+         [areas (ui-text-box-areas x y w h own)]
+         [a (car areas)] [tx (list-ref a 1)] [ty (list-ref a 2)]
+         [tw (list-ref a 3)] [th (list-ref a 4)] [font (list-ref a 5)]
          [lh (font-line-height font)]
-         [measure (lambda (s) (text-width s font))]
          [lines? (and area? (not (memq 'single own)))]
+         [most (plist-ref opts 'max #f)]
          [on-key (plist-ref opts 'on-key #f)]
          [on-enter (plist-ref opts 'on-enter #f)]
-         [e (and (equal? (ui-state-focus ui) id) (ui-edit-for ui text))]
-         [rows (if area?
-                   (ui-wrap text tw measure)
-                   (vector (cons 0 (string-length text))))]
-         [max-dy (if area? (max 0 (- (* lh (vector-length rows)) th)) 0)]
+         [lay (ui-text-layout ui id text tw font area?)]
+         [e (and (equal? (ui-state-focus ui) id) (ui-text-edit ui text))]
+         [page (max 1 (exact (floor (/ th lh))))]
          [dx (if (and e (not area?))
-                 (max 0 (- (ui-caret-x text rows (ui-edit-caret e) measure)
-                           tw))
+                 (max 0 (- (edit-caret-x lay (edit-caret e)) tw))
                  0)]
          [dy (if area?
                  (let* ([off (ui-memo ui id 0)]
-                        [c (and e (ui-edit-caret e))]
+                        [c (and e (edit-caret e))]
                         [moved? (and c (not (eqv? c (ui-memo ui (list id 'caret)
                                                              #f))))]
                         [off (cond
                                [moved?
-                                (let ([top (* lh (ui-row-at rows c))])
+                                (let ([top (* lh (edit-row-at lay c))])
                                   (min top (max off (- (+ top lh) th))))]
                                ;; the focus left: back to the start
                                [(and (not c) (ui-memo ui (list id 'caret) #f))
                                 0]
-                               [else off])]
-                        [off (clamp off 0 max-dy)])
-                   (ui-memo! ui id off)
-                   (ui-memo! ui (list id 'caret) c)
-                   off)
-                 0)])
-    (define (current) (ui-edit-for ui text))
+                               [else off])])
+                   ;; the rows in view, and one more
+                   (edit-layout-extend! lay (+ (exact (floor (/ (+ off th) lh)))
+                                               1))
+                   (let ([off (clamp off 0 (max 0 (- (* lh (edit-layout-total
+                                                            lay))
+                                                     th)))])
+                     (ui-memo! ui id off)
+                     (ui-memo! ui (list id 'caret) c)
+                     off))
+                 (begin (edit-layout-extend! lay 0) 0))]
+         [content (* lh (edit-layout-total lay))]
+         ;; the bar shows an estimate: a scan is asked for even if the
+         ;; caret's row, worked out below, brings the rows to the end, so
+         ;; that the tick finding them done draws the bar again
+         [estimate? (not (edit-layout-done? lay))]
+         [max-dy (if area? (max 0 (- content th)) 0)]
+         [bar? (and lines? (> max-dy 0))])
+    (define (current) (ui-text-edit ui text))
     (define (index-at px py)
-      (ui-index-at text rows
-                   (clamp (exact (floor (/ (- (+ py dy) ty) lh)))
-                          0 (- (vector-length rows) 1))
-                   (- (+ px dx) tx) measure))
+      (let ([r (max 0 (exact (floor (/ (- (+ py dy) ty) lh))))])
+        (edit-layout-extend! lay r)
+        (edit-index-at lay (min r (- (edit-layout-count lay) 1))
+                       (- (+ px dx) tx))))
     ;; What moves the caret or changes the text, or acts on a key, shows:
     ;; the box asks to be scrolled into view at the next draw.
     (define (show!) (ui-state-reveal-set! ui (cons id #f)) #t)
     (define (apply! e2)
       (ui-state-edit-set! ui e2)
       (ui-state-blink-at-set! ui (now-ms))
-      (unless (string=? (ui-edit-text e2) text) (on-change (ui-edit-text e2)))
+      (unless (eq? (edit-text e2) text) (on-change (edit-text e2)))
       (show!))
     (define (key! key mods)
       (let ([e (current)])
         (cond
-          [(and on-key (on-key key mods (ui-edit-text e))) (show!)]
+          [(and on-key (on-key key mods (edit-text e))) (show!)]
           [(and (equal? mods '(ctrl)) (memv key '(#\c #\x #\v)))
-           (let ([s (ui-edit-selection e)])
+           (let ([s (edit-selection e)])
              (case key
                [(#\c) (unless (string=? s "") (clipboard-set! s)) #t]
                [(#\x) (unless (string=? s "")
                         (clipboard-set! s)
-                        (apply! (ui-edit-erase e 0)))
+                        (apply! (edit-erase e 0)))
                       #t]
-               [else (apply! (ui-edit-insert
-                              e (ui-text-clean (clipboard-get) lines?)))]))]
+               [else (apply! (edit-insert
+                              e (edit-clean (clipboard-get) lines?) most))]))]
           [(eq? key 'return)
-           (cond [lines? (apply! (ui-edit-insert e "\n"))]
+           (cond [lines? (apply! (edit-insert e "\n" most))]
                  [on-enter (on-enter) (show!)]
                  [else #f])]
-          [(ui-edit-key e key mods rows measure) => apply!]
+          [(edit-key e key mods lay page)
+           => (lambda (e2)
+                ;; Page Up and Down scroll the view as many rows as they
+                ;; move the caret, which keeps its place in it
+                (when (and area? (memq key '(page-up page-down)))
+                  (ui-memo! ui id (max 0 (+ (ui-memo ui id 0)
+                                            (* lh (if (eq? key 'page-up)
+                                                      (- page)
+                                                      page))))))
+                (apply! e2))]
           [else #f])))
     ;; Asked to be shown, a focused box names its caret's row, where the
     ;; typing goes, for a scroll view too short for all of it; its first
     ;; and last rows bring the box's edges along.
     (let ([rv (ui-state-reveal ui)])
       (when (and e rv (equal? (car rv) id))
-        (let* ([r (ui-row-at rows (ui-edit-caret e))]
-               [top (- (+ (- ty y) (* r lh)) dy)])
+        (let* ([r (edit-row-at lay (edit-caret e))]
+               [top (- (+ (- ty y) (* r lh)) dy)]
+               [last? (begin (edit-layout-extend! lay (+ r 1))
+                             (>= (+ r 1) (edit-layout-count lay)))])
           (ui-state-reveal-set!
-           ui (cons id (cons (if (= r 0) 0 top)
-                             (if (= r (- (vector-length rows) 1))
-                                 h
-                                 (+ top lh))))))))
+           ui (cons id (cons (if (= r 0) 0 top) (if last? h (+ top lh))))))))
     (ui-region! ui id x y w h 'focus 'click 'cursor 'ibeam
       'tip (plist-ref opts 'tip #f)
       'on (lambda (ev)
@@ -1300,18 +1130,18 @@
                     (let ([i (index-at (cadr ev) (caddr ev))])
                       (apply!
                        (case (list-ref ev 4)
-                         [(1) (ui-edit-at text i)]
-                         [(2) (let-values ([(lo hi) (ui-word-bounds text i)])
-                                (ui-edit-select (current) lo hi))]
-                         [else (let-values ([(lo hi) (ui-line-bounds text i)])
-                                 (ui-edit-select (current) lo hi))]))))]
+                         [(1) (edit-at text i)]
+                         [(2) (let-values ([(lo hi) (edit-word-bounds text i)])
+                                (edit-select (current) lo hi))]
+                         [else (let-values ([(lo hi) (edit-line-bounds text i)])
+                                 (edit-select (current) lo hi))]))))]
               [(drag)
                (and (eqv? (cadddr ev) 1)
-                    (apply! (ui-edit-move (current)
-                                          (index-at (cadr ev) (caddr ev)) #t)))]
+                    (apply! (edit-move (current)
+                                       (index-at (cadr ev) (caddr ev)) #t)))]
               [(key) (key! (cadr ev) (caddr ev))]
-              [(text) (apply! (ui-edit-insert
-                               (current) (ui-text-clean (cadr ev) lines?)))]
+              [(text) (apply! (edit-insert
+                               (current) (edit-clean (cadr ev) lines?) most))]
               [(wheel)
                (and (> max-dy 0)
                     (let* ([old (ui-memo ui id 0)]
@@ -1326,20 +1156,26 @@
                               '())
                           (if (string=? text "") '(placeholder) '()))])
       (let-values ([(lo hi) (if (and e (memq 'focused base))
-                                (ui-edit-range e)
+                                (edit-range e)
                                 (values 0 0))])
-        (ui-draw-text-box x y w h flags text rows lo hi
-                          (if e (ui-edit-caret e) 0) dx dy
-                          (plist-ref opts 'placeholder #f))))))
+        (ui-draw-text-box x y w h flags lay lo hi (if e (edit-caret e) 0) dx dy
+                          (plist-ref opts 'placeholder #f))))
+    ;; the bar's total is an estimate until the ticks finish the rows
+    (when bar?
+      (when estimate?
+        (ui-state-scans-set! ui (cons lay (ui-state-scans ui))))
+      (apply ui-scrollbar ui (list id 'bar)
+             (append (cdr (cadr areas))
+                     (list dy content th
+                           (lambda (off) (ui-memo! ui id off))))))))
 
-;; rows: the text's rows; [lo, hi) the selection; dx and dy how far the
-;; text is scrolled.
-(define (ui-draw-text-box x y w h flags text rows lo hi caret dx dy
-                          placeholder)
+;; lay: the text's rows (an edit-layout), those in view computed; [lo, hi)
+;; the selection; dx and dy how far the text is scrolled.
+(define (ui-draw-text-box x y w h flags lay lo hi caret dx dy placeholder)
   (let* ([a (car (ui-text-box-areas x y w h flags))]
          [tx (list-ref a 1)] [ty (list-ref a 2)] [tw (list-ref a 3)]
          [th (list-ref a 4)] [font (list-ref a 5)]
-         [lh (font-line-height font)]
+         [lh (font-line-height font)] [text (edit-layout-text lay)]
          [measure (lambda (s) (text-width s font))]
          [focused? (memq 'focused flags)] [hover? (memq 'hover flags)])
     (unless (or (memq 'inner flags)
@@ -1356,33 +1192,38 @@
         (if (memq 'placeholder flags)
             (when placeholder
               (draw-text tx ty (fit-text placeholder tw font) 'text-faint font))
-            (do ([r 0 (+ r 1)]) ((= r (vector-length rows)))
-              (let* ([s (car (vector-ref rows r))] [e (cdr (vector-ref rows r))]
-                     [ry (- (+ ty (* r lh)) dy)] [rx (- tx dx)])
-                ;; a row a float's width in shows only its descenders' tips
-                (when (and (> (+ ry lh) (+ ty 1)) (< (+ ry 1) (+ ty th)))
-                  (when (and (< lo hi) (< lo (max e (+ s 1))) (> hi s))
-                    (let* ([x0 (measure (substring text s (max s lo)))]
-                           [x1 (if (> hi e)
-                                   (+ (measure (substring text s e)) 4)
-                                   (measure (substring text s hi)))])
-                      (fill-rect (+ rx x0) ry (- x1 x0) lh 'selection)))
-                  ;; unfocused at its start, the last row in view says
-                  ;; that more follows
-                  (draw-text rx ry
-                             (if (and (not focused?) (= dy 0)
-                                      (< (+ r 1) (vector-length rows))
-                                      (> (+ ry lh lh) (+ ty th 1)))
-                                 (fit-text (string-append
-                                            (substring text s
-                                                       (ui-row-last rows r))
-                                            "…")
-                                           tw font)
-                                 (substring text s e))
-                             'text font)))))
+            ;; only the rows in view
+            (let loop ([r (max 0 (- (exact (floor (/ dy lh))) 1))])
+              (let ([ry (- (+ ty (* r lh)) dy)] [rx (- tx dx)])
+                (when (and (< r (edit-layout-count lay)) (< (+ ry 1) (+ ty th)))
+                  ;; a row a float's width in shows only its descenders' tips
+                  (when (> (+ ry lh) (+ ty 1))
+                    (let-values ([(s e) (edit-row lay r)])
+                      (when (and (< lo hi) (< lo (max e (+ s 1))) (> hi s))
+                        (let* ([x0 (measure (substring text s (max s lo)))]
+                               [x1 (if (> hi e)
+                                       (+ (measure (substring text s e)) 4)
+                                       (measure (substring text s hi)))])
+                          (fill-rect (+ rx x0) ry (- x1 x0) lh 'selection)))
+                      ;; unfocused at its start, the last row in view says
+                      ;; that more follows
+                      (draw-text rx ry
+                                 (if (and (not focused?) (= dy 0)
+                                          (or (< (+ r 1)
+                                                 (edit-layout-count lay))
+                                              (not (edit-layout-done? lay)))
+                                          (> (+ ry lh lh) (+ ty th 1)))
+                                     (fit-text
+                                      (string-append
+                                       (substring text s (edit-row-last lay r))
+                                       "…")
+                                      tw font)
+                                     (substring text s e))
+                                 'text font)))
+                  (loop (+ r 1))))))
         (when (memq 'caret flags)
-          (fill-rect (+ (- tx dx) (ui-caret-x text rows caret measure) -1)
-                     (- (+ ty (* lh (ui-row-at rows caret))) dy)
+          (fill-rect (+ (- tx dx) (edit-caret-x lay caret) -1)
+                     (- (+ ty (* lh (edit-row-at lay caret))) dy)
                      2 lh 'accent))))))
 
 ;;; ------------------------------------------------------------------ scroll
@@ -1433,33 +1274,35 @@
                                   (+ top (cdr span) (ui-gap)) h))
                     (loop (cdr rs)))))))
         (when (> content h)
-          (let* ([bw (ui-scrollbar-width)] [bx (- (+ x w) bw)]
-                 [start (/ new content)] [size (/ h content)]
-                 [bar (list id 'bar)]
-                 [thumb (cdr (assq 'thumb (ui-scrollbar-areas bx y bw h start
-                                                              size)))])
-            (define (thumb-to! ty)
-              (ui-memo! ui id
-                        (cons (clamp (* most (/ (- ty y)
-                                                (max 1 (- h (cadddr thumb)))))
-                                     0 most)
-                              most))
-              #t)
-            (ui-region! ui bar bx y bw h 'focus 'keep 'on
-              (lambda (ev)
-                (case (car ev)
-                  [(press)
-                   (and (eq? (list-ref ev 3) 'left)
-                        (let* ([py (caddr ev)] [ty (cadr thumb)]
-                               [grab (if (<= ty py (+ ty (cadddr thumb)))
-                                         (- py ty)
-                                         (/ (cadddr thumb) 2))])
-                          (ui-memo! ui (list id 'grab) grab)
-                          (thumb-to! (- py grab))))]
-                  [(drag) (thumb-to! (- (caddr ev) (ui-memo ui (list id 'grab)
-                                                            0)))]
-                  [else #f])))
-            (ui-draw-scrollbar bx y bw h (ui-flags ui bar) start size)))))))
+          (let ([bw (ui-scrollbar-width)])
+            (ui-scrollbar ui (list id 'bar) (- (+ x w) bw) y bw h new content h
+                          (lambda (off) (ui-memo! ui id (cons off most))))))))))
+
+;; A scroll bar at x y w h, for a view h high showing content from off on:
+;; pressing it, on its thumb or beside it, and dragging set the offset by
+;; (set-off! off).
+(define (ui-scrollbar ui id x y w h off content view set-off!)
+  (let* ([most (max 0 (- content view))]
+         [start (/ off content)] [size (/ view content)]
+         [thumb (cdr (assq 'thumb (ui-scrollbar-areas x y w h start size)))])
+    (define (thumb-to! ty)
+      (set-off! (clamp (* most (/ (- ty y) (max 1 (- h (cadddr thumb)))))
+                       0 most))
+      #t)
+    (ui-region! ui id x y w h 'focus 'keep 'on
+      (lambda (ev)
+        (case (car ev)
+          [(press)
+           (and (eq? (list-ref ev 3) 'left)
+                (let* ([py (caddr ev)] [ty (cadr thumb)]
+                       [grab (if (<= ty py (+ ty (cadddr thumb)))
+                                 (- py ty)
+                                 (/ (cadddr thumb) 2))])
+                  (ui-memo! ui (list id 'grab) grab)
+                  (thumb-to! (- py grab))))]
+          [(drag) (thumb-to! (- (caddr ev) (ui-memo ui (list id 'grab) 0)))]
+          [else #f])))
+    (ui-draw-scrollbar x y w h (ui-flags ui id) start size)))
 
 ;; Scrolls view id so that [top, bottom) of its content is in view (its
 ;; top first); invalidates when the offset moved. Not clamped to the last
@@ -1572,7 +1415,7 @@
   (let ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)])
     (fill-rect x (- (+ y h) 1) w 1 'window-border)
     (let ([end (draw-text (+ x 10) (+ y (/ (- h sh) 2))
-                          (fit-text label (- w 16 g) 'ui-small)
+                          (fit-text label (max 0 (- w 16 g)) 'ui-small)
                           (if (or dir (memq 'hover flags)) 'text 'text-faint)
                           'ui-small)])
       (when dir
@@ -1583,6 +1426,240 @@
   (cond [(memq 'selected flags) (fill-rect x y w h 'selection)]
         [(memq 'hover flags) (fill-rect x y w h 'bg-2)])
   (fill-rect x (- (+ y h) 1) w 1 (alpha 'window-border 0.6)))
+
+;;; ------------------------------------------------------------------ tree
+;;; A tree of the app's values (nodes): its roots and a children
+;;; procedure, shown as rows with columns, as a table's, the first column
+;;; indented by depth, with a twisty that expands and collapses a node
+;;; that has children. The kit keeps which nodes are expanded; the app,
+;;; which is selected. Only expanded nodes' children are asked for, and
+;;; only the rows in view are drawn. Like the table it takes no keyboard
+;;; focus: the app passes it keys (ui-tree-key).
+
+;; A row as shown: its node, depth (0: a root), its parent's row (#f for
+;; a root), whether the node has children, and whether they show.
+(define-record-type ui-tree-row
+  (nongenerative schevana-ui-tree-row-1)
+  (fields node depth parent kids? expanded?))
+
+;; The rows shown: each root and, under each expanded node, its children,
+;; depth first. children: (lambda (node) ...) a list, empty for a leaf;
+;; expanded?: (lambda (node) ...). Pure. => a vector of ui-tree-row
+(define (ui-tree-rows roots children expanded?)
+  (let ([acc '()] [n 0])
+    (let walk ([nodes roots] [depth 0] [parent #f])
+      (for-each (lambda (node)
+                  (let* ([kids (children node)]
+                         [open? (and (pair? kids) (expanded? node) #t)]
+                         [i n])
+                    (set! acc (cons (make-ui-tree-row node depth parent
+                                                      (pair? kids) open?)
+                                    acc))
+                    (set! n (+ n 1))
+                    (when open? (walk kids (+ depth 1) i))))
+                nodes))
+    (list->vector (reverse acc))))
+
+;; The row of rows whose node is equal? to node, or #f.
+(define (ui-tree-index rows node)
+  (let loop ([i 0])
+    (cond [(= i (vector-length rows)) #f]
+          [(equal? (ui-tree-row-node (vector-ref rows i)) node) i]
+          [else (loop (+ i 1))])))
+
+;; Is row j of rows (#f: none) under row i, at any depth? (A row's parent
+;; comes before it.)
+(define (ui-tree-under? rows j i)
+  (let up ([p (and j (ui-tree-row-parent (vector-ref rows j)))])
+    (and p (>= p i)
+         (or (= p i) (up (ui-tree-row-parent (vector-ref rows p)))))))
+
+;; What key does to rows (as ui-tree-rows makes them), row i selected (#f:
+;; none), page rows a page: (select . j), (expand . i), (collapse . i),
+;; (open . i), or #f. Up, Down, Page Up and Down, Home and End move as in
+;; a table; Right expands, or goes to the first child; Left collapses, or
+;; goes to the parent; Space expands or collapses; Return opens. Pure.
+(define (ui-tree-step rows i page key)
+  (let ([r (and i (vector-ref rows i))])
+    (case key
+      [(right) (and r (ui-tree-row-kids? r)
+                    (if (ui-tree-row-expanded? r)
+                        (cons 'select (+ i 1))
+                        (cons 'expand i)))]
+      [(left) (and r (if (ui-tree-row-expanded? r)
+                         (cons 'collapse i)
+                         (let ([p (ui-tree-row-parent r)])
+                           (and p (cons 'select p)))))]
+      [(#\space) (and r (ui-tree-row-kids? r)
+                      (cons (if (ui-tree-row-expanded? r) 'collapse 'expand)
+                            i))]
+      [(return) (and r (cons 'open i))]
+      [else (let ([j (ui-table-step i (vector-length rows) page key)])
+              (and j (cons 'select j)))])))
+
+;; Which nodes of tree id are expanded or collapsed, where it differs
+;; from how they start: a hashtable kept by the kit.
+(define (ui-tree-states ui id)
+  (or (ui-memo ui (list id 'expanded) #f)
+      (let ([states (make-hashtable equal-hash equal?)])
+        (ui-memo! ui (list id 'expanded) states)
+        states)))
+
+;; Expands node in tree id (on? #t) or collapses it, from its next draw.
+(define (ui-tree-expand! ui id node on?)
+  (let ([states (ui-tree-states ui id)])
+    (unless (eq? on? (hashtable-ref states node 'unset))
+      (hashtable-set! states node on?)
+      (ui-memo! ui (list id 'generation) #f)   ; its rows change
+      (invalidate! (current-window)))))
+
+;; A key the app's key handler passes to tree id, as its last draw showed
+;; it (see ui-tree-step): the selection moves by (on-select node), Return
+;; calls (on-open node); true when it acted. A tree the last draw did not
+;; show (the app showed something else instead) takes none.
+(define (ui-tree-key ui id key mods selected on-select on-open)
+  (let* ([rows (if (ui-find ui (list id 'body))
+                   (ui-memo ui (list id 'rows) '#())
+                   '#())]
+         [act (and (null? mods)
+                   (ui-tree-step rows (ui-tree-index rows selected)
+                                 (ui-memo ui (list id 'page) 1) key))])
+    (and act
+         (let ([node (ui-tree-row-node (vector-ref rows (cdr act)))])
+           (case (car act)
+             [(select) (on-select node)]
+             [(open) (on-open node)]
+             [else (ui-tree-expand! ui id node (eq? (car act) 'expand))])
+           #t))))
+
+;; roots: the top nodes; children: (lambda (node) ...), a list. columns:
+;; ((key title width) ...), as a table's, under a header; the first holds
+;; the tree. selected: the node equal? to it is selected. A left press
+;; calls on-select, or on a twisty expands or collapses. cell draws a
+;; cell: (lambda (node key x y w h flags) ...), the first column's after
+;; the indentation and twisty. opts: 'expanded (nodes start expanded;
+;; else collapsed), 'on-open (node) on a double click, 'on-menu (node x y)
+;; on a right press, 'on-hide (node) when a collapse hides the selected
+;; row: node, the collapsed one, is to be selected, as Left would (by
+;; default on-select), 'tip (node w): its tooltip, or #f, w its first
+;; cell's width, 'reveal: true scrolls the selected row into view, 'dim
+;; (node): true dims its row (the flag dim), and 'generation: a value that
+;; changes (eqv?) whenever roots or children would give other nodes, so
+;; the rows are kept until it does or a node is expanded or collapsed
+;; (without it, they are made at every draw).
+(define (ui-tree ui id x y w h columns roots children selected on-select cell
+                 . opts)
+  (let* ([hh (ui-table-header-height)] [rh (ui-tree-row-height)]
+         [tip (plist-ref opts 'tip (lambda (node w) #f))]
+         [on-open (plist-ref opts 'on-open (lambda (node) #f))]
+         [on-menu (plist-ref opts 'on-menu (lambda (node x y) #f))]
+         [on-hide (plist-ref opts 'on-hide on-select)]
+         [dim? (plist-ref opts 'dim (lambda (node) #f))]
+         [start (plist-ref opts 'expanded #f)]
+         [generation (plist-ref opts 'generation #f)]
+         [states (ui-tree-states ui id)]
+         [rows (if (and generation
+                        (eqv? generation (ui-memo ui (list id 'generation) #f)))
+                   (ui-memo ui (list id 'rows) #f)
+                   (ui-tree-rows roots children
+                                 (lambda (node)
+                                   (hashtable-ref states node start))))]
+         [n (vector-length rows)] [body (list id 'body)]
+         [view-h (max 0 (- h hh))] [w0 (caddr (car columns))]
+         [c0 (cdr (assq 'cell (ui-tree-areas x y w0 rh 0)))])
+    (ui-memo! ui (list id 'rows) rows)
+    (ui-memo! ui (list id 'generation) generation)
+    ;; the first title over a root's cell
+    (ui-draw-table-header x y (- (car c0) x) hh '() "" #f)
+    (let loop ([cs columns] [cx (car c0)] [cw (- w0 (- (car c0) x))])
+      (unless (null? cs)
+        (ui-draw-table-header cx y cw hh '() (cadar cs) #f)
+        (unless (null? (cdr cs))
+          (loop (cdr cs) (+ cx cw) (caddr (cadr cs))))))
+    (when (plist-ref opts 'reveal #f)
+      (let ([i (ui-tree-index rows selected)])
+        (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))))
+    (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
+    (ui-scroll ui body x (+ y hh) w view-h
+      (lambda (top)
+        (let ([vy (+ y hh)])
+          (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
+              ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
+            (let* ([r (vector-ref rows i)] [node (ui-tree-row-node r)]
+                   [ry (+ top (* i rh))] [rid (list id 'row i)]
+                   [areas (ui-tree-areas x ry w0 rh (ui-tree-row-depth r))]
+                   [twisty (cdr (assq 'twisty areas))]
+                   [c (cdr (assq 'cell areas))])
+              (ui-region! ui rid x ry w rh 'tip (tip node (caddr c)) 'on
+                (lambda (ev)
+                  (and (eq? (car ev) 'press)
+                       (case (list-ref ev 3)
+                         [(left)
+                          (if (and (ui-tree-row-kids? r)
+                                   (apply point-in? (cadr ev) (caddr ev)
+                                          twisty))
+                              (let ([open? (ui-tree-row-expanded? r)])
+                                (ui-tree-expand! ui id node (not open?))
+                                (when (and open?
+                                           (ui-tree-under?
+                                            rows (ui-tree-index rows selected)
+                                            i))
+                                  (on-hide node)))
+                              (begin
+                                (on-select node)
+                                (when (>= (list-ref ev 4) 2) (on-open node))))
+                          #t]
+                         [(right) (on-menu node (cadr ev) (caddr ev)) #t]
+                         [else #f]))))
+              (let ([flags (apply ui-flags ui rid
+                                  (append
+                                   (if (equal? node selected) '(selected) '())
+                                   (if (dim? node) '(dim) '())
+                                   (if (ui-tree-row-kids? r) '(kids) '())
+                                   (if (ui-tree-row-expanded? r)
+                                       '(expanded)
+                                       '())))])
+                (ui-draw-tree-row x ry w rh flags w0 (ui-tree-row-depth r))
+                (cell node (caar columns) (car c) ry (caddr c) rh flags)
+                (let cells ([cs (cdr columns)] [cx (+ x w0)])
+                  (unless (null? cs)
+                    (cell node (caar cs) cx ry (caddr (car cs)) rh flags)
+                    (cells (cdr cs) (+ cx (caddr (car cs)))))))))
+          (+ top (* n rh)))))))
+
+;; A tree's rows are a table's height.
+(define (ui-tree-row-height) (ui-table-row-height))
+
+;; Where a row at depth puts its twisty and its first cell, in its first
+;; column x y w h: indented a twisty's width a level, but by at most half
+;; the column, so that a deep row keeps room for its cell.
+;; ((twisty x y w h) (cell x y w h))
+(define (ui-tree-areas x y w h depth)
+  (let* ([s (+ (ui-glyph-size) 8)]
+         [in (min (* depth s) (max 0 (floor (/ (- w s) 2))))])
+    (list (list 'twisty (+ x 4 in) y s h)
+          (list 'cell (+ x 4 in s) y (max 0 (- w 4 in s)) h))))
+
+;; A row's look: a table row's, and the twisty of a node with children
+;; (flags kids, expanded) at its depth in its first column, w0 wide; dim,
+;; all of it left of its first cell, as the cells dim themselves.
+(define (ui-draw-tree-row x y w h flags w0 depth)
+  (let ([areas (ui-tree-areas x y w0 h depth)] [g (ui-glyph-size)])
+    (ui-draw-table-row x y w h flags)
+    (when (memq 'kids flags)
+      (let ([t (cdr (assq 'twisty areas))])
+        (ui-draw-glyph (+ (car t) (/ (- (caddr t) g) 2)) (+ y (/ (- h g) 2))
+                       g g (if (memq 'hover flags) '(hover) '(quiet))
+                       (if (memq 'expanded flags)
+                           'chevron-down
+                           'chevron-right))))
+    (ui-draw-dim x y (- (cadr (assq 'cell areas)) x) h flags)))
+
+;; A row a view shows but leaves out (flags: dim; the app's search, say),
+;; or a part of it, x y w h: shaded, unless it is selected.
+(define (ui-draw-dim x y w h flags)
+  (when (and (memq 'dim flags) (not (memq 'selected flags)))
+    (fill-rect x y w h (alpha 'bg-0 0.6))))
 
 ;;; ------------------------------------------------------------------ chips
 
@@ -1997,10 +2074,12 @@
 
 ;; A window opened under an older kit holds that kit's ui, a record this
 ;; code cannot read: its app opens again in its place, once the reload
-;; has loaded the apps too.
+;; has loaded the apps too. One that no app opened (Tasks' editor) closes.
 (for-each
  (lambda (win)
    (let ([ui (window-ref win 'ui #f)] [app (window-app win)])
+     (when (and ui (not (ui-state? ui)) (not app))
+       (close-window! win))
      (when (and ui (not (ui-state? ui)) app)
        (let-values ([(cx cy cw ch) (content-rect win)])
          (let ([x (window-x win)] [y (window-y win)])

@@ -5,8 +5,8 @@
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; every file
 ;;; in a folder registers what it defines; and in the widget kit and Tasks
-;;; only the drawing procedures draw or name a color. Fast: it loads the
-;;; world but does not boot it.
+;;; only the drawing procedures draw or name a color, and the edit kit
+;;; never does. Fast: it loads the world but does not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -185,7 +185,8 @@
           (remp registered? ds))
      (cond
        [(not kind)
-        ;; a kit: its names start with its own (ui-, make-ui-state)
+        ;; a kit: its names start with its own (ui-, make-ui-state), or
+        ;; are its record's of the same name (edit, make-edit, edit?)
         (filter-map
          (lambda (d)
            (let* ([s (symbol->string (cdr d))]
@@ -193,7 +194,7 @@
                          (substring s 5 (string-length s))
                          s)]
                   [p (symbol->string stem)])
-             (and (not (or (string=? s p)
+             (and (not (or (string=? s p) (string=? s (string-append p "?"))
                            (string-prefix? (string-append p "-") s)))
                   (format "~a: ~a lacks the kit's prefix ~a-" f (cdr d) p))))
          ds)]
@@ -225,9 +226,9 @@
 ;;; and tasks-draw-…, draw or choose a color: no other top-level form
 ;;; calls a drawing primitive or quotes a theme color key ('text, also an
 ;;; event's name, aside). The style redesign turns each drawing procedure
-;;; into a style's part.
+;;; into a style's part. The edit kit has none: it never draws.
 
-(define seam-files '("kits/ui.ss" "apps/tasks.ss"))
+(define seam-files '("kits/edit.ss" "kits/ui.ss" "apps/tasks.ss"))
 
 (define (drawing-primitive? s)
   (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
@@ -281,7 +282,7 @@
                            (seam-problems form)))))
               (file-forms f))))
 
-(check "in the kit and Tasks, only drawing procedures draw or name a color"
+(check "in the kits and Tasks, only drawing procedures draw or name a color"
        (none? (apply append (map seam-file-problems seam-files))))
 
 (check "the REPL's docs read the folders too"

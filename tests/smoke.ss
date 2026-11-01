@@ -827,7 +827,7 @@
   (tasks-click! x y 'left 1)
   (tasks-click! x y 'left 2)
   (check "a double click selects a word"
-         (equal? (ui-edit-selection (edit)) "menu")))
+         (equal? (edit-selection (edit)) "menu")))
 (shot "title")
 
 ;; Tab to Status; its menu by keys. Priority by mouse.
@@ -933,7 +933,7 @@
        (equal? (task-description nt) "line one\nline two"))
 (press! 'up)
 (steps 1)
-(check "Up moves the caret to the first row" (< (ui-edit-caret (edit)) 9))
+(check "Up moves the caret to the first row" (< (edit-caret (edit)) 9))
 
 (click-ui! tw 'new-item)
 (type! "one")
@@ -1101,8 +1101,10 @@
   (let ([away (not (last-shown?))])
     (type! "v")
     (type! "v")
+    (type! "v")
     (steps 2)
-    (check "Board and back: the List shows its selected row again"
+    (check "the Tree, the Board and back: the List shows its selected row \
+            again"
            (and away (last-shown?)))))
 
 (type! "/")
@@ -1141,6 +1143,7 @@
   (set-task! 9 'assignee a))
 (click-ui! tw 'done)
 (type! "v")
+(type! "v")
 (steps 2)
 (check "Show done off: no Done column"
        (and (not (tasks-view-done? tv)) (ui-find tui '(column todo))
@@ -1158,6 +1161,7 @@
 (click-ui! tw 'done)
 
 ;; The context menu, Duplicate and Move to; Delete and its dialog.
+(column-home! 'todo)
 (let-values ([(x y) (region-center (list 'card 13))])
   (tasks-click! x y 'right 1))
 (check "a right click on a card opens its menu" (menu-open?))
@@ -1299,6 +1303,7 @@
     (set! ui-draw-tooltip orig))
   (for-each delete-task! extra)
   (type! "v")
+  (type! "v")
   (steps 2))
 
 ;; A title cut inside a long word: the card's tooltip tells it, and the
@@ -1380,9 +1385,10 @@
          [a (car (apply ui-text-box-areas
                         (append (ui-region-frame r) '(()))))]
          [lh (font-line-height 'ui)] [text (task-description (selected))]
-         [rows (ui-wrap text (list-ref a 3) (lambda (s) (text-width s 'ui)))]
+         [lay (edit-layout-of #f text (list-ref a 3) #f
+                              (lambda (s) (text-width s 'ui)) #f)]
          [top (- (+ (list-ref a 2)
-                    (* lh (ui-row-at rows (ui-edit-caret (edit)))))
+                    (* lh (edit-row-at lay (edit-caret (edit)))))
                  (ui-memo tui 'description 0))])
     (check "typing at the end of a long description keeps its caret in view"
            (<= (ui-region-y r) top (+ top lh)
@@ -1537,6 +1543,7 @@
            (equal? (ui-region-tip (ui-find tui (list 'table 'row i)))
                    (task-title long))))
   (type! "v")
+  (type! "v")
   (delete-task! long)
   (steps 2))
 
@@ -1551,7 +1558,7 @@
 (set-task! rt 'title "Renamed")
 (steps 2)
 (check "set-task! on a focused title: the field shows it"
-       (and (eq? (focus-id) 'title) (equal? (ui-edit-text (edit)) "Renamed")))
+       (and (eq? (focus-id) 'title) (equal? (edit-text (edit)) "Renamed")))
 (move-task! rt 'done)
 (steps 1)
 (check "move-task!" (eq? (car (last-pair (column-of 'done))) rt))
@@ -1605,6 +1612,397 @@
 (shot "empty")
 (tasks-reset!)
 
+;; Dependencies. The details: what a task waits for, chips a × removes,
+;; Add's menu of what makes no cycle; what waits for it; a chip selects.
+(resize-window! tw 1205 660)
+(tasks-select! tv (find-task 14))
+(steps 2)
+(check "the details show what a task waits for and what waits for it"
+       (and (ui-find tui '(blocked-by 33)) (ui-find tui '(blocks 22))
+            (ui-find tui '(blocked-by add))))
+(shot "links")
+(let ([tip (tasks-tip (find-task 13) #f)] [card (card-of 13)])
+  (check "a blocked task's card has a tooltip naming what it waits for"
+         (and (string-prefix? "Blocked by TASK-31 Each window" tip)
+              (string-contains-ci? tip ", TASK-10 Threads spec")
+              (not (tasks-tip (find-task 12) #f))
+              (or (not card) (equal? (ui-region-tip card) tip)))))
+(click-ui! tw '(blocked-by add))
+(let ([labels (if (menu-open?)
+                  (map car (filter pair? (menu-entries *menu*)))
+                  '())]
+      [offered? (lambda (labels id)
+                  (exists (lambda (l) (string-prefix? (format "TASK-~a " id) l))
+                          labels))])
+  (check "Add opens a menu of the tasks it may wait for: none that waits for \
+          it, nor itself, nor what it waits for already, nor a done one"
+         (and (offered? labels 9) (offered? labels 19)
+              (not (exists (lambda (id) (offered? labels id))
+                           '(22 14 33 1))))))
+(type! "fractal")
+(press! 'return)
+(steps 2)
+(check "typed, the menu narrows, and Return adds that one"
+       (and (not (menu-open?))
+            (equal? (task-blocked-by (find-task 14)) '(33 19))
+            (ui-find tui '(blocked-by 19))))
+(click-ui! tw '(blocked-by remove 19))
+(check "a chip's × removes it" (equal? (task-blocked-by (find-task 14)) '(33)))
+(click-ui! tw '(blocks 22))
+(check "a click on a chip selects that task" (eq? (selected) (find-task 22)))
+(check "the REPL refuses a cycle, and the error names it"
+       (and (equal? (guard (c [#t (condition->string c)])
+                      (set-task! 9 'blocked-by '(16 22)))
+                    "Exception in set-task!: TASK-9 would wait for itself: \
+                     TASK-9 → TASK-22 → TASK-14 → TASK-33 → TASK-9 (each \
+                     waits for the next)")
+            (null? (task-blocked-by (find-task 9)))))
+(set! *toasts* '())
+(move-task! 22 'done)
+(steps 1)
+(check "a blocked task moved to Done: it is, and a toast says what it waits \
+        for"
+       (and (eq? 'done (task-status (find-task 22)))
+            (exists (lambda (t)
+                      (equal? (vector-ref t 1)
+                              "TASK-22 is done, though it waits for TASK-14"))
+                    *toasts*)))
+(move-task! 22 'todo 15)
+(set! *toasts* '())
+(let ([t (add-task! "Born done" 'status 'done 'blocked-by '(10))])
+  (check "a task added done while it waits: the same toast"
+         (exists (lambda (x)
+                   (equal? (vector-ref x 1)
+                           (format "~a is done, though it waits for TASK-10"
+                                   (task-label t))))
+                 *toasts*))
+  (delete-task! t)
+  (set! *toasts* '()))
+
+;; With many tasks, Add's menu shows what fits on the screen, then how many
+;; more, which typing narrows; the task an id typed names comes first. A
+;; choice the REPL made into a cycle while the menu was open is refused,
+;; and a plain toast says so.
+(let* ([more (sort (lambda (a b) (< (task-id a) (task-id b)))   ; board order
+                   (map (lambda (i) (add-task! (format "Filler ~a" i)))
+                        (iota 60)))]
+       [last (car (last-pair more))]
+       [labels (lambda () (map car (filter pair? (menu-entries *menu*))))]
+       [red? (lambda ()
+               (exists (lambda (x) (eq? (vector-ref x 2) 'red)) *toasts*))])
+  (set-task! (car more) 'title (format "About ~a" (task-label last)))
+  (tasks-select! tv (find-task 14))
+  (invalidate! tw)
+  (steps 2)
+  (click-ui! tw '(blocked-by add))
+  (let ([n (length (tasks-blocker-choices (find-task 14)))] [l (labels)])
+    (let-values ([(x y w h) (menu-geometry *menu*)])
+      (check "with many tasks, Add's menu fits on the screen, its last entry \
+              saying how many more"
+             (and (<= (+ y h) (screen-h)) (< 10 (length l) n)
+                  (equal? (car (last-pair l))
+                          (format "… ~a more: type to narrow"
+                                  (- n (length l) -1)))))))
+  (type! (task-label last))
+  (steps 1)
+  (check "an id typed: the task it names first, then what mentions it"
+         (equal? (labels)
+                 (list (format "~a  ~a" (task-label last) (task-title last))
+                       (format "~a  About ~a" (task-label (car more))
+                               (task-label last)))))
+  (press! 'escape)
+  (steps 1)
+  (let ([a (car more)] [b (cadr more)])
+    (tasks-select! tv a)
+    (invalidate! tw)
+    (steps 2)
+    (click-ui! tw '(blocked-by add))
+    (type! (task-label b))
+    (steps 1)
+    (set-task! b 'blocked-by (list a))   ; the REPL, while the menu is open
+    (set! *toasts* '())
+    (press! 'return)
+    (steps 2)
+    (check "a choice the REPL made into a cycle while Add's menu was open: \
+            refused, and a plain toast names the cycle"
+           (and (null? (task-blocked-by a)) (not (red?))
+                (equal? (map (lambda (x) (vector-ref x 1)) *toasts*)
+                        (list (format "~a would wait for itself: ~a → ~a → ~a \
+                                       (each waits for the next)"
+                                      (task-label a) (task-label a)
+                                      (task-label b) (task-label a)))))))
+  (for-each delete-task! more)
+  (set! *toasts* '())
+  (tasks-select! tv #f)
+  (steps 2))
+
+;; The Tree: under each task what it waits for; a twisty, Right, Left and
+;; Space expand and collapse; a click or a key selects; a later row of a
+;; shared blocker is a place of its own, and Return goes to its own row.
+(define (tree-rows) (ui-memo tui '(tree rows) '#()))
+(define (tree-nodes) (map ui-tree-row-node (vector->list (tree-rows))))
+(define (tree-shown! node)   ; the wheel brings node's row into view
+  (let loop ([n 0])
+    (let* ([i (ui-tree-index (tree-rows) node)]
+           [r (ui-find tui (list 'tree 'row i))]
+           [shown (filter-map (lambda (r)
+                                (let ([id (ui-region-id r)])
+                                  (and (list? id) (= 3 (length id))
+                                       (equal? (list-head id 2) '(tree row))
+                                       (caddr id))))
+                              (ui-state-regions tui))])
+      (unless (or (= n 40)
+                  (and r (= (ui-region-h r) (cadddr (ui-region-frame r)))))
+        (let-values ([(x y) (region-center '(tree body))]
+                     [(cx cy cw ch) (content-rect tw)])
+          (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y)))
+                   `(wheel 0 ,(if (< i (apply min shown)) 1 -1)))
+          (steps 1)
+          (loop (+ n 1)))))))
+(define (tree-click! node . twisty?)   ; on its row, or on its twisty
+  (tree-shown! node)
+  (let* ([i (ui-tree-index (tree-rows) node)]
+         [r (ui-find tui (list 'tree 'row i))]
+         [t (cdr (assq 'twisty
+                       (ui-tree-areas (ui-region-x r) (ui-region-y r) 1000
+                                      (ui-region-h r)
+                                      (ui-tree-row-depth
+                                       (vector-ref (tree-rows) i)))))])
+    (tasks-click! (if (pair? twisty?)
+                      (+ (car t) (/ (caddr t) 2))
+                      (+ (ui-region-x r) (/ (ui-region-w r) 2)))
+                  (+ (ui-region-y r) (/ (ui-region-h r) 2)))))
+(define (tree-at) (tasks-tree-node tv))
+(tasks-select! tv #f)
+(click-ui! tw '(view tree))
+(let ([nodes (tree-nodes)])
+  (check "the Tree tab: the roots, under each what it waits for, a shared \
+          blocker's own row under its first waiter and later rows under the \
+          others"
+         (and (eq? (tasks-view-mode tv) 'tree)
+              (equal? (list-head nodes 4) '(16 11 9 12))
+              (member '(17 . 31) nodes) (memv 31 nodes)
+              (member '(33 . 9) nodes)
+              (= (length (filter (lambda (n) (eqv? n 10)) nodes)) 1))))
+(shot "tree")
+(tree-click! 13)
+(check "a click on a row selects its task, and the details show it"
+       (and (eq? (selected) (find-task 13)) (equal? (tree-at) 13)
+            (ui-find tui '(blocked-by 31))))
+(tree-click! 13 'twisty)
+(check "its twisty collapses it" (not (memv 31 (tree-nodes))))
+(press! 'right)
+(steps 1)
+(check "Right expands it" (memv 31 (tree-nodes)))
+(press! 'right)
+(steps 1)
+(check "and again goes to its first child" (equal? (tree-at) 31))
+(press! 'left)
+(steps 1)
+(check "Left goes to the parent" (equal? (tree-at) 13))
+(press! 'left)
+(steps 1)
+(let ([collapsed? (not (memv 31 (tree-nodes)))])
+  (press! #\space)
+  (steps 1)
+  (check "Left collapses, Space expands"
+         (and collapsed? (memv 31 (tree-nodes)))))
+(press! 'down)
+(steps 1)
+(check "Down goes to the next row" (equal? (tree-at) 31))
+(tree-click! '(17 . 31))
+(check "a click on a later row selects its task there"
+       (and (eq? (selected) (find-task 31)) (equal? (tree-at) '(17 . 31))))
+(press! 'down)
+(steps 1)
+(check "and Down goes on from there" (equal? (tree-at) 18))
+(press! 'up)
+(press! 'return)
+(steps 2)
+(check "Return on a later row goes to the task's own row"
+       (and (equal? (tree-at) 31) (eq? (selected) (find-task 31))))
+(press! 'return)
+(steps 1)
+(check "Return on a task's own row edits its title" (eq? (focus-id) 'title))
+(press! 'escape)
+(tree-click! 13 'twisty)
+(tasks-select! tv (find-task 10))
+(invalidate! tw)
+(steps 2)
+(check "selecting a task under a collapsed row expands it again"
+       (and (memv 10 (tree-nodes)) (equal? (tree-at) 10)))
+(tree-click! 16)
+(tree-shown! 16)
+(let-values ([(x y) (region-center (list 'tree 'row
+                                         (ui-tree-index (tree-rows) 16)))])
+  (tasks-click! x y 'right 1))
+(check "a right click on a row opens the task's menu"
+       (and (menu-open?) (eq? (selected) (find-task 16))))
+(press! 'escape)
+(steps 1)
+(let ([dim '()] [orig tasks-draw-node])
+  (set! tasks-draw-node
+        (lambda (x y w h flags t where)
+          (when (memq 'dim flags) (set! dim (cons (task-id t) dim)))
+          (orig x y w h flags t where)))
+  (type! "/")
+  (type! "fractal")
+  (press! 'escape)
+  (steps 2)
+  (set! tasks-draw-node orig)
+  (check "a search dims what it leaves out, keeping the tree"
+         (and (memv 11 dim) (not (memv 19 dim)) (memv 11 (tree-nodes))
+              (memv 16 (tree-nodes)))))
+(shot "tree-search")
+(click-ui! tw 'clear)
+
+;; The selection stays on a row the Tree shows: a later row a change
+;; takes away falls back to the task's own row; a twisty that hides it
+;; selects the row it collapsed, as Left would, and typing in that task's
+;; details keeps it collapsed. A Tree that shows nothing (a search that
+;; matches none) takes no keys.
+(tree-click! '(17 . 31))
+(let ([after (next-to 13)])
+  (move-task! 13 'doing)   ; 17 first in board order: 31's own row under it
+  (steps 2)
+  (let ([i (ui-tree-index (tree-rows) 31)] [was (tree-at)])
+    (press! 'down)
+    (steps 1)
+    (check "a later row a change takes away: the selection falls back to \
+            the task's own row, and Down goes on from there"
+           (and i (equal? was 31)
+                (equal? (tree-at) (list-ref (tree-nodes) (+ i 1))))))
+  (move-task! 13 'todo after)
+  (steps 2))
+(tasks-select! tv (find-task 9))
+(invalidate! tw)
+(steps 2)
+(tree-click! 11 'twisty)
+(check "a twisty that hides the selection selects the row it collapsed"
+       (and (equal? (tree-at) 11) (not (memv 9 (tree-nodes)))))
+(let ([was (task-description (find-task 11))])
+  (click-ui! tw 'description)
+  (type! "x")
+  (steps 2)
+  (check "and typing in that task's details keeps it collapsed"
+         (and (not (memv 9 (tree-nodes))) (equal? (tree-at) 11)))
+  (press! 'escape)
+  (set-task! 11 'description was))
+(tree-click! 11 'twisty)
+(tasks-select! tv #f)
+(type! "/")
+(type! "zzzzqq")
+(press! 'escape)
+(steps 2)
+(press! 'down)
+(press! 'end)
+(steps 2)
+(check "a search that leaves the Tree nothing to show: Down and End select \
+        nothing"
+       (and (ui-find tui 'empty-clear) (not (selected))))
+(click-ui! tw 'clear)
+(let ([forests 0] [made 0] [plain-forest tasks-forest] [plain ui-tree-rows]
+      [after (next-to 13)] [was (task-description (find-task 13))])
+  (set! tasks-forest (lambda (ts) (set! forests (+ forests 1))
+                       (plain-forest ts)))
+  (set! ui-tree-rows (lambda a (set! made (+ made 1)) (apply plain a)))
+  (tasks-select! tv (find-task 13))
+  (invalidate! tw)
+  (steps 2)
+  (click-ui! tw 'description)
+  (set! forests 0)
+  (set! made 0)
+  (type! "y")
+  (steps 2)
+  (let ([typed (list forests made)])
+    (press! 'escape)
+    (move-task! 13 'review)
+    (steps 2)
+    (set! tasks-forest plain-forest)
+    (set! ui-tree-rows plain)
+    (check "a keystroke in the Tree's details works out neither the forest \
+            nor its rows again; a status changed does"
+           (and (equal? typed '(0 0)) (> forests 0) (> made 0))))
+  (move-task! 13 'todo after)
+  (set-task! 13 'description was)
+  (steps 2))
+(let ([drawn '()] [plain draw-text])
+  (set! draw-text (lambda (x y s . more)
+                    (set! drawn (cons s drawn))
+                    (apply plain x y s more)))
+  (tasks-select! tv #f)
+  (invalidate! tw)
+  (steps 1)
+  (set! draw-text plain)
+  (check "with nothing selected, the keys list the Tree's Left, Right and \
+          Space" (member "← → Space" drawn)))
+(set-task! 12 'blocked-by '(16))
+(steps 2)
+(check "set-task! from the REPL shows in the Tree at once"
+       (and (equal? (assv 12 (tasks-tree)) '(12 (16)))
+            (let ([i (ui-tree-index (tree-rows) 16)])
+              (and i (= 1 (ui-tree-row-depth (vector-ref (tree-rows) i)))))))
+(let* ([shared (add-task! "Shared" 'status 'todo)]
+       [a (add-task! "Waits A" 'blocked-by (list shared))]
+       [b (add-task! "Waits B" 'blocked-by (list shared))])
+  (steps 2)
+  (tree-click! (task-id shared))
+  (press! 'delete)
+  (press! 'return)
+  (steps 2)
+  (check "deleting a task in the Tree: what waited for it no more, and the \
+          next row selected"
+         (and (not (memq shared *tasks*)) (null? (task-blocked-by a))
+              (null? (task-blocked-by b)) (eq? (selected) b)))
+  (delete-task! a)
+  (delete-task! b))
+(set-task! 12 'blocked-by '())
+(tasks-select! tv #f)
+
+;; A reload that changed task's fields (here, as if back from its first
+;; record type) carries the tasks over, an empty blocked-by each, and
+;; Tasks opens again in its place.
+(let* ([rtd (make-record-type-descriptor
+             'task #f 'schevana-task-1 #f #f
+             '#((immutable id) (mutable title) (mutable description)
+                (mutable status) (mutable kind) (mutable priority)
+                (mutable assignee) (mutable tags) (mutable due)
+                (mutable checklist) (immutable created) (mutable updated)))]
+       [old (record-constructor (make-record-constructor-descriptor rtd #f
+                                                                    #f))]
+       [before (map (lambda (t)
+                      (list (task-id t) (task-title t) (task-status t)
+                            (task-checklist t)))
+                    *tasks*)]
+       [x (window-x tw)] [y (window-y tw)])
+  (set! *tasks*
+    (map (lambda (t)
+           (old (task-id t) (task-title t) (task-description t)
+                (task-status t) (task-kind t) (task-priority t)
+                (task-assignee t) (task-tags t) (task-due t) (task-checklist t)
+                (task-created t) (task-updated t)))
+         *tasks*))
+  (load-sources! '("apps/tasks.ss"))
+  (steps 3)
+  (let ([new (find-window 'tasks)])
+    (check "a reload that changed task's fields keeps every task, each \
+            carried over with an empty blocked-by, and Tasks opens again in \
+            its place"
+           (and (for-all task? *tasks*)
+                (equal? before (map (lambda (t)
+                                      (list (task-id t) (task-title t)
+                                            (task-status t) (task-checklist t)))
+                                    *tasks*))
+                (for-all (lambda (t) (null? (task-blocked-by t))) *tasks*)
+                new (not (eq? new tw)) (not (memq tw (windows)))
+                (= x (window-x new)) (= y (window-y new))
+                (not (window-error new))))
+    (set! tw new)
+    (set! tv (window-ref tw 'state))
+    (set! tui (window-ref tw 'ui))))
+(tasks-reset!)
+(steps 2)
+
 ;; A narrow window: the details are a page.
 (resize-window! tw 760 600)
 (steps 2)
@@ -1644,7 +2042,7 @@
               (resize-window! tw w 700)
               (steps 1)
               (when (and (> (y 'clear) (y 'new))
-                         (> (ui-region-w (ui-find tui 'search)) 181))
+                         (> (ui-region-w (ui-find tui 'search)) 151))
                 (set! bad (cons w bad))))
             (map (lambda (i) (+ 1260 i)) (iota 31)))
   (set-theme! 'scale scale)
@@ -1714,6 +2112,9 @@
         (type! "v") (timed "the List" 1)
         (press! 'down) (timed "down" 1)
         (press! 'up) (timed "up" 1)
+        (type! "v") (timed "the Tree" 1)
+        (press! 'down) (timed "down" 1)
+        (press! 'left) (timed "left" 1)
         (type! "v") (timed "the Board" 1)
         (type! "/") (paste!) (timed "the search" 1)
         (at! 'search) (timed "a click in it" 2)
@@ -1721,8 +2122,8 @@
         (unless (null? slow) (printf "  slow or crashed: ~s\n" slow))
         (check "100,000 characters in a title, an assignee, a tag and the \
                 search: every step of the Board, the details, the menus, \
-                the dialog and the List under 300 ms, and Tasks never \
-                crashed"
+                the dialog, the List and the Tree under 300 ms, and Tasks \
+                never crashed"
                (and (null? slow) menu? dialog? menu-w (< menu-w 400)
                     (= (string-length (task-title t)) 100001)
                     ;; a name is cut to 64 characters
@@ -1732,6 +2133,310 @@
   (when (ui-find tui 'clear) (click-ui! tw 'clear))
   (delete-task! t)
   (steps 2))
+
+;; A description: at most 65,536 characters, typed, pasted or set from the
+;; REPL; a long one scrolls by the wheel and its bar, which settles once
+;; idle steps have its rows, and Ctrl+End and Ctrl+Home show its ends.
+(define (words n)
+  (let ([o (open-output-string)])
+    (let loop ([i 0])
+      (when (< i n)
+        (put-string o (vector-ref '#("scroll " "the " "long " "text " "row ")
+                                  (mod i 5)))
+        (loop (+ i 1))))
+    (substring (get-output-string o) 0 n)))
+(define long-task (add-task! "A long description" 'status 'review))
+(steps 2)
+(let-values ([(x y) (region-center (list 'card (task-id long-task)))])
+  (tasks-click! x y))
+(set-task! long-task 'description (make-string 70000 #\a))
+(steps 1)
+(check "a description given by the REPL is cut to 65,536 characters"
+       (= 65536 (string-length (task-description long-task))))
+(click-ui! tw 'description)
+(press! 'end 'ctrl)
+(type! "b")
+(press! 'return)
+(steps 2)
+(check "at 65,536 characters a key types nothing, nor does Return"
+       (equal? (task-description long-task) (make-string 65536 #\a)))
+(do ([i 0 (+ i 1)]) ((= i 10)) (press! 'backspace))
+(clipboard-set! (make-string 100 #\c))
+(press! #\v 'ctrl)
+(steps 2)
+(check "a paste is cut to fit"
+       (let ([d (task-description long-task)])
+         (and (= 65536 (string-length d))
+              (string=? (substring d 65526 65536) (make-string 10 #\c)))))
+(press! 'escape)
+(steps 1)
+(set-task! long-task 'description (words 65000))
+(steps 1)
+(let ([bar (ui-find tui '(description bar))]
+      [lay (ui-memo tui '(description rows) #f)])
+  (check "a long description has a scroll bar; idle steps compute its rows \
+          to the end, then draw it again, its bar settled"
+         (and bar (pair? (ui-state-scans tui))
+              (not (edit-layout-done? lay))
+              (wait-for (lambda () (null? (ui-state-scans tui))))
+              (edit-layout-done? lay)
+              (eq? lay (ui-memo tui '(description rows) #f)))))
+(define (description-top) (ui-memo tui 'description 0))
+(define (caret-shown?)   ; the caret's row is in the description's view
+  (let* ([r (ui-find tui 'description)]
+         [a (car (apply ui-text-box-areas
+                        (append (ui-region-frame r) '(()))))]
+         [lh (font-line-height 'ui)]
+         [row (edit-row-at (ui-memo tui '(description rows) #f)
+                           (ui-caret tui))]
+         [top (- (* lh row) (description-top))])
+    (and (>= top 0) (<= (+ top lh) (list-ref a 4)))))
+(let-values ([(x y) (region-center 'description)]
+             [(cx cy cw ch) (content-rect tw)])
+  (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))) '(wheel 0 -3))
+  (steps 2)
+  (check "the wheel scrolls a long description" (> (description-top) 0)))
+(let-values ([(x0 y0) (ui-point tw '(description bar) 0.5)]
+             [(cx cy cw ch) (content-rect tw)])
+  (let* ([r (ui-find tui '(description bar))]
+         [top (+ cy (round (ui-region-y r)) 2)]
+         [bottom (+ cy (round (+ (ui-region-y r) (ui-region-h r))))])
+    (inject! `(mouse-move ,x0 ,top) `(mouse-down ,x0 ,top left 1)
+             `(mouse-move ,x0 ,bottom) `(mouse-up ,x0 ,bottom left))
+    (steps 2)
+    (let* ([lay (ui-memo tui '(description rows) #f)]
+           [d (ui-find tui 'description)]
+           [th (list-ref (car (apply ui-text-box-areas
+                                     (append (ui-region-frame d) '(()))))
+                         4)])
+      (check "its thumb dragged to the bottom shows the last row"
+             (>= (+ (description-top) th)
+                 (- (* (font-line-height 'ui) (edit-layout-count lay)) 1))))))
+(click-ui! tw 'description)
+(press! 'home 'ctrl)
+(steps 2)
+(check "Ctrl+Home: the caret at the start, in view"
+       (and (= 0 (ui-caret tui)) (= 0 (description-top)) (caret-shown?)))
+(press! 'end 'ctrl)
+(steps 2)
+(check "Ctrl+End: the caret at the end, in view"
+       (and (= 65000 (ui-caret tui)) (> (description-top) 0)
+            (caret-shown?)))
+(shot "long-description")
+(define (description-page)   ; the rows a page moves
+  (let* ([r (ui-find tui 'description)]
+         [a (car (apply ui-text-box-areas
+                        (append (ui-region-frame r) '(()))))])
+    (max 1 (exact (floor (/ (list-ref a 4) (font-line-height 'ui)))))))
+(define (caret-row)
+  (edit-row-at (ui-memo tui '(description rows) #f) (ui-caret tui)))
+(press! 'home 'ctrl)
+(press! 'down)
+(press! 'down)
+(steps 2)
+(let ([row (caret-row)] [top (description-top)]
+      [page (description-page)] [lh (font-line-height 'ui)])
+  (press! 'page-down)
+  (steps 2)
+  (let ([row-down (caret-row)] [top-down (description-top)])
+    (press! 'page-up)
+    (steps 2)
+    (check "Page Down scrolls a long description a page and moves the \
+            caret as many rows, so it keeps its place; Page Up goes back"
+           (and (= 2 row) (= row-down (+ row page))
+                (< (abs (- top-down (+ top (* page lh)))) 0.01)
+                (= (caret-row) row)
+                (< (abs (- (description-top) top)) 0.01)))))
+
+;; A keystroke's edit says where it changed the text, so its rows follow
+;; without comparing texts; a change from the REPL compares them.
+(define compared 0)
+(define plain-difference edit-difference)
+(set! edit-difference
+      (lambda (a b) (set! compared (+ compared 1)) (plain-difference a b)))
+(type! "abc")
+(press! 'backspace)
+(press! 'delete)
+(press! 'return)
+(steps 2)
+(let ([typed compared])
+  (set-task! long-task 'description
+             (string-append "From the REPL. " (task-description long-task)))
+  (steps 2)
+  (check "typing in a long description compares no texts; a change from \
+          the REPL does"
+         (and (= typed 0) (> compared 0))))
+
+;; A step that brings any window input runs no scan for a scroll bar, in
+;; no window: the input's frame comes first.
+(let ([slices 0] [plain edit-layout-scan!] [w (repl)])
+  (set! edit-layout-scan!
+        (lambda args (set! slices (+ slices 1)) (apply plain args)))
+  (set-task! long-task 'description (words 65000))
+  (steps 1)
+  (let ([pending? (pair? (ui-state-scans tui))])
+    (set! slices 0)
+    (type! "x")
+    (steps 1)
+    (let ([on-input slices])
+      (steps 1)
+      (set! edit-layout-scan! plain)
+      (close-window! w)
+      (steps 2)
+      (check "a key typed in a REPL runs no scan of Tasks' long description \
+              in that step; the next, idle, does"
+             (and pending? (= on-input 0) (> slices 0))))))
+(focus-window! tw)
+(click-ui! tw 'description)
+
+;; The description's editor: a window of its own, opened by the button by
+;; the Description label or by Ctrl+E in it, modal to Tasks; Save
+;; (Ctrl+S) and Cancel (Escape, asking first when there are changes);
+;; closed in any way, Tasks goes on.
+(define (editor) (tasks-view-editor tv))
+(define (editor-text) (tasks-editor-text (window-ref (editor) 'state)))
+(define (waiting?) (and (ui-find tui 'waiting) #t))
+(press! 'escape)
+(steps 1)
+(click-ui! tw 'edit-description)
+(steps 1)
+(check "the button by the label opens the editor, focused, on top, its \
+        text focused at the start, and Tasks waits under a scrim"
+       (and (window? (editor)) (eq? (editor) (focused-window))
+            (eq? (editor) (car (windows)))
+            (equal? (window-title (editor))
+                    (format "~a — Description" (task-label long-task)))
+            (eq? 'text (ui-focused (window-ref (editor) 'ui)))
+            (= 0 (ui-caret (window-ref (editor) 'ui)))
+            (waiting?)))
+(screenshot (format "~a/tasks-editor.png" out-dir))
+(let-values ([(cx cy cw ch) (content-rect tw)])
+  (let ([x (+ cx 30)] [y (+ cy 80)] [n (length *tasks*)])
+    (focus-window! tw)
+    (type! "n")
+    (press! 'delete)
+    (steps 2)
+    (check "Tasks takes no key while it waits"
+           (and (= n (length *tasks*)) (not (tasks-view-confirm tv))))
+    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+             `(mouse-up ,x ,y left))
+    (steps 2)
+    (check "a click in Tasks brings the editor to the front"
+           (and (eq? (editor) (focused-window))
+                (eq? (editor) (car (windows)))))))
+(define (editor-status)
+  (let ([ed (editor)])
+    (tasks-editor-status (window-ref ed 'state) (ui-edit (window-ref ed 'ui)))))
+(set! compared 0)
+(type! "Begun. ")
+(steps 2)
+(check "typed into the editor, the draft changes, not the task, and no \
+        texts are compared"
+       (and (string-prefix? "Begun. scroll" (editor-text))
+            (string-prefix? "scroll" (task-description long-task))
+            (= compared 0)))
+(let ([status (editor-status)])
+  (press! 'return)
+  (type! "ab")
+  (steps 2)
+  (let ([two (editor-status)])
+    (press! 'backspace)
+    (press! 'backspace)
+    (press! 'backspace)
+    (steps 2)
+    (check "the status line counts the caret's line and column as typing \
+            makes and joins lines"
+           (and (string-prefix? "Line 1, column 8  ·  65,007 of" status)
+                (string-prefix? "Line 2, column 3" two)
+                (string-prefix? "Line 1, column 8" (editor-status))))))
+(set! edit-difference plain-difference)
+(press! #\s 'ctrl)
+(steps 2)
+(check "Ctrl+S saves and closes it, and Tasks waits no more"
+       (and (not (editor)) (not (waiting?))
+            (string-prefix? "Begun. scroll" (task-description long-task))))
+(click-ui! tw 'description)
+(press! 'home 'ctrl)
+(press! 'right) (press! 'right)
+(press! #\e 'ctrl)
+(steps 2)
+(check "Ctrl+E in the description opens it, the caret where it was"
+       (and (editor) (= 2 (ui-caret (window-ref (editor) 'ui)))))
+(press! 'escape)
+(steps 2)
+(check "Escape with no changes closes it" (and (not (editor)) (not (waiting?))))
+(click-ui! tw 'edit-description)
+(type! "XY")
+(press! 'escape)
+(steps 2)
+(let ([eui (window-ref (editor) 'ui)])
+  (check "Escape with changes asks first"
+         (and (editor) (ui-find eui '(discard 1))))
+  (screenshot (format "~a/tasks-editor-discard.png" out-dir))
+  (click-ui! (editor) '(discard 0))
+  (check "Keep editing: back to the text, the caret where it was"
+         (and (editor) (not (ui-find eui 'discard))
+              (eq? 'text (ui-focused eui)) (= 2 (ui-caret eui))))
+  (click-ui! (editor) 'cancel)
+  (press! 'return)
+  (steps 2)
+  (check "Cancel, then Discard: the description as it was, the editor gone"
+       (and (not (editor)) (not (waiting?))
+            (string-prefix? "Begun. scroll" (task-description long-task)))))
+(click-ui! tw 'edit-description)
+(toggle-maximize! (editor))
+(steps 2)
+(press! 'end 'ctrl)
+(type! "!")
+(steps 2)
+(let ([ed (editor)])
+  (check "maximized, it types at the end of the text"
+         (and (maximized? ed) (not (window-error ed))
+              (string-suffix? "!" (editor-text))))
+  (screenshot (format "~a/tasks-editor-maximized.png" out-dir))
+  (close-window! ed)
+  (steps 2)
+  (check "closed by its window, the editor lets Tasks go, the draft lost"
+         (and (not (editor)) (not (waiting?)) (focused-window)
+              (not (string-suffix? "!" (task-description long-task))))))
+;; Its task deleted from the REPL meanwhile, Save keeps the draft in a new
+;; task of its title, and a toast says so.
+(let ([gone (add-task! "Gone soon" 'status 'review 'description "Old.")])
+  (steps 2)
+  (tasks-select! tv gone)
+  (steps 1)
+  (let ([ed (tasks-open-editor! tv gone 0)])
+    (steps 2)
+    (delete-task! gone)
+    (steps 1)
+    (type! "Kept. ")
+    (press! #\s 'ctrl)
+    (steps 2)
+    (let ([new (find (lambda (t) (equal? (task-description t) "Kept. Old."))
+                     *tasks*)])
+      (check "Save into a task deleted meanwhile keeps the draft in a new \
+              task of its title, selected, and a toast names it"
+             (and new (not (memq ed (windows))) (not (waiting?))
+                  (equal? (task-title new) "Gone soon")
+                  (eq? new (tasks-view-selected tv))
+                  (exists (lambda (t)
+                            (string-contains-ci? (vector-ref t 1)
+                                                 (task-label new)))
+                          *toasts*)))
+      (when new (delete-task! new))
+      (tasks-select! tv long-task)
+      (steps 2))))
+(click-ui! tw 'edit-description)
+(let ([ed (editor)])
+  (close-window! tw)
+  (check "closing Tasks closes its editor" (not (memq ed (windows))))
+  (set! tw (tasks))
+  (set! tv (window-ref tw 'state))
+  (set! tui (window-ref tw 'ui))
+  (resize-window! tw 1205 660)
+  (steps 2))
+(delete-task! long-task)
+(steps 2)
 
 ;; A window titled with 10,000 characters, then (when that was quick, so
 ;; that a slow cut fails in seconds) with 100,000: every window style
