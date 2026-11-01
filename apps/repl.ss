@@ -1223,6 +1223,17 @@
 (define repl-pad 10)
 (define (repl-line-height) (+ 3 (font-line-height 'mono)))
 
+;; How far below a row's top what marks a character (the cursor, a
+;; matching paren) starts, th high: centered on the ink of parentheses,
+;; in whole device pixels. (The font's own box sits differently around
+;; its glyphs at each size, as its metrics round.)
+(define (repl-mark-top th)
+  (use-font! (get-font 'mono))
+  (cairo-text-extents *cr* "()" *scratch*)
+  (let ([middle (+ (font-ascent 'mono) (foreign-ref 'double *scratch* 8)
+                   (/ (foreign-ref 'double *scratch* 24) 2))])
+    (/ (round (* *scale* (- middle (/ th 2)))) *scale*)))
+
 ;; A new REPL opens with room for this many characters, like a terminal,
 ;; whatever size the code font is.
 (define repl-initial-cols 80)
@@ -1237,6 +1248,10 @@
 (define (repl-draw r win w h)
   (let* ([cw (font-char-width 'mono)]
          [lh (repl-line-height)]
+         ;; the text's own height (a row is that and a gap below it), the
+         ;; height of what marks a character
+         [th (font-line-height 'mono)]
+         [mark-top (repl-mark-top th)]
          [pad repl-pad]
          [cols (max 8 (exact (floor (/ (- w pad pad) cw))))]
          [rows (max 1 (exact (floor (/ (- h pad pad) lh))))]
@@ -1309,8 +1324,8 @@
                                     [col (remainder j cols)])
                                 (when (< row shown)
                                   (fill-round-rect (+ pad (* col cw))
-                                                   (+ top (* row lh))
-                                                   cw lh 3
+                                                   (+ top (* row lh) mark-top)
+                                                   cw th 3
                                                    (alpha 'yellow 0.25))))
                               (vector-set! colors j 'yellow))))
                         paren))
@@ -1328,12 +1343,12 @@
                              (cond
                                [(not focused?)
                                 (stroke-rect (+ pad (* col cw))
-                                             (+ top (* row lh))
-                                             cw lh 'text-faint)]
+                                             (+ top (* row lh) mark-top)
+                                             cw th 'text-faint)]
                                [(repl-blink r)
                                 (fill-rect (+ pad (* col cw))
-                                           (+ top (* row lh) 1)
-                                           2 (- lh 2) 'accent)]))))))]
+                                           (+ top (* row lh) mark-top)
+                                           2 th 'accent)]))))))]
                   [(eq? (car e) 'input)
                    (let ([colors (scheme-colors text 3)])
                      (vector-fill-range! colors 0 3 'text-faint)
