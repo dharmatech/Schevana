@@ -24,11 +24,12 @@
 ;;; standing still), a theme change on S30 (it paints the wallpaper
 ;;; again), the clock's second with no window and a keystroke in a REPL
 ;;; alone (each step one of them, at 100% and 200%, and at 200% on a
-;;; 1920 × 1080 screen, a 4K one), and a busy process's share of the main
-;;; thread while S30T animates at 200% (printed, not bounded). Fails
-;;; (exit 1) unless every measured step drew a frame, an idle step takes
-;;; under 0.2 ms and uploads nothing, and the busy process and the
-;;; animation both go on.
+;;; 1920 × 1080 screen, a 4K one), Tasks maximized on that screen (an idle
+;;; step, a keystroke in a title, two in one step, a card dragged), and a
+;;; busy process's share of the main thread while S30T animates at 200%
+;;; (printed, not bounded). Fails (exit 1) unless every measured step drew
+;;; a frame, an idle step takes under 0.2 ms and uploads nothing (with
+;;; Tasks open too), and the busy process and the animation both go on.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -243,6 +244,11 @@
   (set-theme! 'scale pct)
   (scene! 'S30)
   (for-each (lambda (w) (window-call w 'key #\space '())) (windows))
+  (quiet-steps))
+
+;; 3000 steps with nothing happening: the median of those that draw no
+;; frame, and the bytes they uploaded.
+(define (quiet-steps)
   (steps 3 0)
   (let loop ([i 0] [times '()] [uploaded 0])
     (if (< i 3000)
@@ -376,6 +382,66 @@
 (screen! 1280 800 100)
 
 ;;; ------------------------------------------------------------------
+;;; Tasks, maximized on a 1920 × 1080 screen at 200%
+;;; With nothing focused it asks for no frame. A keystroke in a task's
+;;; title, two in one step (the second lays the window out again first)
+;;; and a card dragged a step a move each draw the whole window.
+
+(define (tasks-bench)
+  (screen! 1920 1080 200)
+  (clear-world!)
+  (fixed-status!)
+  (tasks-reset!)
+  (let* ([win (tasks)] [ui (window-ref win 'ui)])
+    (define (at id)   ; region id's middle on screen
+      (let ([r (ui-find ui id)])
+        (let-values ([(cx cy cw ch) (content-rect win)])
+          (list (exact (floor (+ cx (ui-region-x r) (/ (ui-region-w r) 2))))
+                (exact (floor (+ cy (ui-region-y r) (/ (ui-region-h r) 2))))))))
+    (maximize-window! win)
+    (steps 2 17)
+    (apply inject! (let ([p (at '(card 9))])
+                     `((mouse-move ,@p) (mouse-down ,@p left 1)
+                       (mouse-up ,@p left))))
+    (let*-values ([(idle idle-up) (quiet-steps)]
+                  [(key-main key-wall key-up)
+                   (begin
+                     (inject! '(key-down return ()))
+                     (frame-steps (lambda (i)
+                                    (inject! (if (even? i)
+                                                 '(text "a")
+                                                 '(key-down backspace
+                                                   ()))))))]
+                  [(two-main two-wall two-up)
+                   (frame-steps (lambda (i)
+                                  (if (even? i)
+                                      (inject! '(text "a") '(text "b"))
+                                      (inject! '(key-down backspace ())
+                                               '(key-down backspace ())))))]
+                  [(drag-main drag-wall drag-up)
+                   (let ([p (at '(card 10))] [a (at '(column review))]
+                         [b (at '(column done))])
+                     (inject! '(key-down escape ()) `(mouse-move ,@p)
+                              `(mouse-down ,@p left 1))
+                     (steps 1 0)
+                     (frame-steps
+                      (lambda (i)
+                        (inject! `(mouse-move ,@(if (even? i) a b))))))])
+      (inject! `(mouse-up ,@(at '(column todo)) left))
+      (steps 2 0)
+      (close-window! win)
+      (printf "Tasks maximized on 1920x1080 at 200%: an idle step ~,3f ms, \
+               ~a bytes uploaded; a keystroke in a title: main ~,2f ms, wall \
+               ~,2f; two in one step: main ~,2f ms, wall ~,2f; a card \
+               dragged, a move: main ~,2f ms, wall ~,2f\n"
+              idle idle-up key-main key-wall two-main two-wall drag-main
+              drag-wall)
+      (values idle idle-up))))
+
+(define-values (tasks-idle tasks-idle-up) (tasks-bench))
+(screen! 1280 800 100)
+
+;;; ------------------------------------------------------------------
 ;;; a busy process
 
 ;; A REPL evaluation that computes (a loop counting) while S30T animates,
@@ -425,6 +491,9 @@
           "an idle step takes under 0.2 ms (~,3f, ~,3f) and uploads nothing"
           idle-100 idle-200)
          (and (< (max idle-100 idle-200) 0.2) (= 0 idle-up-100 idle-up-200)))
+(assert! (format "with Tasks open and nothing focused, an idle step takes \
+                  under 0.2 ms (~,3f) and uploads nothing" tasks-idle)
+         (and (< tasks-idle 0.2) (= 0 tasks-idle-up)))
 (assert! "a busy process and S30T's animation both go on"
          (and (> busy-loops 0) (> busy-fps 1)))
 (printf "S30T main per frame: ~,2f ms at 100%, ~,2f ms at 200%\n"

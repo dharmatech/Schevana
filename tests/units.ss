@@ -1,5 +1,6 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
-;;; context, pixmaps, Life's generations and grid, and invalidation.
+;;; context, pixmaps, Life's generations and grid, and invalidation; the
+;;; widget kit's text editing, dates and layout, and Tasks' own procedures.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -896,6 +897,587 @@
   (check "handlers run with (current-window) set"
          (and (eq? w (window-call w 'key #\a '())) (not (current-window))))
   (close-window! w))
+
+;;; ------------------------------------------------------------------
+;;; long text: cut, colored and searched in time at any length
+
+;; Whether thunk ends within the fuel an app's handler gets.
+(define (within-fuel? thunk)
+  ((make-engine thunk) handler-fuel (lambda (left . r) #t) (lambda (e) #f)))
+
+;; fit-text as plainly as it can be said: a character shorter at a time.
+(define (fit-plainly str max-w font)
+  (if (<= (text-width str font) max-w)
+      str
+      (let loop ([n (- (string-length str) 1)])
+        (let ([s (string-append (substring str 0 (max n 0)) "…")])
+          (if (or (<= n 0) (<= (text-width s font) max-w)) s (loop (- n 1)))))))
+
+(check "fit-text cuts where cutting a character at a time does: window, \
+        task and made-up titles, other scripts, in five fonts and many \
+        widths"
+       (let ([strings
+              (append
+               (list "" "a" "…" "REPL" "REPL — running · Ctrl+C to interrupt"
+                     "Life" "Sketch" "Settings" "Tasks" "Clock" "Monitor"
+                     "Überschrift: Größenänderung — ½ × 東京 λ"
+                     "Ελληνικά και Русский текст с ударени́ем"
+                     "emoji 😀 and a tab\tand spaces    end"
+                     (make-string 40 #\λ) (make-string 60 #\i)
+                     (make-string 26 #\W))
+               (begin (tasks-reset!) (map task-title *tasks*))
+               (let ([abc "aW i.λ東Ü\x301;😀-"])   ; made up, the same each run
+                 (map (lambda (i)
+                        (list->string
+                         (map (lambda (j)
+                                (string-ref abc (mod (* (+ i 3) (+ j 7) 37)
+                                                     (string-length abc))))
+                              (iota (mod (* i 17) 90)))))
+                      (iota 30))))])
+         (for-all (lambda (font)
+                    (for-all (lambda (w)
+                               (for-all (lambda (s)
+                                          (equal? (fit-text s w font)
+                                                  (fit-plainly s w font)))
+                                        strings))
+                             '(-1 0 6 13 25 40 64 100 150 220 320)))
+                  '(ui title ui-small mono-small heading))))
+
+(check "fit-text measures log n times: 100,000 characters in at most 18"
+       (let* ([n 0] [orig text-width]
+              [s (dynamic-wind
+                   (lambda ()
+                     (set! text-width
+                           (lambda args (set! n (+ n 1)) (apply orig args))))
+                   (lambda () (fit-text (make-string 100000 #\W) 300 'ui))
+                   (lambda () (set! text-width orig)))]
+              [k (- (string-length s) 1)])
+         (and (<= 1 n 18)
+              (<= (text-width s 'ui) 300)
+              (> (text-width (string-append (make-string (+ k 1) #\W) "…")
+                             'ui)
+                 300))))
+
+(check "Reticle's spaced title: cut with … to its room, and an empty one \
+        stays empty however little room is left"
+       (and (equal? (reticle-label "Tasks" 1000) "TASKS")
+            (string-suffix? "…" (reticle-label (make-string 40 #\m) 100))
+            (for-all (lambda (room) (equal? (reticle-label "" room) ""))
+                     '(-40 -3 -1 0 50))))
+
+(check "app-color: the color the whole hash gives, and a name of 100,000 \
+        characters within a handler's fuel"
+       (and (for-all
+             (lambda (name)
+               (eq? (app-color name)
+                    (list-ref app-colors
+                              (mod (fold-left (lambda (h c)
+                                                (+ (* h 31) (char->integer c)))
+                                              7
+                                              (string->list
+                                               (symbol->string name)))
+                                   (length app-colors)))))
+             '(repl life settings tasks clock |Pavel Uvarov| perf λ ||))
+            (let ([long (string->symbol (make-string 100000 #\a))])
+              (within-fuel? (lambda () (app-color long))))))
+
+(check "string-contains-ci?: case ignored, the empty string found, and a \
+        word missing from 100,000 characters looked for within a handler's \
+        fuel"
+       (and (string-contains-ci? "Hello World" "O w")
+            (string-contains-ci? "ΛΑΜΒΔΑ λ" "λαμ")
+            (string-contains-ci? "abc" "") (string-contains-ci? "" "")
+            (not (string-contains-ci? "abc" "abcd"))
+            (not (string-contains-ci? "" "a"))
+            (string-contains-ci? "xxabcab" "cab")
+            (let ([s (apply string-append (make-list 12500 "abcdefg "))]
+                  [w (make-string 1000 #\z)])
+              (within-fuel? (lambda () (string-contains-ci? s w))))))
+
+;;; ------------------------------------------------------------------
+;;; the widget kit and Tasks, pure
+;;; Text editing, wrapping, dates, flow and table keys, and Tasks' own
+;;; procedures, with no window: text measures 7 px a character.
+
+(define (m7 s) (* 7 (string-length s)))
+(define (ed text caret . anchor)
+  (make-ui-edit text caret (if (pair? anchor) (car anchor) caret) #f))
+(define (state e) (list (ui-edit-text e) (ui-edit-caret e) (ui-edit-anchor e)))
+(define (key e k . mods)
+  (ui-edit-key e k mods (ui-wrap (ui-edit-text e) 1000 m7) m7))
+(define fbq "foo-bar  baz.qux")
+
+(check "insert at a caret, over a selection, at both ends, into empty text"
+       (and (equal? (state (ui-edit-insert (ed "abc" 1) "X")) '("aXbc" 2 2))
+            (equal? (state (ui-edit-insert (ed "abcd" 1 3) "X")) '("aXd" 2 2))
+            (equal? (state (ui-edit-insert (ed "abc" 0) "X")) '("Xabc" 1 1))
+            (equal? (state (ui-edit-insert (ed "abc" 3) "X")) '("abcX" 4 4))
+            (equal? (state (ui-edit-insert (ed "" 0) "X")) '("X" 1 1))
+            (equal? (state (ui-edit-insert (ed "abc" 1 2) "")) '("ac" 1 1))))
+
+(check "Backspace at the start and Delete at the end change nothing; \
+        they erase a character, a selection, or a word with Ctrl"
+       (and (equal? (state (key (ed "abc" 0) 'backspace)) '("abc" 0 0))
+            (equal? (state (key (ed "abc" 3) 'delete)) '("abc" 3 3))
+            (equal? (state (key (ed "abc" 2) 'backspace)) '("ac" 1 1))
+            (equal? (state (key (ed "abc" 1) 'delete)) '("ac" 1 1))
+            (equal? (state (key (ed "abcd" 3 1) 'backspace)) '("ad" 1 1))
+            (equal? (state (key (ed fbq 16) 'backspace 'ctrl))
+                    '("foo-bar  baz." 13 13))
+            (equal? (state (key (ed fbq 9) 'backspace 'ctrl)) '("baz.qux" 0 0))
+            (equal? (state (key (ed fbq 0) 'delete 'ctrl)) '("  baz.qux" 0 0))))
+
+(check "Left and Right collapse a selection to its side; Shift extends it \
+        and shrinks it across the anchor; Ctrl moves by words; Home, End"
+       (and (equal? (state (key (ed "abcd" 3 1) 'left)) '("abcd" 1 1))
+            (equal? (state (key (ed "abcd" 1 3) 'right)) '("abcd" 3 3))
+            (equal? (state (key (ed "abcd" 2) 'right 'shift)) '("abcd" 3 2))
+            (equal? (state (key (key (key (ed "abcd" 2) 'right 'shift)
+                                     'left 'shift)
+                                'left 'shift))
+                    '("abcd" 1 2))
+            (equal? (state (key (ed fbq 0) 'right 'ctrl)) (list fbq 7 7))
+            (equal? (state (key (ed fbq 7) 'right 'ctrl)) (list fbq 12 12))
+            (equal? (state (key (ed fbq 13) 'left 'ctrl)) (list fbq 9 9))
+            (equal? (state (key (ed fbq 12) 'left 'ctrl 'shift))
+                    (list fbq 9 12))
+            (equal? (state (key (ed "abc" 1) 'home)) '("abc" 0 0))
+            (equal? (state (key (ed "abc" 1) 'end 'shift)) '("abc" 3 1))))
+
+(define (bounds f text i) (call-with-values (lambda () (f text i)) list))
+(check "a double click's word: at its start, end and inside, on spaces, \
+        across - and _, on a word's last character; a triple click's line"
+       (and (equal? (bounds ui-word-bounds "foo bar" 0) '(0 3))
+            (equal? (bounds ui-word-bounds "foo bar" 7) '(4 7))
+            (equal? (bounds ui-word-bounds "foo bar" 1) '(0 3))
+            (equal? (bounds ui-word-bounds "foo bar" 3) '(0 3))
+            (equal? (bounds ui-word-bounds "a   b" 2) '(1 4))
+            (equal? (bounds ui-word-bounds "foo-bar_baz qux" 5) '(0 11))
+            (equal? (bounds ui-word-bounds "a.b" 1) '(0 1))
+            (equal? (bounds ui-word-bounds "a.b" 2) '(2 3))
+            (equal? (bounds ui-line-bounds "ab\ncd\nef" 4) '(3 5))))
+
+(check "Ctrl+A selects everything; λ is one character"
+       (let ([e (key (ed "λx y" 1) #\a 'ctrl)])
+         (and (equal? (state e) '("λx y" 4 0))
+              (equal? (ui-edit-selection e) "λx y")
+              (equal? (state (key (ed "λx" 0) 'right)) '("λx" 1 1)))))
+
+(check "ui-edit-key leaves Return, Escape, Tab, typed keys and Ctrl+C"
+       (for-all (lambda (k) (not (apply key (ed "abc" 1) k)))
+                '((return) (escape) (tab) (#\a) (#\c ctrl))))
+
+(define (wrap text width) (vector->list (ui-wrap text width m7)))
+(check "wrapping: a row, newlines, empty text, a trailing newline; a soft \
+        break keeps its space; a word wider than the width, and a width \
+        under one character, break between characters; a last space \
+        hangs"
+       (and (equal? (wrap "hello" 100) '((0 . 5)))
+            (equal? (wrap "ab\ncd" 100) '((0 . 2) (3 . 5)))
+            (equal? (wrap "" 100) '((0 . 0)))
+            (equal? (wrap "ab\n" 100) '((0 . 2) (3 . 3)))
+            (equal? (wrap "aaa bbb ccc" 56) '((0 . 8) (8 . 11)))
+            (equal? (wrap "aaa bbb ccc" 42) '((0 . 4) (4 . 8) (8 . 11)))
+            (equal? (wrap "abcdefgh" 21) '((0 . 3) (3 . 6) (6 . 8)))
+            (equal? (wrap "abc" 3) '((0 . 1) (1 . 2) (2 . 3)))
+            (equal? (wrap "hello " 35) '((0 . 6)))))
+
+;; The wrapping rule as plainly as it can be said: each row measures the
+;; rest of its paragraph, then every space, then every prefix.
+(define (wrap-plainly text width)
+  (let* ([n (string-length text)]
+         [fits? (lambda (s e) (<= (m7 (substring text s e)) width))]
+         [end (lambda (p)
+                (let loop ([q p])
+                  (if (or (= q n) (char=? (string-ref text q) #\newline))
+                      q
+                      (loop (+ q 1)))))])
+    (let para ([p 0] [rows '()])
+      (let ([q (end p)])
+        (define (next rows) (if (< q n) (para (+ q 1) rows) (reverse rows)))
+        (let row ([s p] [rows rows])
+          (cond
+            [(and (= s q) (> s p)) (next rows)]
+            [(fits? s q) (next (cons (cons s q) rows))]
+            [else
+             (let* ([ks (filter (lambda (k) (and (char=? (string-ref text k)
+                                                         #\space)
+                                                 (fits? s k)))
+                                (map (lambda (i) (+ s i)) (iota (- q s))))]
+                    [e (if (pair? ks)
+                           (+ 1 (apply max ks))
+                           (let loop ([j (+ s 1)])
+                             (if (and (< j q) (fits? s (+ j 1)))
+                                 (loop (+ j 1))
+                                 j)))])
+               (row e (cons (cons s e) rows)))]))))))
+
+(check "wrapping breaks every text where the plain rule does: 2000 made-up \
+        texts of letters, spaces and newlines, at widths from 0 to 11 \
+        characters"
+       (let loop ([i 0] [seed 7])
+         (or (= i 2000)
+             (let* ([next (lambda (x) (mod (+ (* x 1103515245) 12345)
+                                           2147483648))]
+                    [len (mod (quotient seed 7) 41)]
+                    [chars (let fill ([k 0] [x seed] [acc '()])
+                             (if (= k len)
+                                 (cons x acc)
+                                 (fill (+ k 1) (next x)
+                                       (cons (string-ref "aab  \n"
+                                                         (mod (quotient x 9) 6))
+                                             acc))))]
+                    [text (list->string (cdr chars))]
+                    [width (mod (car chars) 78)])
+               (and (equal? (wrap text width) (wrap-plainly text width))
+                    (loop (+ i 1) (next (car chars))))))))
+
+(check "wrapping measures a row about twice, not the paragraph's rest: a \
+        6000-character paragraph and a 2000-character word measure under \
+        20 characters per character"
+       (let* ([n 0]
+              [count (lambda (s) (set! n (+ n (string-length s))) (m7 s))]
+              [measured (lambda (text)
+                          (set! n 0)
+                          (ui-wrap text 280 count)
+                          (/ n (string-length text)))])
+         (and (< (measured (apply string-append (make-list 1200 "word ")))
+                 20)
+              (< (measured (make-string 2000 #\W)) 20))))
+
+(check "wrapping scans a row, not the rest of a long word: 100,000 \
+        characters wrap within a handler's fuel, as one word or as words"
+       (and (within-fuel? (lambda () (ui-wrap (make-string 100000 #\W) 280 m7)))
+            (within-fuel?
+             (lambda ()
+               (ui-wrap (apply string-append (make-list 20000 "word ")) 280
+                        m7)))))
+
+(check "wrapping with a most stops after that many rows: the whole \
+        wrap's first rows"
+       (let ([text "aaa bbb ccc\nddd eee\n\nf"])
+         (for-all (lambda (k)
+                    (equal? (vector->list (ui-wrap text 42 m7 k))
+                            (list-head (wrap text 42)
+                                       (min k (length (wrap text 42))))))
+                  '(1 2 3 4 5 6 9))))
+
+;; The index nearest x as plainly as it can be said: a character at a time.
+(define (index-plainly text rows r x)
+  (let ([s (car (vector-ref rows r))] [last (ui-row-last rows r)])
+    (let loop ([j s])
+      (if (or (>= j last)
+              (< x (/ (+ (m7 (substring text s j))
+                         (m7 (substring text s (+ j 1))))
+                      2)))
+          j
+          (loop (+ j 1))))))
+
+(check "a click lands where a character at a time finds it, in log n \
+        measures: 34 at most in a row of 100,000 characters"
+       (let* ([n 0] [count (lambda (s) (set! n (+ n 1)) (m7 s))]
+              [long (make-string 100000 #\W)]
+              [at (ui-index-at long (vector (cons 0 100000)) 0 350003 count)])
+         (and (= at 50000) (<= n 34)
+              (for-all
+               (lambda (text)
+                 (let ([rows (ui-wrap text 30 m7)])
+                   (for-all
+                    (lambda (r)
+                      (for-all (lambda (x)
+                                 (= (ui-index-at text rows r x m7)
+                                    (index-plainly text rows r x)))
+                               (map (lambda (i) (- (/ i 2) 5)) (iota 90))))
+                    (iota (vector-length rows)))))
+               '("" "a" "abc def" "aaa bbb ccc ddd" "ab\ncd\n"
+                 "abcdefghijk")))))
+
+(check "a wrapped label breaks a word wider than it, and its lines end \
+        without the space a soft break leaves"
+       (let-values ([(w h) (ui-label-size '(wrap) (make-string 200 #\W) 100)])
+         (and (> h (* 5 (font-line-height 'ui)))
+              (for-all (lambda (l) (<= (text-width l 'ui) 100))
+                       (ui-label-lines (make-string 200 #\W) 100 'ui))
+              (equal? (ui-label-lines "No task matches this, with Kind: Bug."
+                                      120 'ui)
+                      (wrap-text "No task matches this, with Kind: Bug."
+                                 120 'ui)))))
+
+(let ([soft (ui-wrap "aaa bbb ccc" 42 m7)] [hard (ui-wrap "ab\ncd" 100 m7)]
+      [three (ui-wrap "abcdef\nab\nabcdef" 100 m7)])
+  (define (vert e rows dir) (state (ui-edit-vertical e rows dir m7 #f)))
+  (check "a caret at a soft break shows on the next row, at a hard break on \
+          its own; a click lands nearest a character's middle"
+         (and (= 1 (ui-row-at soft 4)) (= 0 (ui-row-at soft 3))
+              (= 0 (ui-row-at hard 2)) (= 1 (ui-row-at hard 3))
+              (= 1 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 10 m7))
+              (= 2 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 11 m7))
+              (= 0 (ui-index-at "abcd" (ui-wrap "abcd" 100 m7) 0 3 m7))))
+  (check "Up and Down keep the goal across a short row; Up from the first \
+          row goes to 0, Down from the last to the end; End stops before a \
+          soft row's space"
+         (let* ([e (ed "abcdef\nab\nabcdef" 5)]
+                [d1 (ui-edit-vertical e three 1 m7 #f)]
+                [d2 (ui-edit-vertical d1 three 1 m7 #f)])
+           (and (= 9 (ui-edit-caret d1)) (= 15 (ui-edit-caret d2))
+                (equal? (vert e three -1) '("abcdef\nab\nabcdef" 0 0))
+                (equal? (vert d2 three 1) '("abcdef\nab\nabcdef" 16 16))
+                (= 7 (ui-edit-caret (ui-edit-key (ed "aaa bbb ccc" 4) 'end '()
+                                                 soft m7)))))))
+
+(check "ui-text-clean drops control characters, but a tab becomes a \
+        space; without newlines they do too"
+       (and (equal? (ui-text-clean "a\tb\r\nc\x1;" #t) "a b\nc")
+            (equal? (ui-text-clean "a\tb\r\nc" #f) "a b c")))
+
+(check "ui-flow places, wraps and centers"
+       (and (equal? (call-with-values
+                      (lambda () (ui-flow 0 0 100 5 '((10 . 10) (20 . 20)
+                                                       (30 . 10))))
+                      list)
+                    '(((0 . 5) (15 . 0) (40 . 5)) 20))
+            (equal? (call-with-values
+                      (lambda () (ui-flow 0 0 40 5 '((10 . 10) (20 . 20)
+                                                      (30 . 10))))
+                      list)
+                    '(((0 . 5) (15 . 0) (0 . 25)) 35))))
+
+(check "ui-table-step at both ends, by pages, from no row, with no rows"
+       (equal? (map (lambda (a) (apply ui-table-step a))
+                    '((0 5 2 up) (4 5 2 down) (#f 5 2 down) (#f 5 2 up)
+                      (1 5 2 page-down) (4 5 2 page-down) (3 5 2 page-up)
+                      (2 5 2 home) (2 5 2 end) (#f 0 2 down) (2 5 2 left)))
+               '(0 4 0 4 3 4 1 0 4 #f #f)))
+
+(check "dates: day numbers round-trip from 1970 to 2100; 2026-10-31 is a \
+        Saturday; February's lengths; months added clamp the day"
+       (and (let loop ([n 0])
+              (or (> n (ui-date->day '(2100 12 31)))
+                  (and (= n (ui-date->day (ui-day->date n))) (loop (+ n 1)))))
+            (equal? (ui-day->date 0) '(1970 1 1))
+            (= 5 (ui-week-day (ui-date->day '(2026 10 31))))
+            (equal? (map (lambda (y) (ui-days-in-month y 2))
+                         '(2024 2025 2100 2000))
+                    '(29 28 28 29))
+            (equal? (map (lambda (d k)
+                           (ui-day->date (ui-add-months (ui-date->day d) k)))
+                         '((2026 1 31) (2026 12 15) (2026 1 31)) '(1 1 -2))
+                    '((2026 2 28) (2027 1 15) (2025 11 30)))))
+
+(define (mk id title status kind priority who tags due . description)
+  (make-task id title (if (pair? description) (car description) "") status
+             kind priority who tags due '() 0 id))
+(define t1 (mk 1 "Fix the menu" 'todo 'bug 'high "Pavel" '("ui") '(2026 11 2)))
+(define t2 (mk 2 "Style system" 'doing 'feature 'urgent #f '("style" "kit") #f
+               "parts and derived styles"))
+(define t3 (mk 3 "Threads spec" 'todo 'chore 'low "Claude" '() '(2026 10 30)))
+(define t4 (mk 4 "Old one" 'done 'feature 'normal "Pavel" '("ui") #f))
+(define ts (list t1 t2 t3 t4))
+(define (ids l) (map task-id l))
+
+(check "tasks-sorted by every key both ways, stable, the empty last"
+       (equal? (map (lambda (k)
+                      (list (ids (tasks-sorted ts k 'up))
+                            (ids (tasks-sorted ts k 'down))))
+                    '(id title status kind priority assignee due updated))
+               '(((1 2 3 4) (4 3 2 1)) ((1 4 2 3) (3 2 4 1))
+                 ((1 3 2 4) (4 2 1 3)) ((1 2 4 3) (3 2 4 1))
+                 ((2 1 4 3) (3 4 1 2)) ((3 1 4 2) (1 4 3 2))
+                 ((3 1 2 4) (1 3 2 4)) ((1 2 3 4) (4 3 2 1)))))
+
+(check "tasks-words: lowercase, each once, at most 16, each cut to 64 \
+        characters"
+       (and (equal? (tasks-words " B a  b C ") '("b" "a" "c"))
+            (equal? (tasks-words (apply string-append
+                                        (map (lambda (i) (format "w~a " i))
+                                             (iota 40))))
+                    (map (lambda (i) (format "w~a" i)) (iota 16)))
+            (equal? (tasks-words (string-append (make-string 100 #\A) " "
+                                                (make-string 70 #\a)))
+                    (list (make-string 64 #\a)))))
+
+(check "tasks-match?: near misses of 64 and 1,001 characters looked for in \
+        a 100,000-character title within a handler's fuel"
+       (let ([t (mk 5 (make-string 100000 #\a) 'todo 'bug 'low #f '() #f)])
+         (for-all (lambda (n)
+                    (let ([words (tasks-words
+                                  (string-append (make-string (- n 1) #\a)
+                                                 "b"))])
+                      (within-fuel?
+                       (lambda () (tasks-match? t words #f #f #f #f #t)))))
+                  '(64 1001))))
+
+(define (matching words . filters)
+  (ids (filter (lambda (t) (apply tasks-match? t (tasks-words words) filters))
+               ts)))
+(check "tasks-match?: by id, title, description, tag and assignee; each \
+        filter; words all match; done tasks hidden"
+       (and (equal? (matching "task-1" #f #f #f #f #t) '(1))
+            (equal? (matching "4" #f #f #f #f #t) '(4))
+            (equal? (matching "MENU" #f #f #f #f #t) '(1))
+            (equal? (matching "derived" #f #f #f #f #t) '(2))
+            (equal? (matching "kit" #f #f #f #f #t) '(2))
+            (equal? (matching "claude" #f #f #f #f #t) '(3))
+            (equal? (matching "" 'bug #f #f #f #t) '(1))
+            (equal? (matching "" #f 'low #f #f #t) '(3))
+            (equal? (matching "" #f #f "pavel" #f #t) '(1 4))
+            (equal? (matching "" #f #f 'none #f #t) '(2))
+            (equal? (matching "" #f #f #f "ui" #t) '(1 4))
+            (equal? (matching "fix menu" #f #f #f #f #t) '(1))
+            (equal? (matching "fix style" #f #f #f #f #t) '())
+            (equal? (matching "" #f #f #f #f #f) '(1 2 3))))
+
+(check "tasks-move: across columns, up and down a column, to the end, into \
+        an empty column"
+       (and (equal? (ids (tasks-move ts t1 'doing #f)) '(2 1 3 4))
+            (equal? (ids (tasks-move ts t3 'todo t1)) '(3 1 2 4))
+            (equal? (ids (tasks-move ts t1 'todo #f)) '(2 3 1 4))
+            (equal? (ids (tasks-move ts t1 'done #f)) '(2 3 4 1))
+            (equal? (ids (tasks-move ts t2 'review #f)) '(1 3 4 2))))
+
+(check "tasks-slot: above the first card, between cards, past the last, \
+        with none"
+       (and (equal? (map (lambda (py) (tasks-slot '(8 60 120) '(40 40 40) py))
+                         '(10 70 500))
+                    '(0 1 3))
+            (= 0 (tasks-slot '() '() 100))))
+
+(check "an assignee is one name whatever its case and the spaces around \
+        it: the filter lists it once and finds every spelling"
+       (let ([t5 (mk 5 "Typed" 'todo 'bug 'low "pavel " '() #f)])
+         (and (equal? (tasks-names (list t1 t5 t3)) '("Claude" "Pavel"))
+              (equal? (tasks-names (list t5 t1)) '("pavel"))
+              (tasks-match? t5 '() #f #f "Pavel" #f #t)
+              (tasks-match? t1 '() #f #f " pavel" #f #t))))
+
+(check "a card's tags: as many chips as fit beside \"+k\" for the rest, the \
+        first cut when even it does not fit, never past the card's edge"
+       (let ([fits?
+              (lambda (w tags)
+                (let-values ([(ws k) (tasks-card-tags
+                                      w (mk 6 "x" 'todo 'bug 'low #f tags #f))])
+                  (and (pair? ws) (= (+ (length ws) k) (length tags))
+                       (<= (+ (apply + ws) (* 4 (- (length ws) 1))
+                              (if (> k 0)
+                                  (+ 4 (text-width (format "+~a" k)
+                                                   'ui-small))
+                                  0))
+                           (- w 20))
+                       (list (length ws) k))))])
+         (and (equal? (fits? 200 '("ui" "kit")) '(2 0))
+              (equal? (fits? 145 '("abcdefghijkl" "abcdefgh" "b")) '(1 2))
+              (equal? (fits? 200 '("abcdefghijklmnopqrstuvwx" "b")) '(1 1))
+              (equal? (fits? 100 '("abcdefghijklmnopqrstuvwx")) '(1 0)))))
+
+(check "tasks-neighbor, tasks-tag, tasks-initials"
+       (and (eq? (tasks-neighbor ts t2) t3) (eq? (tasks-neighbor ts t4) t3)
+            (not (tasks-neighbor (list t1) t1))
+            (equal? (map tasks-tag '("  My Tag " "a,b" "" "   "))
+                    '("my-tag" "ab" #f #f))
+            (= 24 (string-length (tasks-tag (make-string 30 #\a))))
+            ;; a space at the cut would end it in "-"
+            (equal? (tasks-tag "dÜnï Cödé Long Tag Name Here")
+                    "dünï-cödé-long-tag-name")
+            (equal? (tasks-tag "ends-in-") "ends-in-")
+            (equal? (map tasks-initials '("Pavel Uvarov" "Claude"
+                                          "ada lovelace byron"))
+                    '("PU" "C" "AB"))))
+
+(check "a task's tags: made by tasks-tag, each once, in the order given, \
+        at most 64"
+       (let ([names (lambda (n) (map (lambda (i) (format "t~a" i)) (iota n)))])
+         (and (equal? (tasks-normalize 'set-task! 'tags
+                                       '(" UI" "perf" "ui" "" "," "Perf "))
+                      '("ui" "perf"))
+              (equal? (tasks-normalize 'set-task! 'tags (names 100))
+                      (names 64)))))
+
+(check "tasks-due-label and tasks-overdue?"
+       (let ([today '(2026 10 31)])
+         (and (equal? (map (lambda (d) (tasks-due-label d today))
+                           '((2026 10 31) (2026 11 1) (2026 10 30)
+                             (2026 11 15) (2027 1 2)))
+                      '("Today" "Tomorrow" "Yesterday" "Nov 15" "Jan 2, 2027"))
+              (tasks-overdue? t3 today) (not (tasks-overdue? t1 today))
+              (not (tasks-overdue? (mk 5 "x" 'done 'bug 'low #f '()
+                                       '(2026 1 1))
+                                   today)))))
+
+(check "ids are never reused, and the REPL's procedures name what is valid"
+       (let* ([a (add-task! "first")] [_ (delete-task! a)]
+              [b (add-task! "second")])
+         (delete-task! b)
+         (and (> (task-id b) (task-id a))
+              (equal? (guard (c [#t (condition->string c)])
+                        (set-task! (car *tasks*) 'priority 'hgih))
+                      "Exception in set-task!: priority must be one of \
+                       urgent high normal low, not hgih"))))
+
+(check "the REPL's edges: a blank name finds no task; an assignee filter \
+        that is not a name says so; a description is cleaned as typing \
+        cleans it; an assignee is trimmed, but the details' field keeps a \
+        space typed after a name; a blank one is nobody; a name is at most \
+        64 characters"
+       (let ([t (add-task! "Edges" 'description "a\r\nb\tc"
+                           'assignee "  Ada  ")]
+             [v (tasks-view-new (make-ui))])
+         (let ([ok (and (not (find-task "")) (not (find-task "  "))
+                        (equal? (guard (c [#t (condition->string c)])
+                                  (tasks-list 'assignee 'pavel))
+                                "Exception in tasks-list: assignee must be \
+                                 a name or none, not pavel")
+                        (list? (tasks-list 'assignee 'none))
+                        (equal? (task-description t) "a\nb c")
+                        (equal? (task-assignee t) "Ada")
+                        (equal? (task-assignee (set-task! t 'assignee " B "))
+                                "B")
+                        (begin (task-set! v t 'assignee " Ada ")
+                               (equal? (task-assignee t) "Ada "))
+                        (not (task-assignee (set-task! t 'assignee "  ")))
+                        (let ([long (make-string 99 #\a)])
+                          (= 64 (string-length
+                                 (task-assignee
+                                  (set-task! t 'assignee long))))))])
+           (delete-task! t)
+           ok)))
+
+(check "a tooltip and a dialog show at most six lines of a long text, the \
+        last cut with …"
+       (let ([long (apply string-append (make-list 300 "words "))])
+         (let-values ([(lines cut?) (ui-wrap-lines long 100 'ui 3)]
+                      [(all whole?) (ui-wrap-lines "a b" 100 'ui 3)]
+                      [(tw th) (ui-tooltip-size long)]
+                      [(dw dh) (ui-dialog-size "Delete?" long '("OK"))]
+                      [(dw1 dh1) (ui-dialog-size "Delete?" "short" '("OK"))])
+           (and (= 3 (length lines)) cut?
+                (string=? "…" (substring (caddr lines)
+                                         (- (string-length (caddr lines)) 1)
+                                         (string-length (caddr lines))))
+                (equal? all '("a b")) (not whole?)
+                (= th (+ 10 (* 6 (font-line-height 'ui-small))))
+                (< (abs (- dh dh1 (* 5 (font-line-height 'ui)))) 1)))))
+
+(let ([at (lambda (key)
+            (cdr (assq key (ui-calendar-areas 0 0 230 0))))])
+  (set-theme! 'ui-font-size 24)
+  (let-values ([(cw ch) (ui-calendar-size)])
+    (let ([prev (at 'prev)] [week (at 'week)] [today (at 'today)])
+      (set-theme! 'ui-font-size 13)
+      (check "the calendar at 24 px fonts: the weekdays below its arrows, \
+              Today inside it"
+             (and (>= (cadr week) (+ (cadr prev) (cadddr prev)))
+                  (<= (+ (cadr today) (cadddr today)) ch))))))
+
+(let ([v (tasks-view-new (make-ui))])
+  (define (mode w) (call-with-values (lambda () (tasks-layout v w 700 44))
+                     (lambda (m view details) m)))
+  (let ([at-13 (list (mode 1205) (mode 760))])
+    (set-theme! 'ui-font-size 24)
+    (let ([at-24 (list (mode 1205) (mode 2400))])
+      (set-theme! 'ui-font-size 13)
+      (check "tasks-layout: the details beside the view when they fit, at 13 \
+              and 24 px fonts"
+             (equal? (list at-13 at-24) '((wide narrow) (narrow wide)))))))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)

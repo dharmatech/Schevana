@@ -284,13 +284,20 @@
   (let ([tw (text-width str font)] [th (font-line-height font)])
     (draw-text (+ x (/ (- w tw) 2)) (+ y (/ (- h th) 2)) str color font)))
 
-;; Shorten str with an ellipsis until it fits in max-w.
-(define (fit-text str max-w font)
-  (if (<= (text-width str font) max-w)
-      str
-      (let loop ([n (- (string-length str) 1)])
-        (let ([s (string-append (substring str 0 (max n 0)) "…")])
-          (if (or (<= n 0) (<= (text-width s font) max-w)) s (loop (- n 1)))))))
+;; Shorten str with an ellipsis until it fits in max-w: the longest prefix
+;; that does, found by halving the lengths left (log n measures, not n).
+;; measure, if given, is (lambda (s) width) instead of text-width in font.
+(define (fit-text str max-w font . measure)
+  (let ([width (if (pair? measure) (car measure)
+                   (lambda (s) (text-width s font)))]
+        [cut (lambda (n) (string-append (substring str 0 n) "…"))])
+    (if (<= (width str) max-w)
+        str
+        (let loop ([lo 0] [hi (- (string-length str) 1)])   ; lo fits, or is 0
+          (let ([mid (quotient (+ lo hi 1) 2)])
+            (cond [(>= lo hi) (cut lo)]
+                  [(<= (width (cut mid)) max-w) (loop mid hi)]
+                  [else (loop lo (- mid 1))]))))))
 
 ;; Break str into lines no wider than max-w, at spaces. Newlines are kept;
 ;; a single word wider than max-w gets a line of its own.

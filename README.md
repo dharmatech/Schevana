@@ -112,6 +112,10 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (bind-key! '(ctrl shift #\l) life)
 ; watch it in (monitor); Ctrl+C or kill!
 (spawn "busy" (lambda () (let loop () (loop))))
+(tasks)                                    ; a task manager; tasks are data
+(add-task! "Fix the menu" 'priority 'high 'tags '("ui"))   ; shows at once
+(set-task! "Fix the" 'status 'review)      ; by title, id (27) or "TASK-27"
+(tasks-list 'status 'doing 'assignee "Pavel")
 (define (draw-wallpaper w h) (fill-gradient 0 0 w h #x102030 #x301020))
 ; every window looks focused; (reload!) undoes it
 (define (draw-window win) (draw-window* win #t))
@@ -169,14 +173,16 @@ registered.
 ## Architecture
 
 ```
-apps/        repl  clock  life  sketch  monitor  settings  ← ordinary procedures
+apps/        ordinary procedures: repl  clock  life  sketch  monitor
+             settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
 themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
              tokyo-night
 styles/      window styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
-kits/        ui: immediate-mode widgets (button, slider, segmented,
-             clickable area)
+kits/        ui: immediate-mode widgets (buttons, text fields and areas,
+             dropdowns, tabs, checkboxes, a table, chips, a date picker,
+             scroll views, tooltips, a dialog), keyboard focus, text editing
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/shell    wallpapers, top bar + status segments, taskbar, menus, toasts
 src/styles   window styles: the record, the registry, previews
@@ -322,11 +328,16 @@ scheme --script tests/smoke.ss out
 This boots the world headlessly, types into the REPL, defines an app,
 crashes windows, runs away in loops, drags and resizes windows, uses the
 launcher, presses every button of each window style, clicks and drags
-through every Settings tab (checking the theme file round-trips), reloads
-the sources, runs the host's SDL code (uploads, presents, resize events,
-the window's size) against a stand-in that replaces every SDL call, so no
-window opens, and writes screenshots to the given folder. It never touches
-your real `~/.schevana-theme.ss`, and no test reads `~/.schevana.d`.
+through every Settings tab (checking the theme file round-trips), uses
+Tasks by mouse and keys (typing with selection, the clipboard and Tab,
+the focused field kept in view, dropdowns, the calendar, tags, the
+checklist, dragging cards, sorting, searching, filters, the context menu,
+the delete dialog, tooltips, the narrow page) and from the REPL's
+procedures, reloads the sources, runs the host's SDL code (uploads,
+presents, resize events, the window's size) against a stand-in that
+replaces every SDL call, so no window opens, and writes screenshots to
+the given folder. It never touches your real `~/.schevana-theme.ss`, and
+no test reads `~/.schevana.d`.
 
 ```bash
 scheme --script tests/units.ss out
@@ -335,7 +346,10 @@ scheme --script tests/units.ss out
 This tests the drawing layer piece by piece: the measuring
 context, cached shadows against the stacked ones, pixmaps, Life's
 generations against a plain reference (a step allocates nothing), its
-grid against one rectangle per cell, and the invalidation calls.
+grid against one rectangle per cell, and the invalidation calls; and,
+with no window, the widget kit's text editing (insertion, erasing, caret
+moves, words, selection, wrapping against a plain rule), dates, flow and
+table keys, and Tasks' sorting, filtering, moving and the REPL's checks.
 
 ```bash
 scheme --script tests/frame.ss out
@@ -364,7 +378,12 @@ input go on; redefined `draw-window`, `draw-taskbar` and styles show at
 once and cost the same, and a REPL evaluation asks for the whole screen
 as it ends; a theme change (by `set-theme!` or behind its back) or a
 redefined `draw-wallpaper` paints the wallpaper again for the next
-frame; and each generation of 30 Life windows shows on the next frame.
+frame; each generation of 30 Life windows shows on the next frame; and
+Tasks shows the reference after typing, the caret's blink, hover and a
+tooltip, a drag, the wheel, a field scrolled back into view, a menu, the
+calendar, the dialog, a change from the REPL and the narrow page, at 100,
+150 and 200%, and asks for no frame once its window loses the focus, or
+while the dialog covers a field that had the keyboard.
 
 ```bash
 scheme --script tests/sources.ss
@@ -372,8 +391,10 @@ scheme --script tests/sources.ss
 
 This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
-two files, `src/` stays within its size budget (raise it on purpose), and
-every file in a folder registers what it defines, under its own name.
+two files, `src/` stays within its size budget (raise it on purpose),
+every file in a folder registers what it defines, under its own name,
+and in the widget kit and Tasks only the drawing procedures (`ui-draw-…`,
+`tasks-draw-…`) draw or name a theme color.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]
@@ -387,9 +408,10 @@ work: everything runs on it), the wall time, the bytes uploaded and the
 collections, then times a keystroke in the REPL, an idle step (it must
 stay under 0.2 ms and upload nothing), a theme change, and the clock's
 second with no window and a keystroke in a REPL alone (at 100% and
-200%, and on a 1920 × 1080 screen at 200%, a 4K one), and prints how
-much of the main thread a busy REPL evaluation gets while 30 Life
-windows animate at 200%.
+200%, and on a 1920 × 1080 screen at 200%, a 4K one), Tasks maximized
+on that screen (an idle step, a keystroke in a title, two in one step, a
+card dragged), and prints how much of the main thread a busy REPL
+evaluation gets while 30 Life windows animate at 200%.
 
 ## Conventions
 
@@ -423,10 +445,16 @@ windows animate at 200%.
   about 18 ms at 100% and 67 ms at 200% until its frame is drawn, so
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
-- Only a minimal widget kit (`kits/ui.ss`, written for Settings): no text
-  fields, lists or layout yet. That is the "stable GUI API" question:
-  keep growing these immediate-mode procedures, or describe retained
-  widget trees as data?
+- Styles change only the windows: the bars, menus, toasts and widgets
+  keep one look. Each widget draws through one `ui-draw-…` procedure
+  given its rectangle and its state as flags, so the style redesign can
+  make each a style's part. Settings still does its own text field, list,
+  tabs and scrolling. The "stable GUI API" question stays open: keep
+  growing these immediate-mode procedures, or describe retained widget
+  trees as data?
+- Tasks redraws its whole window for a keystroke: about 9 ms on a 4K
+  screen at 200%, maximized (half of it is any maximized window's frame:
+  the wallpaper under it, its rows compared).
 - REPL lacks selection and copy, and there is no text editor app yet.
 - No persistence. Windows and state vanish on exit (`fasl-write` of app
   state is a natural first step).

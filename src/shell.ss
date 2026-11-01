@@ -284,6 +284,8 @@
   (set! *menu* (make-menu x y items 0 "" (plist-ref opts 'filter #f)
                           (plist-ref opts 'tag #f)))
   (menu-select-next! 0)
+  (let ([i (plist-ref opts 'selected #f)])   ; a dropdown's current entry
+    (when i (menu-sel-set! *menu* i)))
   (request-frame!))
 
 (define (close-menu!)

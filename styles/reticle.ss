@@ -57,15 +57,15 @@
 (define (reticle-track)   ; between capitals: a sixth of the font's size
   (reticle-snap (/ (font-size (get-font reticle-font)) 6)))
 
-;; The title in capitals, cut with an ellipsis to fit in room when spaced.
+;; The title in capitals, cut with an ellipsis to fit in room when spaced;
+;; no title stays none, even where no room is left.
 (define (reticle-label title room)
-  (let ([up (string-upcase title)] [t (reticle-track)])
-    (let loop ([n (string-length up)] [s up])
-      (if (or (<= n 0) (<= (+ (text-width s reticle-font)
-                              (* t (- (string-length s) 1)))
-                           room))
-          s
-          (loop (- n 1) (string-append (substring up 0 (- n 1)) "…"))))))
+  (let ([t (reticle-track)])
+    (if (string=? title "")
+        ""
+        (fit-text (string-upcase title) room reticle-font
+                  (lambda (s) (+ (text-width s reticle-font)
+                                 (* t (- (string-length s) 1))))))))
 
 (define (reticle-draw-label x y s color)
   (let ([t (reticle-track)])

@@ -42,6 +42,11 @@
 ;;;                 draw-wallpaper is a still picture; the picture is
 ;;;                 draw-wallpaper's drawing
 ;;;   Life          each generation of 30 Life windows shows on the next frame
+;;;   Tasks         typing, the caret's blink, hover, a tooltip, a drag, the
+;;;                 wheel, a menu, the calendar, the dialog, a REPL change
+;;;                 and the narrow page leave the reference at 100, 150 and
+;;;                 200%; unfocused, or with the dialog over a field that
+;;;                 had the keyboard, Tasks asks for no frame
 ;;;
 ;;; output-dir receives a scratch theme file and a screenshot of a failure.
 
@@ -843,6 +848,157 @@
              (close-window! w)
              (and (= keys 1) (> drawn 1) same told
                   (matches-reference? 'bleed-fixed))))))
+
+;;; ------------------------------------------------------------------ Tasks
+;;; The widget kit changes the screen on input and by itself: typing into
+;;; a title, a wrapping description and the search, the caret's blink,
+;;; hover and a tooltip, a drag across columns, the wheel (rows scrolled
+;;; under a still pointer), a field brought back into view, a dropdown's
+;;; menu, the calendar, the dialog, a change from the REPL, the narrow
+;;; page. After each step the screen is the reference, at 100, 150 and
+;;; 200%; unfocused, or with the dialog over a field that had the keyboard
+;;; (no caret blinks under it), Tasks asks for none.
+
+(define (tasks-scene pct)
+  (set-theme! 'scale pct)
+  (clear-world!)
+  (tasks-reset!)
+  (let* ([w (tasks)] [ui (window-ref w 'ui)] [bad '()]
+         [top-rows (exact (ceiling (* (topbar-height) *scale*)))])
+    (define (try! label)
+      (unless (matches-reference? (list pct label))
+        (set! bad (cons label bad))))
+    (define (point id)   ; region id's middle on screen
+      (let ([r (ui-find ui id)])
+        (let-values ([(cx cy cw ch) (content-rect w)])
+          (values (exact (floor (+ cx (ui-region-x r) (/ (ui-region-w r) 2))))
+                  (exact (floor (+ cy (ui-region-y r)
+                                   (/ (ui-region-h r) 2))))))))
+    (define (move! label id)
+      (let-values ([(x y) (point id)]) (inject! `(mouse-move ,x ,y)))
+      (steps 1)
+      (try! label))
+    (define (click! label id)
+      (let-values ([(x y) (point id)])
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                 `(mouse-up ,x ,y left)))
+      (steps 1)
+      (try! label))
+    (define (key! label key . mods)
+      (inject! `(key-down ,key ,mods))
+      (steps 1)
+      (try! label))
+    (define (type! label str)
+      (for-each (lambda (c) (inject! `(text ,(string c)))) (string->list str))
+      (steps 1)
+      (try! label))
+    (fixed-status!)
+    (resize-window! w 1100 600)
+    (move-window! w 20 70)
+    (steps 1)
+    (try! 'open)
+    (click! 'select '(card 9))
+    (key! 'title 'return)
+    (type! 'title-typed " and more")
+    (steps 1 530)
+    (try! 'blink-off)
+    (steps 1 530)
+    (try! 'blink-on)
+    (click! 'description 'description)
+    (type! 'wrapped " Words that wrap across the rows of the description.")
+    (key! 'search '#\/)
+    (type! 'search-typed "kit")
+    (key! 'search-left 'escape)
+    ;; unfocused, the caret goes and no frame shows Tasks
+    (click! 'title-again 'title)
+    (inject! '(mouse-move 1240 400) '(mouse-down 1240 400 left 1)
+             '(mouse-up 1240 400 left))
+    (steps 1)
+    (try! 'unfocused)
+    (do ([i 0 (+ i 1)]) ((= i 4))
+      (set! compared #f)
+      (steps 1 500)
+      (when (and compared (> (cdr compared) top-rows))
+        (set! bad (cons (list 'unfocused-asked i) bad))))
+    (focus-window! w)
+    (steps 1)
+    (try! 'refocused)
+    (key! 'title-left 'escape)
+    (move! 'hover-card '(card 10))
+    (move! 'hover-new 'new)
+    (steps 1 700)
+    (try! 'tooltip)
+    (inject! '(mouse-move 1240 400))
+    (steps 1)
+    (try! 'pointer-left)
+    (let-values ([(x0 y0) (point '(card 16))]
+                 [(x1 y1) (point '(column review))])
+      (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1))
+      (steps 1)
+      (try! 'drag-pressed)
+      (for-each (lambda (f)
+                  (inject! `(mouse-move ,(round (+ x0 (* f (- x1 x0))))
+                                        ,(round (+ y0 (* f (- y1 y0))))))
+                  (steps 1)
+                  (try! (list 'drag f)))
+                '(1/4 1/2 3/4 1))
+      (inject! `(mouse-up ,x1 ,y1 left))
+      (steps 1)
+      (try! 'dropped))
+    (let-values ([(x y) (point '(column todo))])
+      (inject! `(mouse-move ,x ,y) '(wheel 0 -2))
+      (steps 1)
+      (try! 'wheel-column))
+    (let-values ([(x y) (point 'details)])
+      (inject! `(mouse-move ,x ,y) '(wheel 0 -2))
+      (steps 1)
+      (try! 'wheel-details))
+    ;; the title scrolled out of the details comes back when Return
+    ;; focuses it
+    (key! 'title-revealed 'return)
+    (key! 'title-revealed-left 'escape)
+    (click! 'menu 'status)
+    (key! 'menu-closed 'escape)
+    (click! 'calendar 'due)
+    (key! 'calendar-key 'right)
+    (key! 'calendar-picked 'return)
+    (key! 'dialog 'delete)
+    (key! 'dialog-canceled 'escape)
+    ;; the dialog over a focused field: the field lets go of the keyboard,
+    ;; so no caret blinks under the scrim and no frame shows Tasks
+    (let-values ([(x y) (point 'details)])
+      (inject! `(mouse-move ,x ,y) '(wheel 0 -20))
+      (steps 1)
+      (try! 'details-end))
+    (click! 'item-field 'new-item)
+    (click! 'dialog-over-field 'delete)
+    (do ([i 0 (+ i 1)]) ((= i 4))
+      (set! compared #f)
+      (steps 1 530)
+      (when (and compared (> (cdr compared) top-rows))
+        (set! bad (cons (list 'dialog-asked i) bad))))
+    (key! 'dialog-closed 'escape)
+    (set-task! 9 'title "Changed from the REPL")
+    (steps 1)
+    (try! 'repl)
+    (resize-window! w 760 600)
+    (steps 1)
+    (try! 'narrow)
+    (click! 'page '(card 10))
+    (key! 'page-closed 'escape)
+    (close-window! w)
+    (check (format "Tasks at ~a%: typing, the caret's blink, hover, a \
+                    tooltip, a drag, the wheel, a field revealed, a menu, \
+                    the calendar, the dialog, a REPL change and the narrow \
+                    page show the \
+                    reference, and unfocused or under the dialog it asks \
+                    for no frame~a"
+                   pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
+           (null? bad))))
+
+(for-each tasks-scene '(100 150 200))
+(set-theme! 'scale 100)
+(tasks-reset!)
 
 ;;; ------------------------------------------------------------------
 ;;; redefinition

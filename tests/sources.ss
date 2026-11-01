@@ -3,9 +3,10 @@
 ;;;   scheme --script tests/sources.ss
 ;;;
 ;;; Every line of every source file fits in 80 columns; no top-level name
-;;; is defined in two files; src/ stays within its size budget; and every
-;;; file in a folder registers what it defines. Fast: it loads the world
-;;; but does not boot it.
+;;; is defined in two files; src/ stays within its size budget; every file
+;;; in a folder registers what it defines; and in the widget kit and Tasks
+;;; only the drawing procedures draw or name a color. Fast: it loads the
+;;; world but does not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -217,6 +218,71 @@
             (equal? (themes) (defined-in-files 'theme))
             (equal? (wallpapers) (defined-in-files 'wallpaper))
             (equal? (apps) (defined-in-files 'app))))
+
+;;; ------------------------------------------------------------------
+;;; the widgets' seam
+;;; In the kit and in Tasks only the drawing procedures, named ui-draw-…
+;;; and tasks-draw-…, draw or choose a color: no other top-level form
+;;; calls a drawing primitive or quotes a theme color key ('text, also an
+;;; event's name, aside). The style redesign turns each drawing procedure
+;;; into a style's part.
+
+(define seam-files '("kits/ui.ss" "apps/tasks.ss"))
+
+(define (drawing-primitive? s)
+  (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
+              '("fill-" "stroke-" "draw-" "cairo-"))
+      (and (memq s '(set-color! use-font! clear! blit-layer!)) #t)))
+
+;; What a form does that only a drawing procedure may: ((draws . name)
+;; (color . key) ...).
+(define (seam-problems form)
+  (define (quoted x)
+    (cond [(and (symbol? x) (memq x color-keys) (not (eq? x 'text)))
+           (list (cons 'color x))]
+          [(pair? x) (append (quoted (car x)) (quoted (cdr x)))]
+          [(vector? x) (quoted (vector->list x))]
+          [else '()]))
+  (define (quasi x)
+    (cond [(and (pair? x) (memq (car x) '(unquote unquote-splicing)))
+           (code (cadr x))]
+          [(pair? x) (append (quasi (car x)) (quasi (cdr x)))]
+          [else (quoted x)]))
+  (define (code x)
+    (cond
+      [(not (pair? x)) '()]
+      [(eq? (car x) 'quote) (quoted (cadr x))]
+      [(eq? (car x) 'quasiquote) (quasi (cadr x))]
+      [else (append (if (and (symbol? (car x)) (drawing-primitive? (car x)))
+                        (list (cons 'draws (car x)))
+                        '())
+                    (let loop ([l x] [acc '()])
+                      (if (pair? l)
+                          (loop (cdr l) (append acc (code (car l))))
+                          acc)))]))
+  (code form))
+
+(define (form-name form)
+  (and (pair? form) (memq (car form) '(define defvar)) (pair? (cdr form))
+       (if (pair? (cadr form)) (caadr form) (cadr form))))
+
+(define (seam-file-problems f)
+  (apply append
+         (map (lambda (form)
+                (let ([name (form-name form)])
+                  (if (and name
+                           (exists (lambda (p)
+                                     (string-prefix? p (symbol->string name)))
+                                   '("ui-draw-" "tasks-draw-")))
+                      '()
+                      (map (lambda (p)
+                             (format "~a: ~a ~a ~a" f (or name (car form))
+                                     (car p) (cdr p)))
+                           (seam-problems form)))))
+              (file-forms f))))
+
+(check "in the kit and Tasks, only drawing procedures draw or name a color"
+       (none? (apply append (map seam-file-problems seam-files))))
 
 (check "the REPL's docs read the folders too"
        (for-all (lambda (name) (hashtable-contains? (name-docs) name))

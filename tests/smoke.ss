@@ -697,7 +697,1080 @@
 (check "and Auto follows the desktop again"
        (and (= 0 (theme 'scale)) (= *scale* 1.0) (= (canvas-pixel-width) 1280)))
 (reset-theme!)
+;; A slider held, a right click on another window and both buttons let go
+;; there: back over Settings, the pointer drags nothing.
+(click-ui! s '(tab colors))
+(click-ui! s '(color accent))
+(let ([other (open-window "Other" 'size '(160 . 100)
+                          'pos (cons (min 1100 (+ (window-x s) (window-w s) 10))
+                                     600))])
+  (steps 1)
+  (let-values ([(x0 y) (ui-point s 'lightness 0.5)]
+               [(x1 y1) (ui-point s 'lightness 0.1)]
+               [(ox oy ow oh) (content-rect other)])
+    (let ([ox (+ ox 20)] [oy (+ oy 20)])
+      (inject! `(mouse-move ,x0 ,y) `(mouse-down ,x0 ,y left 1)
+               `(mouse-move ,ox ,oy) `(mouse-down ,ox ,oy right 1)
+               `(mouse-up ,ox ,oy right) `(mouse-up ,ox ,oy left))
+      (steps 2)
+      (let ([accent (theme 'accent)])
+        (inject! `(mouse-move ,x1 ,y))
+        (steps 2)
+        (check "a slider let go over another window, after a right click \
+                there, follows the pointer no more"
+               (and (eq? (window-at ox oy) other)
+                    (= accent (theme 'accent)))))))
+  (close-window! other))
+(reset-theme!)
 (close-window! s)
+
+;; Tasks: a task manager on the widget kit, driven by real events.
+(tasks-reset!)
+(define tw (tasks))
+(steps 2)
+(define tv (window-ref tw 'state))
+(define tui (window-ref tw 'ui))
+(define (focus-id) (ui-focused tui))
+(define (selected) (tasks-view-selected tv))
+(define (edit) (ui-state-edit tui))
+(define (card-of t) (ui-find tui (list 'card (task-id (find-task t)))))
+(define (column-of status)
+  (filter (lambda (t) (eq? (task-status t) status)) *tasks*))
+(define (next-to t) (cadr (memq (find-task t) *tasks*)))
+(define (shot name) (screenshot (format "~a/tasks-~a.png" out-dir name)))
+
+;; Presses and releases at a point of the window's content.
+(define (tasks-click! x y . more)   ; more: button, clicks
+  (let-values ([(cx cy cw ch) (content-rect tw)])
+    (let ([x (+ cx (round x))] [y (+ cy (round y))]
+          [b (if (pair? more) (car more) 'left)]
+          [n (if (and (pair? more) (pair? (cdr more))) (cadr more) 1)])
+      (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y ,b ,n)
+               `(mouse-up ,x ,y ,b))
+      (steps 2))))
+
+(define (region-center id)
+  (let ([r (ui-find tui id)])
+    (values (+ (ui-region-x r) (/ (ui-region-w r) 2))
+            (+ (ui-region-y r) (/ (ui-region-h r) 2)))))
+
+;; Clicks the open menu's entry that starts with label.
+(define (menu-click! label)
+  (let-values ([(x y w h) (menu-geometry *menu*)])
+    (let loop ([es (menu-entries *menu*)]
+               [ey (+ y 5 (menu-header-height *menu*))])
+      (cond
+        [(null? es) (errorf 'menu-click! "no entry ~s" label)]
+        [(and (pair? (car es)) (string-prefix? label (caar es)))
+         (let ([my (round (+ ey (/ (menu-item-height) 2)))])
+           (inject! `(mouse-move ,(+ x 30) ,my)
+                    `(mouse-down ,(+ x 30) ,my left 1)
+                    `(mouse-up ,(+ x 30) ,my left))
+           (steps 2))]
+        [else (loop (cdr es)
+                    (+ ey (if (pair? (car es)) (menu-item-height) 9)))]))))
+
+(check "Tasks opens on the Board with the seed tasks"
+       (and (not (window-error tw)) (= (length tasks-seed) (length *tasks*))
+            (eq? (tasks-view-mode tv) 'board) (card-of 16)))
+(check "Tasks is single-instance" (eq? tw (tasks)))
+(shot "board")
+(check "a column draws and registers only the cards in view"
+       (let ([todo (column-of 'todo)])
+         (< 0 (length (filter card-of todo)) (length todo))))
+(let ([at (lambda ()
+            (map (lambda (id)
+                   (let ([r (ui-find tui id)]) (list (ui-region-x r)
+                                                     (ui-region-y r))))
+                 '(new (filter tag) done clear (column todo))))])
+  (let ([before (at)])
+    (set-task! 13 'tags '("render" "a-much-longer-tag-name"))
+    (steps 2)
+    (let ([long (at)])
+      (set-task! 13 'tags '("render" "gpu"))
+      (steps 2)
+      (check "a long tag moves nothing in the toolbar, nor the board below"
+             (equal? before long)))))
+
+;; n, then typing at once: nothing is lost and the n is not typed.
+(type! "n")
+(type! "Fix the toolbar")
+(steps 2)
+(define nt (selected))
+(check "n makes a task, selected with its title focused; typed at once, the \
+        title is whole"
+       (and (= (+ 1 (length tasks-seed)) (length *tasks*)) nt
+            (eq? (focus-id) 'title)
+            (equal? (task-title nt) "Fix the toolbar")))
+(check "and its card, last in a long column, scrolled into view"
+       (let ([r (card-of nt)])
+         (and r (= (ui-region-h r) (cadddr (ui-region-frame r))))))
+(press! 'left 'shift) (press! 'left 'shift) (press! 'left 'shift)
+(press! #\c 'ctrl)
+(steps 1)
+(check "Shift+Left selects and Ctrl+C copies" (equal? (clipboard-get) "bar"))
+(press! 'end)
+(press! #\v 'ctrl)
+(steps 1)
+(check "End and Ctrl+V paste" (equal? (task-title nt) "Fix the toolbarbar"))
+(press! 'backspace) (press! 'backspace) (press! 'backspace)
+(press! #\a 'ctrl)
+(type! "Fix the menu")
+(steps 2)
+(check "Backspace, Ctrl+A and typing over everything: the title and the card"
+       (and (equal? (task-title nt) "Fix the menu") (card-of nt)))
+(let* ([r (ui-find tui 'title)]
+       [a (car (ui-text-box-areas (ui-region-x r) (ui-region-y r)
+                                  (ui-region-w r) (ui-region-h r) '(large)))]
+       [x (+ (list-ref a 1) (text-width "Fix the me" 'heading))]
+       [y (+ (list-ref a 2) 8)])
+  (tasks-click! x y 'left 1)
+  (tasks-click! x y 'left 2)
+  (check "a double click selects a word"
+         (equal? (ui-edit-selection (edit)) "menu")))
+(shot "title")
+
+;; Tab to Status; its menu by keys. Priority by mouse.
+(press! 'tab)
+(steps 1)
+(check "Tab goes from the title to Status" (equal? (focus-id) 'status))
+(press! 'return)
+(steps 1)
+(check "Return opens Status's menu on the current entry"
+       (and (menu-open?) (= 0 (menu-sel *menu*))))
+(shot "dropdown")
+(press! 'down)
+(press! 'return)
+(steps 2)
+(check "Down and Return: In progress, at the end of its column"
+       (and (eq? (task-status nt) 'doing)
+            (eq? nt (car (last-pair (column-of 'doing))))))
+(click-ui! tw 'priority)
+(check "a click opens Priority's menu" (menu-open?))
+(menu-click! "Urgent")
+(check "and picks Urgent" (eq? (task-priority nt) 'urgent))
+
+(click-ui! tw 'assignee)
+(type! "Ada")
+(press! 'return)
+(steps 2)
+(check "the assignee is typed, and Return leaves the field"
+       (and (equal? (task-assignee nt) "Ada") (not (focus-id))))
+
+;; The due date: the calendar by mouse and by keys.
+(define (calendar-open?)
+  (exists (lambda (r) (let ([id (ui-region-id r)])
+                        (and (pair? id) (eq? (car id) 'due) (pair? (cdr id))
+                             (eq? (cadr id) 'day))))
+          (ui-state-regions tui)))
+(click-ui! tw 'due)
+(check "a click on the date opens the calendar" (calendar-open?))
+(shot "calendar")
+(define day20 (let ([d (ui-today)]) (ui-date->day (list (car d) (cadr d) 20))))
+(click-ui! tw (list 'due 'day day20))
+(check "a day picked is the due date, and the calendar closes"
+       (and (equal? (task-due nt) (ui-day->date day20)) (not (calendar-open?))))
+(click-ui! tw 'due)
+(press! 'right) (press! 'right) (press! 'return)
+(steps 2)
+(check "reopened, Right Right Return: two days later"
+       (equal? (task-due nt) (ui-day->date (+ day20 2))))
+(click-ui! tw 'due)
+(press! 'page-down) (press! 'escape)
+(steps 2)
+(check "reopened, Escape: unchanged and closed"
+       (and (equal? (task-due nt) (ui-day->date (+ day20 2)))
+            (not (calendar-open?))))
+(click-ui! tw 'assignee)
+(press! 'tab)
+(steps 1)
+(check "Tab goes from the assignee to the date" (equal? (focus-id) 'due))
+(press! 'delete)
+(steps 1)
+(check "and Delete clears it" (not (task-due nt)))
+(press! 'escape)
+
+;; Tags: Return and a comma add, Backspace and × remove.
+(click-ui! tw '(tags field))
+(type! "perf")
+(press! 'return)
+(type! "ui,")
+(steps 2)
+(check "tags: Return and a comma add them"
+       (equal? (task-tags nt) '("perf" "ui")))
+(press! 'backspace)
+(steps 2)
+(check "Backspace in the empty field removes the last tag"
+       (equal? (task-tags nt) '("perf")))
+(click-ui! tw '(tags remove 0))
+(check "and a chip's × the others" (null? (task-tags nt)))
+(clipboard-set! "alpha, beta,gamma")
+(press! #\v 'ctrl)
+(steps 2)
+(check "a paste with commas adds a tag for each, and keeps the rest typed"
+       (and (equal? (task-tags nt) '("alpha" "beta"))
+            (equal? (tasks-view-tag-draft tv) "gamma")))
+(set-task! nt 'tags '())
+(tasks-view-tag-draft-set! tv "")
+(clipboard-set! (apply string-append
+                       (map (lambda (i) (format "at f~a (x.ss:~a), " i (* 7 i)))
+                            (iota 4000))))
+(press! #\v 'ctrl)
+(steps 2)
+(check "a pasted log of 4,000 comma-separated frames: its first 64 become \
+        tags, and Tasks still draws"
+       (and (not (window-error tw)) (= (length (task-tags nt)) 64)
+            (equal? (car (task-tags nt)) "at-f0-(x.ss:0)")))
+(set-task! nt 'tags '())
+(tasks-view-tag-draft-set! tv "")
+
+(click-ui! tw 'description)
+(type! "line one")
+(press! 'return)
+(type! "line two")
+(steps 2)
+(check "the description takes a newline"
+       (equal? (task-description nt) "line one\nline two"))
+(press! 'up)
+(steps 1)
+(check "Up moves the caret to the first row" (< (ui-edit-caret (edit)) 9))
+
+(click-ui! tw 'new-item)
+(type! "one")
+(press! 'return)
+(type! "two")
+(press! 'return)
+(steps 2)
+(click-ui! tw '(item 0))
+(check "checklist items are added, and checked"
+       (equal? (task-checklist nt) '(("one" . #t) ("two" . #f))))
+(click-ui! tw '(drop 1))
+(check "and removed" (equal? (task-checklist nt) '(("one" . #t))))
+(shot "details")
+
+;; Drag and drop. The new task scrolled To do to its end: back to the top.
+(define (column-home! status)
+  (let-values ([(x y) (region-center (list 'column status))]
+               [(cx cy cw ch) (content-rect tw)])
+    (apply inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y)))
+           (make-list 40 '(wheel 0 1)))
+    (steps 2)))
+(column-home! 'todo)
+(define (column-top status) (ui-region-y (ui-find tui (list 'column status))))
+(define (column-x status)
+  (let ([r (ui-find tui (list 'column status))])
+    (+ (ui-region-x r) (/ (ui-region-w r) 2))))
+;; Drags t's card to (x, y) of the content, a step after each of three
+;; moves; Escape before the release when asked.
+(define (drag-card! t x y . escape?)
+  (let*-values ([(r) (card-of t)]
+                [(x0 y0) (values (+ (ui-region-x r) 20) (+ (ui-region-y r) 10))]
+                [(cx cy cw ch) (content-rect tw)])
+    (inject! `(mouse-move ,(+ cx x0) ,(+ cy y0))
+             `(mouse-down ,(+ cx x0) ,(+ cy y0) left 1))
+    (steps 1)
+    (for-each (lambda (f)
+                (inject! `(mouse-move ,(+ cx (round (+ x0 (* f (- x x0)))))
+                                      ,(+ cy (round (+ y0 (* f (- y y0)))))))
+                (steps 1))
+              '(1/3 2/3 1))
+    (when (pair? escape?) (press! 'escape) (steps 1))
+    (inject! `(mouse-up ,(+ cx (round x)) ,(+ cy (round y)) left))
+    (steps 2)))
+(let ([y (+ (column-top 'review) 8 (ui-region-h (card-of 7)) 4)])
+  (drag-card! 16 (column-x 'review) y)
+  (check "a card dragged into Review between two cards lands there"
+         (and (eq? (task-status (find-task 16)) 'review)
+              (eq? (next-to 7) (find-task 16))
+              (eq? (next-to 16) (find-task 8)))))
+(let ([y (+ (column-top 'todo) 8 (ui-region-h (card-of 12)) 4)])
+  (drag-card! 11 (column-x 'todo) y)
+  (check "and within a column it reorders"
+         (and (eq? (next-to 12) (find-task 11))
+              (eq? (next-to 11) (find-task 13)))))
+(let ([order *tasks*] [r (ui-find tui 'details)])
+  (drag-card! 12 (+ (ui-region-x r) 40) 300)
+  (drag-card! 12 (column-x 'review) (+ (column-top 'review) 20) #t)
+  (check "released outside the board, or after Escape, a card stays"
+         (equal? order *tasks*)))
+(let-values ([(cx cy cw ch) (content-rect tw)])
+  (let* ([r (card-of 12)] [x0 (+ cx (ui-region-x r) 20)]
+         [y0 (+ cy (ui-region-y r) 10)]
+         [x1 (+ cx (column-x 'doing))] [y1 (+ cy (column-top 'doing) 4)])
+    (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1))
+    (steps 1)
+    (inject! `(mouse-move ,x1 ,y1))
+    (steps 1)
+    (shot "drag")
+    (inject! `(mouse-move ,(+ x1 1) ,y1) `(mouse-up ,(+ x1 1) ,y1 left))
+    (steps 2)
+    (check "a move and the release in one step drop it where the pointer is"
+           (and (eq? (task-status (find-task 12)) 'doing)
+                (eq? (find-task 12) (car (column-of 'doing)))))))
+
+;; Another button during a drag: a right press, here in the gap between
+;; two columns, ends it, the card where it was and no menu, and once both
+;; buttons are up nothing is held. With the right button pressed first,
+;; the left one's release still ends a drag.
+(let-values ([(cx cy cw ch) (content-rect tw)])
+  (let* ([r (card-of 13)] [order *tasks*] [doing (ui-find tui '(column doing))]
+         [x0 (+ cx (ui-region-x r) 20)] [y0 (+ cy (ui-region-y r) 10)]
+         [x1 (+ cx (column-x 'doing))] [y1 (+ cy (column-top 'doing) 40)]
+         [xg (round (+ cx (ui-region-x doing) (ui-region-w doing) 4))])
+    (define (held?) (or (tasks-view-drag tv) (ui-state-active tui) *drag*))
+    (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1))
+    (steps 1)
+    (inject! `(mouse-move ,x1 ,y1))
+    (steps 1)
+    (inject! `(mouse-move ,xg ,y1) `(mouse-down ,xg ,y1 right 1))
+    (steps 1)
+    (let ([ended? (and (not (ui-region-at tui (- xg cx) (- y1 cy)))
+                       (not (or (tasks-view-drag tv) (menu-open?))))])
+      (inject! `(mouse-up ,xg ,y1 right) `(mouse-up ,xg ,y1 left))
+      (steps 2)
+      (check "a right press during a drag ends it, the card where it was; \
+              with both buttons up, nothing is held"
+             (and ended? (equal? order *tasks*) (not (held?)))))
+    (inject! `(mouse-move ,(+ cx 300) ,(+ cy 2))
+             `(mouse-down ,(+ cx 300) ,(+ cy 2) right 1))
+    (steps 1)
+    (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1))
+    (steps 1)
+    (inject! `(mouse-move ,x1 ,y1))
+    (steps 1)
+    (inject! `(mouse-up ,x1 ,y1 right) `(mouse-up ,x1 ,y1 left))
+    (steps 2)
+    (check "pressed after the right button, the left one's release still \
+            drops the card"
+           (and (eq? (task-status (find-task 13)) 'doing) (not (held?))))
+    (move-task! 13 'todo 14)
+    (steps 2)))
+
+;; Board keys.
+(let-values ([(x y) (region-center (list 'card 13))])
+  (tasks-click! x y))
+(check "a click on a card selects it" (eq? (selected) (find-task 13)))
+(press! 'down)
+(steps 1)
+(check "Down selects the next card" (eq? (selected) (find-task 14)))
+(press! 'right 'shift)
+(steps 1)
+(check "Shift+Right moves it to the next status"
+       (eq? (task-status (find-task 14)) 'doing))
+(let ([before (list-index (lambda (t) (eq? t (find-task 14)))
+                          (column-of 'doing))])
+  (press! 'up 'shift)
+  (steps 1)
+  (check "Shift+Up moves it up its column"
+         (= (list-index (lambda (t) (eq? t (find-task 14))) (column-of 'doing))
+            (- before 1))))
+(press! 'escape)
+(steps 1)
+(check "Escape lets go of the selection" (not (selected)))
+
+;; The List.
+(type! "v")
+(steps 2)
+(check "v switches to the List" (eq? (tasks-view-mode tv) 'list))
+(define (rows) (tasks-rows tv (tasks-visible tv)))
+(click-ui! tw '(table header priority))
+(check "a header sorts by it: urgent first"
+       (eq? (task-priority (car (rows))) 'urgent))
+(shot "list")
+(click-ui! tw '(table header priority))
+(check "again: low first" (eq? (task-priority (car (rows))) 'low))
+(click-ui! tw '(table header priority))
+(check "again: board order" (not (tasks-view-sort tv)))
+(press! 'down) (press! 'down)
+(steps 1)
+(check "Down twice selects the second row" (eq? (selected) (cadr (rows))))
+(press! 'return)
+(steps 1)
+(check "Return edits its title" (eq? (focus-id) 'title))
+(press! 'escape)
+(let-values ([(x y) (region-center '(table body))]
+             [(cx cy cw ch) (content-rect tw)])
+  (define (last-shown?)   ; drawn whole, not cut by the table's view
+    (let ([r (ui-find tui (list 'table 'row (- (length (rows)) 1)))])
+      (and r (> (ui-region-h r) 0)
+           (= (ui-region-h r) (cadddr (ui-region-frame r))))))
+  (press! 'end)
+  (steps 2)
+  (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))) '(wheel 0 20))
+  (steps 2)
+  (let ([away (not (last-shown?))])
+    (type! "v")
+    (type! "v")
+    (steps 2)
+    (check "Board and back: the List shows its selected row again"
+           (and away (last-shown?)))))
+
+(type! "/")
+(type! "sdl")
+(steps 2)
+(check "/ focuses the search, which filters as you type"
+       (and (eq? (focus-id) 'search)
+            (equal? (tasks-visible tv) (tasks-list 'search "sdl"))
+            (< 0 (length (tasks-visible tv)) 5)))
+(press! 'return)
+(steps 2)
+(check "Return leaves the search and selects the first match"
+       (and (not (focus-id)) (eq? (selected) (car (rows)))))
+(click-ui! tw 'clear)
+(check "Clear shows every task again"
+       (and (equal? "" (tasks-view-query tv))
+            (= (length *tasks*) (length (tasks-visible tv)))))
+(click-ui! tw '(filter kind))
+(menu-click! "Bug")
+(check "Kind: Bug shows only bugs"
+       (and (pair? (tasks-visible tv))
+            (for-all (lambda (t) (eq? (task-kind t) 'bug)) (tasks-visible tv))))
+(click-ui! tw 'clear)
+(let ([a (task-assignee (find-task 9))])
+  (set-task! 9 'assignee (apply string-append (make-list 20 "Grace Hopper ")))
+  (steps 1)
+  (click-ui! tw '(filter assignee))
+  (let-values ([(mx my mw mh) (menu-geometry *menu*)]
+               [(cx cy cw ch) (content-rect tw)]
+               [(bx) (ui-region-x (ui-find tui '(filter assignee)))])
+    (check "a long name keeps the Assignee filter's menu under its box, on \
+            the screen"
+           (and (< (abs (- mx cx bx)) 1) (<= (+ mx mw) (screen-w)))))
+  (press! 'escape)
+  (steps 2)
+  (set-task! 9 'assignee a))
+(click-ui! tw 'done)
+(type! "v")
+(steps 2)
+(check "Show done off: no Done column"
+       (and (not (tasks-view-done? tv)) (ui-find tui '(column todo))
+            (not (ui-find tui '(column done)))))
+(let-values ([(x y) (region-center (list 'card 7))])
+  (tasks-click! x y))
+(press! 'right 'shift)
+(steps 2)
+(check "Shift+Right into the hidden Done selects the task next to it"
+       (and (eq? (task-status (find-task 7)) 'done)
+            (eq? (selected) (find-task 16))))
+(move-task! 7 'review 16)
+(press! 'escape)
+(steps 1)
+(click-ui! tw 'done)
+
+;; The context menu, Duplicate and Move to; Delete and its dialog.
+(let-values ([(x y) (region-center (list 'card 13))])
+  (tasks-click! x y 'right 1))
+(check "a right click on a card opens its menu" (menu-open?))
+(menu-click! "Duplicate")
+(define copy (selected))
+(check "Duplicate: a copy right after it, selected"
+       (and (= (+ 2 (length tasks-seed)) (length *tasks*))
+            (eq? (next-to 13) copy)
+            (equal? (task-title copy)
+                    (string-append (task-title (find-task 13)) " (copy)"))))
+(let-values ([(x y) (region-center (list 'card (task-id copy)))])
+  (tasks-click! x y 'right 1))
+(menu-click! "Move to Done")
+(check "Move to Done" (eq? (car (last-pair (column-of 'done))) copy))
+(click-ui! tw 'description)
+(click-ui! tw 'delete)
+(check "the dialog takes the keyboard from the field under it"
+       (and (ui-find tui '(confirm 1)) (not (focus-id))))
+(press! 'escape)
+(steps 2)
+(press! 'delete)
+(steps 2)
+(check "Delete asks first" (ui-find tui '(confirm 1)))
+(shot "dialog")
+(press! 'escape)
+(steps 2)
+(check "Escape cancels" (and (memq copy *tasks*) (not (ui-find tui 'confirm))))
+(press! 'delete)
+(steps 1)
+(press! 'return)
+(steps 2)
+(check "Delete and Return: gone, and the task next to it selected"
+       (and (not (memq copy *tasks*)) (selected)))
+(let ([t (add-task! (apply string-append (make-list 200 "very long title "))
+                    'status 'review)]
+      [orig ui-draw-dialog] [said #f])
+  (set! ui-draw-dialog   ; the lines the dialog's message shows
+        (lambda (x y w h flags title message)
+          (set! said (ui-dialog-lines
+                      message
+                      (caddr (cdr (assq 'message
+                                        (ui-dialog-areas x y w h '()))))))
+          (orig x y w h flags title message)))
+  (steps 1)
+  (let-values ([(x y) (region-center (list 'card (task-id t)))])
+    (tasks-click! x y))
+  (press! 'delete)
+  (steps 2)
+  (set! ui-draw-dialog orig)
+  (let ([b (ui-find tui '(confirm 1))])
+    (let-values ([(w h) (window-content-size tw)])
+      (check "a very long title makes the dialog no taller than a few lines: \
+              its buttons stay well inside the window, and it still says \
+              that this cannot be undone"
+             (and (< (+ (ui-region-y b) (ui-region-h b)) (* 3/4 h))
+                  (string-suffix? "undone." (car (last-pair said)))))))
+  (press! 'escape)
+  (delete-task! t)
+  (steps 2))
+
+;; A tooltip shows after the pointer rests.
+(let*-values ([(x y) (region-center 'new)]
+              [(cx cy cw ch) (content-rect tw)]
+              [(px py) (values (+ cx x 12 6) (+ cy y 20 6))])
+  (define (pixel)
+    (cairo-surface-flush *canvas*)
+    (foreign-ref 'unsigned-32 (cairo-image-surface-get-data *canvas*)
+                 (+ (* (exact (floor (* *scale* py)))
+                       (cairo-image-surface-get-stride *canvas*))
+                    (* 4 (exact (floor (* *scale* px)))))))
+  (let ([before (pixel)])
+    (inject! `(mouse-move ,(+ cx x) ,(+ cy y)))
+    (steps 2)
+    (check "a tooltip shows when the pointer rests on New task"
+           (and (= before (pixel))
+                (wait-for (lambda () (not (= before (pixel)))))))
+    (shot "tooltip")))
+(let*-values ([(x y) (region-center 'search)]
+              [(cx cy cw ch) (content-rect tw)]
+              [(px py) (values (+ cx x 12 6) (+ cy y 20 6))])
+  (define (pixel)
+    (cairo-surface-flush *canvas*)
+    (foreign-ref 'unsigned-32 (cairo-image-surface-get-data *canvas*)
+                 (+ (* (exact (floor (* *scale* py)))
+                       (cairo-image-surface-get-stride *canvas*))
+                    (* 4 (exact (floor (* *scale* px)))))))
+  (tasks-click! x y)
+  (type! "x")
+  (steps 2)
+  (let ([before (pixel)])
+    (check "but none over the field being typed in"
+           (and (eq? (focus-id) 'search)
+                (not (wait-for (lambda () (not (= before (pixel))))))))
+    (press! 'escape)
+    (click-ui! tw 'clear)))
+
+;; A press, key or text uses the tooltip up until the pointer moves: a new
+;; task's title typed with the pointer left on New task shows no tooltip
+;; while the typing pauses; once the pointer moves and rests, it shows.
+(let-values ([(x y) (region-center 'new)] [(cx cy cw ch) (content-rect tw)])
+  (let ([tips 0] [orig ui-draw-tooltip])
+    (set! ui-draw-tooltip
+          (lambda args (set! tips (+ tips 1)) (apply orig args)))
+    (tasks-click! x y)
+    (type! "Typed under a resting pointer")
+    (steps 2)
+    (let ([t (selected)])
+      (check "after a click and typing, no tooltip while the pointer rests"
+             (and (eq? (focus-id) 'title)
+                  (not (wait-for (lambda () (> tips 0))))))
+      (inject! `(mouse-move ,(+ cx (round x) 2) ,(+ cy (round y))))
+      (check "and one once the pointer moves and rests"
+             (wait-for (lambda () (> tips 0))))
+      (set! ui-draw-tooltip orig)
+      (press! 'escape)
+      (delete-task! t)
+      (steps 2))))
+
+;; Keys that scroll the List bring other rows under the resting pointer,
+;; and still no tooltip: the pointer has not moved since the keys.
+(let ([extra (map (lambda (i)
+                    (add-task! (format "Row ~a, a title the List cuts: ~a" i
+                                       (make-string 80 #\W))))
+                  (iota 30))]
+      [tips 0] [orig ui-draw-tooltip])
+  (type! "v")
+  (steps 2)
+  (let-values ([(x y) (region-center '(table row 3))]
+               [(cx cy cw ch) (content-rect tw)])
+    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))))
+    (steps 2)
+    (set! ui-draw-tooltip
+          (lambda args (set! tips (+ tips 1)) (apply orig args)))
+    (do ([i 0 (+ i 1)]) ((= i 40)) (press! 'down) (steps 1))
+    (check "keys that scroll the List under a resting pointer show no row's \
+            tooltip"
+           (and (> (car (ui-memo tui '(table body) '(0 . 0))) 0)
+                (not (wait-for (lambda () (> tips 0))))))
+    (set! ui-draw-tooltip orig))
+  (for-each delete-task! extra)
+  (type! "v")
+  (steps 2))
+
+;; A title cut inside a long word: the card's tooltip tells it, and the
+;; details' title, scrolled to the caret, shows its start again once left.
+(let ([long (add-task! (string-append "A " (make-string 80 #\W))
+                       'status 'review)])
+  (steps 2)
+  (check "a card whose title is cut, even inside a long word, has it as a \
+          tooltip"
+         (equal? (ui-region-tip (card-of long)) (task-title long)))
+  (let-values ([(x y) (region-center (list 'card (task-id long)))])
+    (tasks-click! x y))
+  (press! 'return)
+  (press! 'end 'ctrl)
+  (steps 2)
+  (let ([scrolled (ui-memo tui 'title 0)])
+    (press! 'escape)
+    (steps 2)
+    (check "a long title scrolled to the caret shows its start once left"
+           (and (> scrolled 0) (not (focus-id)) (= 0 (ui-memo tui 'title 0)))))
+  (delete-task! long)
+  (steps 1))
+
+;; What has the keyboard is in view. Enter, a double click and the menu's
+;; Open focus the title of a task whose details are scrolled away; Return
+;; in Add an item, and typing at the end of a long description, follow
+;; the field and its caret; a new card follows its growing title.
+(define (shown? id)   ; drawn whole, not cut by a scroll view
+  (let ([r (ui-find tui id)])
+    (and r (> (ui-region-h r) 0)
+         (= (ui-region-h r) (cadddr (ui-region-frame r))))))
+(define (details-down!)
+  (let-values ([(x y) (region-center 'status)]
+               [(cx cy cw ch) (content-rect tw)])
+    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y)))
+             '(wheel 0 -10))
+    (steps 2)))
+(let-values ([(x y) (region-center (list 'card 7))])
+  (tasks-click! x y)
+  (details-down!)
+  (let ([away (not (shown? 'title))])
+    (press! 'return)
+    (steps 2)
+    (let ([enter (and (eq? (focus-id) 'title) (shown? 'title))])
+      (press! 'escape)
+      (details-down!)
+      (tasks-click! x y 'left 1)
+      (tasks-click! x y 'left 2)
+      (let ([double (and (eq? (focus-id) 'title) (shown? 'title))])
+        (press! 'escape)
+        (details-down!)
+        (tasks-click! x y 'right 1)
+        (menu-click! "Open")
+        (check "Enter, a double click and Open show the title they focus, \
+                scrolled out of the details"
+               (and away enter double (eq? (focus-id) 'title)
+                    (shown? 'title)))))))
+(press! 'escape)
+(click-ui! tw 'new-item)
+(for-each (lambda (s) (type! s) (press! 'return))
+          '("Item 1" "Item 2" "Item 3" "Item 4" "Item 5"))
+(steps 2)
+(check "Return in Add an item keeps it in view as the items push it down"
+       (and (eq? (focus-id) 'new-item) (shown? 'new-item)))
+(set-task! 7 'checklist (list-head (task-checklist (find-task 7)) 5))
+(press! 'escape)
+(let-values ([(w h) (window-content-size tw)]
+             [(t) (car (column-of 'review))])
+  (define text (task-description t))
+  (resize-window! tw 1100 440)
+  (steps 2)
+  (let-values ([(x y) (region-center (list 'card (task-id t)))])
+    (tasks-click! x y))
+  (click-ui! tw 'description)
+  (press! 'end 'ctrl)
+  (do ([i 0 (+ i 1)]) ((= i 12)) (press! 'return) (type! "more text"))
+  (steps 2)
+  (let* ([r (ui-find tui 'description)]
+         [a (car (apply ui-text-box-areas
+                        (append (ui-region-frame r) '(()))))]
+         [lh (font-line-height 'ui)] [text (task-description (selected))]
+         [rows (ui-wrap text (list-ref a 3) (lambda (s) (text-width s 'ui)))]
+         [top (- (+ (list-ref a 2)
+                    (* lh (ui-row-at rows (ui-edit-caret (edit)))))
+                 (ui-memo tui 'description 0))])
+    (check "typing at the end of a long description keeps its caret in view"
+           (<= (ui-region-y r) top (+ top lh)
+               (+ (ui-region-y r) (ui-region-h r)))))
+  (press! 'escape)
+  (press! 'escape)
+  (steps 1)
+  (set-task! t 'description text)
+  (resize-window! tw w h)
+  (steps 2))
+(type! "n")
+(type! (make-string 150 #\W))
+(steps 2)
+(check "a new card follows its title as it grows past the column's end"
+       (shown? (list 'card (task-id (selected)))))
+(press! 'escape)
+(delete-task! (selected))
+(steps 2)
+
+;; Each task's details start at their top: a description wheeled down is
+;; not wheeled in the next task. Tab leaves a gap at the details' edges,
+;; so a focus ring shows whole.
+(let* ([lines (lambda (what)
+                (apply string-append
+                       (map (lambda (i) (format "~a ~a.\n" what i))
+                            (iota 40))))]
+       [a (add-task! "Wheeled" 'status 'review 'description (lines "Para"))]
+       [b (add-task! "Next" 'status 'review 'description (lines "Other"))])
+  (steps 2)
+  (let-values ([(x y) (region-center (list 'card (task-id a)))])
+    (tasks-click! x y))
+  (let-values ([(x y) (region-center 'description)]
+               [(cx cy cw ch) (content-rect tw)])
+    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))) '(wheel 0 -4))
+    (steps 2))
+  (let ([wheeled (ui-memo tui 'description 0)])
+    (let-values ([(x y) (region-center (list 'card (task-id b)))])
+      (tasks-click! x y))
+    (check "a description wheeled down in one task starts at its top in the \
+            next"
+           (and (> wheeled 0) (eq? (selected) b)
+                (= 0 (ui-memo tui 'description 0)))))
+  (delete-task! a)
+  (delete-task! b)
+  (steps 2))
+(tasks-select! tv (find-task 11))   ; its card is scrolled out of view
+(invalidate! tw)
+(steps 2)
+(click-ui! tw 'title)
+(define (ring-inside? id)   ; the focus ring reaches 4 px out
+  (let ([r (ui-find tui id)] [d (ui-find tui 'details)])
+    (and (>= (- (ui-region-y r) 4) (ui-region-y d))
+         (<= (+ (ui-region-y r) (ui-region-h r) 4)
+             (+ (ui-region-y d) (ui-region-h d))))))
+(define (tab-to! id . mods)
+  (let loop ([n 0])
+    (unless (or (= n 40) (eq? (focus-id) id))
+      (apply press! 'tab mods)
+      (steps 2)
+      (loop (+ n 1)))))
+(tab-to! 'delete)
+(let ([last (ring-inside? 'delete)])
+  (tab-to! 'status 'shift)
+  (check "Tab and Shift+Tab bring a field into view with its focus ring"
+         (and last (eq? (focus-id) 'status) (ring-inside? 'status))))
+(tab-to! 'title 'shift)
+(check "Shift+Tab up onto a title of three rows shows all of it"
+       (and (eq? (focus-id) 'title)
+            (>= (cadddr (ui-region-frame (ui-find tui 'title)))
+                (* 3 (font-line-height 'heading)))
+            (ring-inside? 'title)))
+(press! 'escape)
+(steps 1)
+
+;; Looks: the tag field draws no box inside the chip input's; a filter
+;; whose tag no task has any more still shows it; a disabled button does
+;; not light up under the pointer; a cut title says so, and so does a cut
+;; checklist item or List row with a tooltip.
+(define (content-pixel x y)
+  (let-values ([(cx cy cw ch) (content-rect tw)])
+    (cairo-surface-flush *canvas*)
+    (foreign-ref 'unsigned-32 (cairo-image-surface-get-data *canvas*)
+                 (+ (* (exact (floor (* *scale* (+ cy y))))
+                       (cairo-image-surface-get-stride *canvas*))
+                    (* 4 (exact (floor (* *scale* (+ cx x)))))))))
+(define (pixels-of x y w h)
+  (let ([w (exact (round w))] [h (exact (round h))])
+    (map (lambda (i) (content-pixel (+ x (mod i w)) (+ y (quotient i w))))
+         (iota (* w h)))))
+(define (pixels-in id)
+  (let ([r (ui-find tui id)])
+    (pixels-of (ui-region-x r) (ui-region-y r) (ui-region-w r)
+               (ui-region-h r))))
+(let-values ([(x y) (region-center (list 'card 9))])
+  (tasks-click! x y))
+(click-ui! tw '(tags field))
+(let* ([r (ui-find tui '(tags field))]
+       [right (+ (ui-region-x r) (ui-region-w r))]
+       [y (+ (ui-region-y r) (quotient (ui-region-h r) 2))])
+  (check "the tag field draws no box of its own inside the chip input's"
+         (= (content-pixel (- right 1) y) (content-pixel (- right 12) y))))
+(press! 'escape)
+(click-ui! tw '(filter tag))
+(menu-click! "genera")
+(set-task! 8 'tags '("style"))
+(steps 2)
+(let ([r (ui-find tui '(filter tag))])
+  (check "a Tag filter whose tag no task has any more still shows it"
+         (let loop ([ps (pixels-of (+ (ui-region-x r) 10) (+ (ui-region-y r) 6)
+                                   (- (ui-region-w r) 40)
+                                   (- (ui-region-h r) 12))]
+                    [seen '()])
+           (cond [(> (length seen) 2) #t]
+                 [(null? ps) #f]
+                 [else (loop (cdr ps) (if (memv (car ps) seen)
+                                          seen
+                                          (cons (car ps) seen)))]))))
+(set-task! 8 'tags '("style" "genera"))
+(click-ui! tw 'clear)
+(let-values ([(cx cy cw ch) (content-rect tw)] [(x y) (region-center 'clear)])
+  (inject! `(mouse-move ,(+ cx 4) ,(+ cy 4)))
+  (steps 2)
+  (let ([before (pixels-in 'clear)])
+    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))))
+    (steps 2)
+    (check "a disabled button does not light up under the pointer"
+           (and (not (tasks-filtered? tv)) (equal? before (pixels-in 'clear))))
+    (inject! `(mouse-move ,(+ cx 4) ,(+ cy 4)))
+    (steps 2)))
+(let ([long (add-task! (make-string 300 #\W) 'status 'review
+                       'checklist (list (make-string 60 #\x)))])
+  (steps 2)
+  (let-values ([(x y) (region-center (list 'card (task-id long)))])
+    (tasks-click! x y))
+  (let* ([r (ui-find tui 'title)]
+         [a (car (apply ui-text-box-areas
+                        (append (ui-region-frame r) '((large bare single)))))]
+         [hh (font-line-height 'heading)]
+         [row (lambda (i) (pixels-of (list-ref a 1) (round (+ (list-ref a 2)
+                                                               (* i hh)))
+                                     (list-ref a 3) (round hh)))])
+    (check "an unfocused title cut after four rows ends its last with …"
+           (and (not (focus-id)) (equal? (row 1) (row 2))
+                (not (equal? (row 2) (row 3))))))
+  (check "a checklist item cut short has its text as a tooltip"
+         (equal? (ui-region-tip (ui-find tui '(item 0)))
+                 (caar (task-checklist long))))
+  (type! "v")
+  (steps 2)
+  (check "and so does a List row whose title is cut"
+         (let ([i (list-index (lambda (t) (eq? t long)) (rows))])
+           (equal? (ui-region-tip (ui-find tui (list 'table 'row i)))
+                   (task-title long))))
+  (type! "v")
+  (delete-task! long)
+  (steps 2))
+
+;; The REPL's procedures show in the window at once.
+(define rt (add-task! "From the REPL" 'status 'review))
+(steps 1)
+(check "add-task!: its card shows" (card-of rt))
+(let-values ([(x y) (region-center (list 'card (task-id rt)))])
+  (tasks-click! x y))
+(press! 'return)
+(steps 1)
+(set-task! rt 'title "Renamed")
+(steps 2)
+(check "set-task! on a focused title: the field shows it"
+       (and (eq? (focus-id) 'title) (equal? (ui-edit-text (edit)) "Renamed")))
+(move-task! rt 'done)
+(steps 1)
+(check "move-task!" (eq? (car (last-pair (column-of 'done))) rt))
+(delete-task! rt)
+(steps 1)
+(check "delete-task!: the selection goes" (and (not (selected))
+                                              (not (memq rt *tasks*))))
+
+;; Empty states.
+(type! "/")
+(type! "nothing-like-this")
+(press! 'escape)
+(steps 2)
+(check "nothing matches: an empty state with a way back"
+       (ui-find tui 'empty-clear))
+(shot "nothing")
+(click-ui! tw 'empty-clear)
+;; A long word in the search: the empty state's message draws nothing past
+;; its width.
+(let ([drawn '()] [label ui-draw-label] [text draw-text] [in #f])
+  (set! ui-draw-label   ; a wrapped label's box, while it draws
+        (lambda (x y w h flags str)
+          (fluid-let ([in (and (memq 'wrap flags) (list x w))])
+            (label x y w h flags str))))
+  (set! draw-text
+        (lambda (x y str . more)
+          (when in
+            (set! drawn (cons (list x (text-width str (cadr more)) in)
+                              drawn)))
+          (apply text x y str more)))
+  (type! "/")
+  (type! (make-string 150 #\q))
+  (press! 'escape)
+  (steps 2)
+  (set! ui-draw-label label)
+  (set! draw-text text)
+  (check "a long word in the search: the empty state's message stays \
+          within its width"
+         (and (pair? drawn)
+              (for-all (lambda (d)
+                         (let ([x (car d)] [lx (car (caddr d))])
+                           (and (>= x (- lx 0.5))
+                                (<= (+ x (cadr d))
+                                    (+ lx (cadr (caddr d)) 0.5)))))
+                       drawn)))
+  (click-ui! tw 'empty-clear))
+(for-each delete-task! (map task-id *tasks*))
+(steps 2)
+(check "no tasks at all: an empty state that makes one"
+       (and (null? *tasks*) (ui-find tui 'empty-new)))
+(shot "empty")
+(tasks-reset!)
+
+;; A narrow window: the details are a page.
+(resize-window! tw 760 600)
+(steps 2)
+(let-values ([(x y) (region-center (list 'card 9))])
+  (tasks-click! x y))
+(check "narrow, a click on a card opens its page"
+       (and (ui-find tui 'back) (not (ui-find tui (list 'card 9)))))
+(shot "narrow")
+(press! 'escape)
+(steps 2)
+(check "and Escape goes back" (and (not (ui-find tui 'back)) (card-of 9)
+                                   (eq? (selected) (find-task 9))))
+(resize-window! tw 1205 660)
+(steps 2)
+(click-ui! tw 'assignee)
+(resize-window! tw 760 600)
+(steps 2)
+(type! "n")
+(steps 2)
+(check "a window made narrow while a field has the keyboard shows the \
+        details' page, and typing goes on in the field"
+       (and (eq? (focus-id) 'assignee) (ui-find tui 'back)
+            (equal? (task-assignee (find-task 9)) "Clauden")))
+(press! 'escape)
+(press! 'escape)
+(steps 2)
+(set-task! 9 'assignee "Claude")
+(steps 1)
+
+;; At 150%, Clear keeps to the toolbar's first row until the search is at
+;; its narrowest, even at widths that fill the row exactly.
+(let ([y (lambda (id) (ui-region-y (ui-find tui id)))] [bad '()]
+      [scale (theme 'scale)])
+  (set-theme! 'scale 150)
+  (steps 2)
+  (for-each (lambda (w)
+              (resize-window! tw w 700)
+              (steps 1)
+              (when (and (> (y 'clear) (y 'new))
+                         (> (ui-region-w (ui-find tui 'search)) 181))
+                (set! bad (cons w bad))))
+            (map (lambda (i) (+ 1260 i)) (iota 31)))
+  (set-theme! 'scale scale)
+  (resize-window! tw 1205 660)
+  (steps 2)
+  (check "at 150%, Clear stays on the toolbar's first row while the search \
+          is wider than its narrowest"
+         (null? bad)))
+
+;; 100,000 characters: words, then one word as long.
+(define long-text
+  (string-append (apply string-append (make-list 5555 "abcdefgh "))
+                 (make-string 50005 #\x)))
+
+;; Takes n steps; => the slowest one's ms.
+(define (slowest-of-steps n)
+  (let loop ([i 0] [worst 0])
+    (if (= i n)
+        worst
+        (let ([t0 (now-ms)])
+          (steps 1)
+          (loop (+ i 1) (max worst (- (now-ms) t0)))))))
+
+;; That pasted into a title, an assignee, a tag and the search: the Board,
+;; the details, the menus, the dialog and the List keep answering, every
+;; step under 300 ms (about 60 at most measured alone), and Tasks never
+;; crashes.
+(let ([t (add-task! "Long" 'status 'review)] [slow '()])
+  (define (timed label n)
+    (let ([ms (slowest-of-steps n)])
+      (when (or (> ms 300) (window-error tw))
+        (set! slow (cons (cons label ms) slow)))))
+  (define (at! id . button)   ; a click, not stepped
+    (if (ui-find tui id)
+        (let-values ([(x y) (region-center id)]
+                     [(cx cy cw ch) (content-rect tw)])
+          (let ([x (+ cx (round x))] [y (+ cy (round y))]
+                [b (if (pair? button) (car button) 'left)])
+            (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y ,b 1)
+                     `(mouse-up ,x ,y ,b))))
+        (set! slow (cons (cons id 'gone) slow))))
+  (define (paste!) (set! *host-clipboard* long-text) (press! #\v 'ctrl))
+  (define card (list 'card (task-id t)))
+  (steps 1)
+  (at! card) (timed "its details" 2)
+  (press! 'return) (press! #\a 'ctrl) (paste!) (timed "the title" 2)
+  (type! "y") (timed "typed" 1)
+  (press! 'escape) (timed "left" 1)
+  (at! 'assignee) (timed "the assignee" 2)
+  (paste!) (timed "pasted" 1)
+  (press! 'escape) (timed "left" 1)
+  (at! '(tags field)) (timed "the tag field" 2)
+  (paste!) (timed "pasted" 1)
+  (press! 'return) (timed "added" 1)
+  (press! 'escape) (timed "left" 1)
+  (at! card 'right) (timed "the card's menu" 2)
+  (let ([menu? (menu-open?)])
+    (press! 'escape) (timed "closed" 1)
+    (press! 'delete) (timed "the dialog" 1)
+    (let ([dialog? (ui-find tui '(confirm 1))])
+      (press! 'escape) (timed "canceled" 1)
+      (at! '(filter assignee)) (timed "the Assignee menu" 2)
+      (let ([menu-w (and (menu-open?)
+                         (call-with-values (lambda () (menu-geometry *menu*))
+                           (lambda (x y w h) w)))])
+        (press! 'escape) (timed "closed" 1)
+        (type! "v") (timed "the List" 1)
+        (press! 'down) (timed "down" 1)
+        (press! 'up) (timed "up" 1)
+        (type! "v") (timed "the Board" 1)
+        (type! "/") (paste!) (timed "the search" 1)
+        (at! 'search) (timed "a click in it" 2)
+        (press! 'escape) (timed "left" 1)
+        (unless (null? slow) (printf "  slow or crashed: ~s\n" slow))
+        (check "100,000 characters in a title, an assignee, a tag and the \
+                search: every step of the Board, the details, the menus, \
+                the dialog and the List under 300 ms, and Tasks never \
+                crashed"
+               (and (null? slow) menu? dialog? menu-w (< menu-w 400)
+                    (= (string-length (task-title t)) 100001)
+                    ;; a name is cut to 64 characters
+                    (equal? (task-assignee t) (substring long-text 0 64))
+                    (member "abcdefgh-abcdefgh-abcdef" (task-tags t))
+                    (not (window-error tw)))))))
+  (when (ui-find tui 'clear) (click-ui! tw 'clear))
+  (delete-task! t)
+  (steps 2))
+
+;; A window titled with 10,000 characters, then (when that was quick, so
+;; that a slow cut fails in seconds) with 100,000: every window style
+;; draws it in under 300 ms a frame.
+(let ([style (theme 'window-style)])
+  (define (slow-styles title)
+    (let* ([w (open-window title 'size '(300 . 200)
+                           'draw (lambda (win cw ch) (void)))]
+           [slow (filter (lambda (s)
+                           (set-theme! 'window-style s)
+                           (invalidate!)
+                           (> (slowest-of-steps 2) 300))
+                         (window-styles))])
+      (close-window! w)
+      slow))
+  (let* ([slow (slow-styles (substring long-text 0 10000))]
+         [slow (if (null? slow) (slow-styles long-text) slow)])
+    (set-theme! 'window-style style)
+    (steps 1)
+    (check (format "a window's title of 10,000, then 100,000 characters: \
+                    every window style draws it in under 300 ms (slow: ~a)"
+                   slow)
+           (null? slow))))
+
+(let ([n (length *tasks*)] [first (car *tasks*)])
+  (reload!)
+  (steps 2)
+  (check "(reload!) keeps the tasks, and the window draws"
+         (and (= n (length *tasks*)) (eq? first (car *tasks*))
+              (not (window-error tw)) (eq? tv (window-ref tw 'state)))))
+(check "Tasks never crashed" (not (window-error tw)))
+(let ([status (task-status (find-task 9))])
+  (let-values ([(x y) (region-center (list 'card 9))])
+    (tasks-click! x y 'right 1))
+  (close-window! tw)
+  (menu-click! "Move to Done")
+  (check "a menu its window left open changes nothing once it is closed"
+         (eq? status (task-status (find-task 9)))))
+(set! *toasts* '())
 
 ;; The desktop entry that gives GNOME and co. the app icon (into a scratch
 ;; folder).
@@ -1692,6 +2765,26 @@
            (and (= n 1) kept? (not (eq? (car *wallpaper*) old)))))
   (set! *toasts* '())
   (steps 1))
+
+;; A window opened under an older kit holds a ui this kit cannot read:
+;; loading the kit again (as a reload does) opens its app in its place.
+(for-each (lambda (w) (when (eq? (window-app w) 'clock) (close-window! w)))
+          (windows))
+(let ([old (clock)])
+  (resize-window! old 300 240)
+  (hashtable-set! (window-props old) 'ui 'an-older-kits-ui)
+  (let ([x (window-x old)] [y (window-y old)]
+        [w (window-w old)] [h (window-h old)])
+    (load-sources! '("kits/ui.ss"))
+    (steps 2)
+    (let ([new (find-window 'clock)])
+      (check "reloading the kit reopens a window of an older kit's ui in its \
+              place"
+             (and new (not (eq? new old)) (not (memq old (windows)))
+                  (= (window-x new) x) (= (window-y new) y)
+                  (= (window-w new) w) (= (window-h new) h)
+                  (not (window-error new))))
+      (when new (close-window! new)))))
 
 (check "frame time is sane" (< *frame-ms* 200))
 (printf "frame: ~,1f ms, heap: ~,1f MB\n" *frame-ms*

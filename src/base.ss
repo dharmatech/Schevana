@@ -41,13 +41,14 @@
 (define (filter-map f l)
   (fold-right (lambda (x acc) (let ([y (f x)]) (if y (cons y acc) acc))) '() l))
 
+;; Compared in place, a character at a time: a long str costs no copies.
 (define (string-contains-ci? str sub)
   (let ([n (string-length str)] [m (string-length sub)])
-    (let loop ([i 0])
-      (cond
-        [(> (+ i m) n) #f]
-        [(string-ci=? (substring str i (+ i m)) sub) #t]
-        [else (loop (+ i 1))]))))
+    (define (at? i j)   ; sub from j on is in str at i + j
+      (or (= j m)
+          (and (char-ci=? (string-ref str (+ i j)) (string-ref sub j))
+               (at? i (+ j 1)))))
+    (let loop ([i 0]) (and (<= (+ i m) n) (or (at? i 0) (loop (+ i 1)))))))
 
 (define (truncate-string s n)
   (if (<= (string-length s) n)

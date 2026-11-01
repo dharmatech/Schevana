@@ -188,12 +188,13 @@
 
 (define app-colors '(accent accent-2 green orange cyan red yellow teal magenta))
 
+;; mod n at every step: the same color as at the end, but a long name's
+;; hash never grows.
 (define (app-color name)
-  (let ([s (symbol->string (or name 'unknown))])
+  (let ([s (symbol->string (or name 'unknown))] [n (length app-colors)])
     (list-ref app-colors
-              (mod (fold-left (lambda (h c) (+ (* h 31) (char->integer c)))
-                              7 (string->list s))
-                   (length app-colors)))))
+              (fold-left (lambda (h c) (mod (+ (* h 31) (char->integer c)) n))
+                         (mod 7 n) (string->list s)))))
 
 ;;; ------------------------------------------------------------------ windows
 
@@ -669,7 +670,9 @@
             (window-error-set! win #f)
             (invalidate! win))]
          [else
-          (set! *drag* (make-drag 'capture win button x y 0 0 0 0))
+          ;; another button leaves a drag alone: the left's release ends it
+          (unless (and *drag* (not (eq? button 'left)))
+            (set! *drag* (make-drag 'capture win button x y 0 0 0 0)))
           (let-values ([(lx ly) (window-local win x y)])
             (window-call win 'mouse-down lx ly button clicks))])]
       [else
