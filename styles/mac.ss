@@ -13,6 +13,18 @@
     (map (lambda (kind cx) (list kind (- cx 9) (- cy 9) 18 18))
          '(close minimize maximize) '(18 38 58))))
 
+;; A button's mark as strokes around its circle's center (text centers by
+;; its line box, not its ink, and sat low), in opaque ink so that crossing
+;; strokes do not darken where they meet.
+(define (mac-glyph kind cx cy ink)
+  (let ([a 3] [lw 1.5])
+    (case kind
+      [(close) (draw-line (- cx a) (- cy a) (+ cx a) (+ cy a) ink lw)
+               (draw-line (+ cx a) (- cy a) (- cx a) (+ cy a) ink lw)]
+      [(minimize) (draw-line (- cx a) cy (+ cx a) cy ink lw)]
+      [(maximize) (draw-line (- cx a) cy (+ cx a) cy ink lw)
+                  (draw-line cx (- cy a) cx (+ cy a) ink lw)])))
+
 (define (mac-draw-under win x y w h focused? hover pressed)
   (let ([th (title-height)] [r (mac-radius win)]
         [glyphs? (memq hover '(close minimize maximize))])
@@ -29,10 +41,10 @@
                       (fill-circle (+ x cx) cy 6
                         (if (or focused? glyphs?) color 'button-idle))
                       (when glyphs?
-                        (draw-text-centered (+ x cx -6) (- cy 7) 12 13 glyph
-                                            (alpha #x000000 0.6) 'glyph))))
+                        (mac-glyph glyph (+ x cx) cy
+                                   (mix color #x000000 0.6)))))
                   '(18 38 58) '(button-close button-min button-max)
-                  '("×" "–" "+"))
+                  '(close minimize maximize))
         (draw-text-centered (+ x 70) y (- w 140) th
                             (fit-text (window-title win) (- w 160) 'title)
                             (if focused? 'title-text 'title-text-dim)

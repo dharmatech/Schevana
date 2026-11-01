@@ -242,8 +242,6 @@
     (define-font! 'ui-small ui (- ui-size 2))
     (define-font! 'ui-italic ui ui-size 'italic)
     (define-font! 'title ui ui-size 'bold)
-    ;; inside small fixed-size buttons
-    (define-font! 'glyph ui (min ui-size 13) 'bold)
     (define-font! 'heading ui (+ ui-size 5) 'bold)
     (define-font! 'big ui (* 2 ui-size) 'bold)
     (define-font! 'huge "serif" 360 'bold)))
