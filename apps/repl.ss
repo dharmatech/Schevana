@@ -998,19 +998,35 @@
                           '("" "")))]
                    [else '("" "")])]
          [small-lh (font-line-height 'ui-small)]
-         [doc-lines (let ([d (cadr detail)])
-                      (if (string=? d "")
-                          '()
-                          (list-head* (wrap-text d (- pw 20) 'ui-small) 3)))]
+         [detail-h-of (lambda (lines)
+                        (round (+ 12 (font-line-height 'mono-small)
+                                  (* lines (+ small-lh 2)))))]
+         ;; Below the line, or above it, by the tallest the list can be:
+         ;; it stays on its side while typing narrows it and descriptions
+         ;; change length. Where that fits neither, the side with more
+         ;; room, and the description keeps the lines that fit in it.
+         [below (+ (cdr caret) lh 2)]
+         [room-below (- h 4 below)]
+         [room-above (- (cdr caret) 2 4)]
+         [below? (or (<= (+ 8 (* completion-rows lh) (detail-h-of 3))
+                         room-below)
+                     (>= room-below room-above))]
+         [doc-lines
+          (let ([d (cadr detail)]
+                [fit (exact (floor (/ (- (if below? room-below room-above)
+                                         8 (* rows lh) (detail-h-of 0))
+                                      (+ small-lh 2))))])
+            (if (string=? d "")
+                '()
+                (list-head* (wrap-text d (- pw 20) 'ui-small)
+                            (max 0 (min 3 fit)))))]
          [detail-h (if (string=? (car detail) "")
                        0
-                       (round (+ 12 (font-line-height 'mono-small)
-                                 (* (length doc-lines) (+ small-lh 2)))))]
+                       (detail-h-of (length doc-lines)))]
          [ph (+ 8 (* rows lh) detail-h)]
          [typed-w (* cw (- (repl-point r) (completion-start c)))]
          [px (clamp (- (car caret) typed-w 10) 4 (max 4 (- w pw 4)))]
-         [below (+ (cdr caret) lh 2)]
-         [py (if (<= (+ below ph) (- h 4)) below (max 4 (- (cdr caret) ph 2)))])
+         [py (if below? below (max 4 (- (cdr caret) ph 2)))])
     (draw-shadow px py pw ph 6 10)   ; shadow
     (fill-round-rect px py pw ph 6 'bg-2)
     (stroke-round-rect px py pw ph 6 'window-border-focus)

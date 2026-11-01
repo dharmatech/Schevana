@@ -618,6 +618,23 @@
 (check "and Genera" (eq? (theme 'window-style) 'genera))
 (click-ui! s '(style mac))
 (scroll-settings-down!)
+;; a column of pixels down the middle of the pane
+(define (settings-column)
+  (let-values ([(cx cy cw ch) (content-rect s)])
+    (cairo-surface-flush *canvas*)
+    (let ([d (cairo-image-surface-get-data *canvas*)]
+          [stride (cairo-image-surface-get-stride *canvas*)]
+          [px (exact (floor (* *scale* (+ cx (quotient cw 2)))))])
+      (map (lambda (y)
+             (foreign-ref 'unsigned-32 d
+                          (+ (* stride (exact (floor (* *scale* (+ cy y)))))
+                             (* 4 px))))
+           (iota ch)))))
+(let ([at-end (settings-column)])
+  (inject! '(wheel 0 -1))
+  (steps 1)
+  (check "the wheel past the pane's end shows no frame past it"
+         (equal? at-end (settings-column))))
 (drag-ui! s '(metric corner-radius) 0)
 (check "layout slider sets a metric" (= 0 (theme 'corner-radius)))
 (drag-ui! s '(metric title-height) 1)

@@ -574,25 +574,31 @@
          [scroll (settings-st-pane-scroll st)]
          [y (- 20 scroll)])
     (settings-draw-sidebar ui st sw h)
-    (call-with-clip (+ sw 1) 0 (- w sw 1) h
-      (lambda ()
-        (let* ([bottom (case (settings-st-tab st)
-                         [(theme) (settings-draw-theme ui x y cw)]
-                         [(colors) (settings-draw-colors ui st x y cw (- h 38))]
-                         [(layout) (settings-draw-layout ui x y cw)]
-                         [(fonts) (settings-draw-fonts ui x y cw)]
-                         [(display) (settings-draw-display ui x y cw)]
-                         ;; a tab name from older code, open across a reload
-                         [else (settings-draw-theme ui x y cw)])]
-               [content-h (+ (- bottom y) 20 18)]
-               [max-scroll (max 0 (- content-h h))])
-          (cond
-            [(> scroll max-scroll)
-             (settings-st-pane-scroll-set! st max-scroll)
-             (invalidate!)]
-            [(> max-scroll 0)
-             (settings-draw-scrollbar ui st (- w 10) h content-h
-                                      max-scroll)]))))))
+    (when (call-with-clip (+ sw 1) 0 (- w sw 1) h
+            (lambda ()
+              (let* ([bottom
+                      (case (settings-st-tab st)
+                        [(theme) (settings-draw-theme ui x y cw)]
+                        [(colors) (settings-draw-colors ui st x y cw (- h 38))]
+                        [(layout) (settings-draw-layout ui x y cw)]
+                        [(fonts) (settings-draw-fonts ui x y cw)]
+                        [(display) (settings-draw-display ui x y cw)]
+                        ;; a tab name from older code, open across a reload
+                        [else (settings-draw-theme ui x y cw)])]
+                     [content-h (+ (- bottom y) 20 18)]
+                     [max-scroll (max 0 (- content-h h))])
+                (cond
+                  [(> scroll max-scroll)
+                   (settings-st-pane-scroll-set! st max-scroll)
+                   #t]
+                  [else
+                   (when (> max-scroll 0)
+                     (settings-draw-scrollbar ui st (- w 10) h content-h
+                                              max-scroll))
+                   #f]))))
+      ;; the wheel went past the end, which only drawing finds: drawn
+      ;; again where the pane stops, not shown for a frame past it
+      (settings-draw ui st w h))))
 
 (define (parse-hex s)
   (case (string-length s)
