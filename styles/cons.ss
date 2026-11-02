@@ -84,9 +84,8 @@
 ;; is drawn: hinting makes it 9 px at 100% but 10 logical px at 200%. The
 ;; baseline goes on a whole device pixel, never below the middle.
 (define (cons-title-y cy c)
-  (use-font! (get-font 'title))
-  (cairo-text-extents *cr* "H" *scratch*)
-  (let ([base (+ cy (/ c 2) (/ (- (foreign-ref 'double *scratch* 8)) 2))])
+  (let*-values ([(l top w h) (text-ink "H" 'title)]
+                [(base) (+ cy (/ c 2) (/ (- top) 2))])
     (- (/ (floor (* base *scale*)) *scale*) (font-ascent 'title))))
 
 (define (cons-tint kind hover pressed color)

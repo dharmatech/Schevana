@@ -34,14 +34,15 @@
 ;;; ------------------------------------------------------------------ state
 
 (define-record-type ui-region
-  (nongenerative schevana-ui-region-2)
+  (nongenerative schevana-ui-region-3)
   (fields id x y w h   ; what can be hit: cut to the clip (may be 0 × 0)
           frame        ; (x y w h) before the cut, for scrolling into view
           on           ; #f, or (lambda (event) ...): true when handled
           focus        ; click, tab, keep or #f: see ui-mouse-down
           tip          ; tooltip text, or #f
           cursor       ; pointer shape over it ('ibeam), or #f
-          modal?))     ; covers the window: what lies under it is not live
+          modal?       ; covers the window: what lies under it is not live
+          doc))        ; what the mouse buttons do on it: ((L . "Set") ...)
 
 (define-record-type ui-state
   (nongenerative schevana-ui-state-3)
@@ -101,7 +102,7 @@
       (values x y w h)))
 
 ;; The one way anything enters the hit list. opts: 'on 'focus 'tip
-;; 'cursor 'modal. Inside a scroll view the rect is cut to the viewport;
+;; 'cursor 'modal 'doc. Inside a scroll view the rect is cut to the viewport;
 ;; one cut away entirely is still recorded, 0 × 0 at the edge, so it
 ;; stays a Tab stop (and can be revealed) but cannot be hit.
 (define (ui-region! ui id x y w h . opts)
@@ -110,17 +111,19 @@
                              (plist-ref opts 'on #f) (plist-ref opts 'focus #f)
                              (plist-ref opts 'tip #f)
                              (plist-ref opts 'cursor #f)
-                             (plist-ref opts 'modal #f))])
+                             (plist-ref opts 'modal #f)
+                             (plist-ref opts 'doc '()))])
       (ui-state-regions-set! ui (cons r (ui-state-regions ui)))
       r)))
 
 ;; Settings' clickable area: on-press a thunk or #f; on-drag, if given,
-;; receives the pointer position on press and on every move until release.
+;; receives the pointer position on press and on every move until release;
+;; opts as ui-region!'s ('doc, say).
 (define ui-area
   (case-lambda
     [(ui id x y w h on-press) (ui-area ui id x y w h on-press #f)]
-    [(ui id x y w h on-press on-drag)
-     (ui-region! ui id x y w h 'on
+    [(ui id x y w h on-press on-drag . opts)
+     (apply ui-region! ui id x y w h 'on
        (and (or on-press on-drag)
             (lambda (ev)
               (case (car ev)
@@ -131,7 +134,8 @@
                              #t))]
                 [(drag)
                  (and on-drag (begin (on-drag (cadr ev) (caddr ev)) #t))]
-                [else #f]))))
+                [else #f])))
+       opts)
      (void)]))
 
 ;; The live regions, newest first: those drawn above the newest modal
@@ -175,7 +179,7 @@
          [pressed? (ui-active? ui id)]
          [hover? (and win (equal? (ui-state-hover-id ui) id)
                       (or pressed? (not (ui-state-active ui)))
-                      (eq? (window-hover win) 'content)
+                      (memq (window-hover win) '(content scrollbar))
                       (or (not r)
                           (ui-region-in? r (ui-state-mx ui) (ui-state-my ui))))]
          [focused? (and win (equal? (ui-state-focus ui) id)
@@ -288,6 +292,9 @@
     (and (not (equal? id (ui-state-hover-id ui)))
          (begin
            (ui-state-hover-id-set! ui id)
+           ;; the mouse documentation reads it; no redraw for it
+           (hashtable-set! (window-props win) 'mouse-doc
+                           (if r (ui-region-doc r) '()))
            (ui-rest! ui ms x y)
            (unless (eq? c (window-ref win 'cursor 'arrow))
              (window-set! win 'cursor c)
@@ -422,12 +429,14 @@
 
 ;; A region pressed like a button: a left press, or one of keys (no
 ;; modifiers) while it is focused, calls thunk. opts may give 'disabled
-;; (no behavior), 'focus (tab by default) and 'tip.
-(define (ui-pressable! ui id x y w h thunk keys opts)
+;; (no behavior), 'focus (tab by default), 'tip and 'doc (doc, if given,
+;; by default).
+(define (ui-pressable! ui id x y w h thunk keys opts . doc)
   (let ([disabled? (plist-ref opts 'disabled #f)])
     (ui-region! ui id x y w h
       'focus (if disabled? 'keep (plist-ref opts 'focus 'tab))
       'tip (plist-ref opts 'tip #f)
+      'doc (plist-ref opts 'doc (if (pair? doc) (car doc) '()))
       'on (and (not disabled?)
                (lambda (ev)
                  (case (car ev)
@@ -441,6 +450,8 @@
 ;;; ------------------------------------------------------------------ a draw
 
 (define (ui-begin! ui)
+  (let ([win (current-window)])   ; an outside bar shows again if drawn
+    (when win (hashtable-delete! (window-props win) 'scrollbar)))
   (ui-state-regions-set! ui '())
   (ui-state-clip-set! ui #f)
   (ui-state-later-set! ui '())
@@ -470,7 +481,7 @@
   (let ([p (ui-state-popup ui)])
     (when (and p (not (ui-find ui (car p)))) (ui-state-popup-set! ui #f)))
   (let ([win (current-window)])
-    (when (and win (eq? (window-hover win) 'content)
+    (when (and win (memq (window-hover win) '(content scrollbar))
                (not (ui-state-active ui)))
       ;; rows moved under a still pointer: the tooltip's wait starts now,
       ;; unless a press, key or wheel used it up (+inf.0)
@@ -643,18 +654,31 @@
                          (if (memq 'hover flags) 'text-faint 'window-border))))
 
 ;; Vector glyphs, no font: check cross plus chevron-down chevron-left
-;; chevron-right sort-up sort-down search expand, centered in the box.
+;; chevron-right search expand, the triangles up down left right (sort
+;; marks, scroll arrows, submenus; sort-up and sort-down, their old names),
+;; centered in the box; and a window's
+;; buttons, close minimize maximize restore shade, filling a square box
+;; in lines of 1 pixel. flags may hold (ink . color) and (width . w),
+;; the line's.
 (define-part (ui-draw-glyph x y w h flags name)
   (let* ([s (min w h)] [ox (+ x (/ (- w s) 2))] [oy (+ y (/ (- h s) 2))]
          [p (lambda (fx fy) (cons (+ ox (* fx s)) (+ oy (* fy s))))]
-         [ink (cond [(memq 'primary flags) (readable-on 'accent)]
+         [given (lambda (key)
+                  (let ([f (find (lambda (f) (and (pair? f) (eq? (car f) key)))
+                                 flags)])
+                    (and f (cdr f))))]
+         [ink (cond [(given 'ink)]
+                    [(memq 'primary flags) (readable-on 'accent)]
                     [(and (memq 'danger flags) (memq 'hover flags)) 'red]
                     [(memq 'hover flags) 'text]
                     [(memq 'quiet flags) 'text-faint]
                     [else 'text-dim])]
          [ink (if (memq 'disabled flags) (alpha ink 0.5) ink)]
-         [lw (max 1.5 (* s 0.13))])
+         [lw (max 1.5 (* s 0.13))]
+         [t (or (given 'width) 1)])
     (define (line . ps) (draw-polyline ps ink lw))
+    (define (triangle . ps) (fill-polygon (map (lambda (q) (apply p q)) ps)
+                                          ink))
     (case name
       [(check) (line (p 0.2 0.52) (p 0.42 0.74) (p 0.8 0.3))]
       [(cross) (line (p 0.28 0.28) (p 0.72 0.72))
@@ -663,9 +687,19 @@
       [(chevron-down) (line (p 0.25 0.38) (p 0.5 0.63) (p 0.75 0.38))]
       [(chevron-left) (line (p 0.62 0.25) (p 0.37 0.5) (p 0.62 0.75))]
       [(chevron-right) (line (p 0.38 0.25) (p 0.63 0.5) (p 0.38 0.75))]
-      [(sort-up) (fill-polygon (list (p 0.5 0.3) (p 0.8 0.7) (p 0.2 0.7)) ink)]
-      [(sort-down)
-       (fill-polygon (list (p 0.5 0.7) (p 0.8 0.3) (p 0.2 0.3)) ink)]
+      [(up sort-up) (triangle '(0.5 0.3) '(0.8 0.7) '(0.2 0.7))]
+      [(down sort-down) (triangle '(0.5 0.7) '(0.8 0.3) '(0.2 0.3))]
+      [(left) (triangle '(0.3 0.5) '(0.7 0.2) '(0.7 0.8))]
+      [(right) (triangle '(0.7 0.5) '(0.3 0.2) '(0.3 0.8))]
+      [(close) (draw-line ox oy (+ ox s) (+ oy s) ink t)
+               (draw-line (+ ox s) oy ox (+ oy s) ink t)]
+      [(minimize) (fill-rect ox (+ oy (ceiling (/ (- s t) 2))) s t ink)]
+      [(maximize) (stroke-rect ox oy s s ink t)]
+      [(restore)   ; a sheet in front of another
+       (stroke-rect ox (+ oy 2) (- s 2) (- s 2) ink)
+       (fill-rect (+ ox 2) oy (- s 2) 1 ink)
+       (fill-rect (+ ox s -1) oy 1 (- s 2) ink)]
+      [(shade) (stroke-rect ox oy s (ceiling (/ s 3)) ink t)]   ; a title
       [(search)
        (stroke-circle (+ ox (* 0.43 s)) (+ oy (* 0.43 s)) (* 0.25 s) ink lw)
        (line (p 0.62 0.62) (p 0.82 0.82))]
@@ -675,10 +709,16 @@
        (line (p 0.44 0.8) (p 0.2 0.8) (p 0.2 0.56))
        (line (p 0.2 0.8) (p 0.45 0.55))])))
 
+;; The glyph of win's frame button kind: a maximized window's maximize
+;; button restores.
+(define (ui-frame-glyph win kind)
+  (if (and (eq? kind 'maximize) (maximized? win)) 'restore kind))
+
 ;;; ------------------------------------------------------------------ button
 
 (define (ui-button ui id x y w h label on-press . opts)
-  (ui-pressable! ui id x y w h on-press '(#\space return) opts)
+  (ui-pressable! ui id x y w h on-press '(#\space return) opts
+                 (list (cons 'L (or label (plist-ref opts 'tip #f) "Press"))))
   (ui-draw-button x y w h
                   (apply ui-flags ui id
                          (ui-opt-flags opts '(selected primary danger quiet
@@ -758,7 +798,8 @@
        (ui-area ui id (- x 8) y (+ w 16) h #f
                 (lambda (mx my)
                   (on-change
-                   (+ lo (* (- hi lo) (clamp (/ (- mx x) w) 0 1))))))
+                   (+ lo (* (- hi lo) (clamp (/ (- mx x) w) 0 1)))))
+                'doc '((L . "Set")))
        (ui-draw-slider x y w h (ui-flags ui id)
                        (clamp (/ (- value lo) (- hi lo)) 0 1) paint-track))]))
 
@@ -786,14 +827,15 @@
                    '(#\space)
                    (cons* 'tip (or (plist-ref opts 'tip #f)
                                    (and (> kw w) label))
-                          opts)))
+                          opts)
+                   '((L . "Toggle"))))
   (ui-draw-checkbox x y w h
                     (apply ui-flags ui id (if checked? '(checked) '()))
                     label))
 
 (define (ui-toggle ui id x y w h label on? on-change . opts)
   (ui-pressable! ui id x y w h (lambda () (on-change (not on?)))
-                 '(#\space) opts)
+                 '(#\space) opts '((L . "Toggle")))
   (ui-draw-toggle x y w h (apply ui-flags ui id (if on? '(checked) '()))
                   label))
 
@@ -853,7 +895,7 @@
         (let ([label (caar cs)] [value (cdar cs)] [tid (list id (cdar cs))])
           (let-values ([(tw th) (ui-tabs-size (list label))])
             (ui-pressable! ui tid tx y tw h (lambda () (on-select value))
-                           '(#\space return) '())
+                           '(#\space return) '() (list (cons 'L label)))
             (ui-draw-tab tx y tw h
                          (apply ui-flags ui tid
                                 (if (equal? value current) '(selected) '()))
@@ -1155,6 +1197,8 @@
            ui (cons id (cons (if (= r 0) 0 top) (if last? h (+ top lh))))))))
     (ui-region! ui id x y w h 'focus 'click 'cursor 'ibeam
       'tip (plist-ref opts 'tip #f)
+      'doc (plist-ref opts 'doc '((L . "Place the caret")
+                                   (L2 . "Select a word")))
       'on (lambda (ev)
             (case (car ev)
               [(press)
@@ -1262,7 +1306,13 @@
 
 ;; A scroll view: body is (lambda (top) ... bottom), drawing its content
 ;; from top and returning where it ends; it is clipped to the view, and
-;; the wheel and a scroll bar over its right edge move it.
+;; the wheel and a scroll bar over its edge move it. The style places the
+;; bar (scrollbar-side right, left, or outside: in the left margin its
+;; frame leaves, for a view against the window's left edge; on the right
+;; where there is none) and shows it
+;; always or while the pointer is over the view (scrollbar-show hover;
+;; outside, over the margin); it lies over the content, which never
+;; reflows for it.
 (define (ui-scroll ui id x y w h body)
   (let ([off (car (ui-memo ui id '(0 . 0)))]
         [clip (ui-state-clip ui)])
@@ -1305,10 +1355,29 @@
                       (ui-reveal! ui id (- (+ top (car span)) (ui-gap))
                                   (+ top (cdr span) (ui-gap)) h))
                     (loop (cdr rs)))))))
-        (when (> content h)
-          (let ([bw (ui-scrollbar-width)])
-            (ui-scrollbar ui (list id 'bar) (- (+ x w) bw) y bw h new content h
-                          (lambda (off) (ui-memo! ui id (cons off most))))))))))
+        (let* ([win (current-window)] [bid (list id 'bar)]
+               [side (theme 'scrollbar-side)]
+               [margin (if (and win (eq? side 'outside) (zero? x))
+                           (let-values ([(l t r b) (frame-insets win)]) l)
+                           0)]
+               [out? (> margin 0)]   ; all of the margin its frame leaves
+               [bw (if out? margin (ui-scrollbar-width))]
+               [hover (and win (window-hover win))])
+          (when (and (> content h)
+                     (or (eq? (theme 'scrollbar-show) 'always)
+                         (ui-active? ui bid)
+                         (if out?
+                             (eq? hover 'scrollbar)
+                             (and (eq? hover 'content)
+                                  (ui-hover? ui x y w h)))))
+            (let ([bx (cond [out? (- bw)] [(eq? side 'left) x]
+                            [else (- (+ x w) bw)])])
+              (ui-scrollbar ui bid bx y bw h new content h
+                            (lambda (off) (ui-memo! ui id (cons off most))))
+              (when out?   ; for the frame's over pass: ui-frame-scrollbar
+                (hashtable-set! (window-props win) 'scrollbar
+                                (list bx y bw h (ui-flags ui bid)
+                                      (/ new content) (/ h content)))))))))))
 
 ;; A scroll bar at x y w h, for a view h high showing content from off on:
 ;; pressing it, on its thumb or beside it, and dragging set the offset by
@@ -1321,7 +1390,7 @@
       (set-off! (clamp (* most (/ (- ty y) (max 1 (- h (cadddr thumb)))))
                        0 most))
       #t)
-    (ui-region! ui id x y w h 'focus 'keep 'on
+    (ui-region! ui id x y w h 'focus 'keep 'doc '((L . "Scroll")) 'on
       (lambda (ev)
         (case (car ev)
           [(press)
@@ -1333,6 +1402,10 @@
                   (ui-memo! ui (list id 'grab) grab)
                   (thumb-to! (- py grab))))]
           [(drag) (thumb-to! (- (caddr ev) (ui-memo ui (list id 'grab) 0)))]
+          ;; as its view does: an outside bar lies over no view
+          [(wheel) (let ([new (clamp (- off (* (cadr ev) (ui-scroll-step)))
+                                     0 most)])
+                     (and (not (= new off)) (begin (set-off! new) #t)))]
           [else #f])))
     (ui-draw-scrollbar x y w h (ui-flags ui id) start size)))
 
@@ -1348,7 +1421,21 @@
       (invalidate! (current-window)))))
 
 (theme-default! 'scrollbar-width 10)
+(theme-default! 'scrollbar-side 'right)
+(theme-default! 'scrollbar-show 'always)
 (define (ui-scrollbar-width) (theme 'scrollbar-width))
+
+;; The window's outside scroll bar, which its main scroll view leaves in
+;; its 'scrollbar while it shows: a style that leaves a margin for it
+;; (scrollbar-side outside, a region of kind scrollbar there) draws it so
+;; in its frame's over pass, after the content.
+(define (ui-frame-scrollbar win)
+  (let ([b (window-ref win 'scrollbar)])
+    (when b
+      (let-values ([(cx cy cw ch) (content-rect win)])
+        (apply (lambda (x y w h flags start size)
+                 (ui-draw-scrollbar (+ cx x) (+ cy y) w h flags start size))
+               b)))))
 
 ;; How far one wheel step scrolls: three lines.
 (define (ui-scroll-step) (* 3 (font-line-height 'ui)))
@@ -1393,7 +1480,7 @@
             (let* ([key (caar cs)] [cw (caddr (car cs))]
                    [hid (list id 'header key)])
               (ui-pressable! ui hid cx y cw hh (lambda () (on-sort key)) '()
-                             '(focus keep))
+                             '(focus keep) '((L . "Sort")))
               (ui-draw-table-header cx y cw hh (ui-flags ui hid) (cadar cs)
                                     (and sort (eq? (car sort) key) (cdr sort)))
               (loop (cdr cs) (+ cx cw)))))
@@ -1406,7 +1493,8 @@
                   ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
                 (let* ([row (vector-ref rows i)] [ry (+ top (* i rh))]
                        [rid (list id 'row i)])
-                  (ui-region! ui rid x ry w rh 'tip (tip row) 'on
+                  (ui-region! ui rid x ry w rh 'tip (tip row)
+                    'doc '((L . "Select")) 'on
                     (lambda (ev)
                       (and (eq? (car ev) 'press)
                            (case (list-ref ev 3)
@@ -1456,8 +1544,7 @@
                           (if (or dir (memq 'hover flags)) 'text 'text-faint)
                           'ui-small)])
       (when dir
-        (ui-draw-glyph (+ end 4) (+ y (/ (- h g) 2)) g g '(hover)
-                       (if (eq? dir 'up) 'sort-up 'sort-down))))))
+        (ui-draw-glyph (+ end 4) (+ y (/ (- h g) 2)) g g '(hover) dir)))))
 
 (define-part (ui-draw-table-row x y w h flags)
   (cond [(memq 'selected flags) (fill-rect x y w h 'selection)]
@@ -1630,7 +1717,8 @@
                        [areas (ui-tree-areas x ry w0 rh (ui-tree-row-depth r))]
                        [twisty (cdr (assq 'twisty areas))]
                        [c (cdr (assq 'cell areas))])
-                  (ui-region! ui rid x ry w rh 'tip (tip node (caddr c)) 'on
+                  (ui-region! ui rid x ry w rh 'tip (tip node (caddr c))
+                    'doc '((L . "Select or open")) 'on
                     (lambda (ev)
                       (and (eq? (car ev) 'press)
                            (case (list-ref ev 3)
@@ -1753,7 +1841,7 @@
                  [r (cdr (assq 'remove (apply ui-chip-areas a)))])
              (ui-pressable! ui rid (car r) (cadr r) (caddr r) (cadddr r)
                             (lambda () (on-remove i)) '()
-                            '(focus keep tip "Remove"))
+                            '(focus keep tip "Remove") '((L . "Remove")))
              (apply ui-draw-chip (append a (list (apply ui-flags ui rid
                                                         '(removable))
                                                  chip)))))
@@ -1844,9 +1932,13 @@
                                        'window-border
                                        'window-border-focus)))))
 
-;; The entry chosen in a menu or a list.
+;; The entry chosen in a menu or a list; with outline (a menu's
+;; menu-hover), a 1-pixel box, and pressed, filled: inverted.
 (define-part (ui-draw-highlight x y w h flags)
-  (fill-round-rect x y w h 5 (alpha 'accent 0.22)))
+  (cond [(not (memq 'outline flags))
+         (fill-round-rect x y w h 5 (alpha 'accent 0.22))]
+        [(memq 'pressed flags) (px-fill x y w h 'text)]
+        [else (px-ring x y w h 'text)]))
 
 ;; A line across the middle of the box, between a menu's groups.
 (define-part (ui-draw-separator x y w h flags)
@@ -1896,7 +1988,7 @@
                        (lambda () (on-select (cdr c)))))
                choices)
           'selected i 'tag (cons ui id) 'filter (> (length choices) 8)))
-      '(#\space return down) opts)
+      '(#\space return down) opts '((L . "Choose")))
     (ui-draw-dropdown x y w h
                       (apply ui-flags ui id
                              (append (if open? '(open) '())
@@ -1935,7 +2027,7 @@
                   (ui-state-popup-set! ui (cons id (ui-date->day
                                                     (or date (ui-today))))))])
     (ui-region! ui id x y w h 'focus 'tab 'tip (plist-ref opts 'tip #f)
-      'on (lambda (ev)
+      'doc (plist-ref opts 'doc '((L . "Choose"))) 'on (lambda (ev)
             (case (car ev)
               [(press) (and (eq? (list-ref ev 3) 'left) (begin (open!) #t))]
               [(key)
@@ -2008,7 +2100,7 @@
                      [dx (+ gx (* cell (mod i 7)))]
                      [dy (+ gy (* cell (div i 7)))])
                 (ui-pressable! ui did dx dy cell cell (lambda () (pick n)) '()
-                               '(focus keep))
+                               '(focus keep) '((L . "Choose")))
                 (ui-draw-day dx dy cell cell
                              (apply ui-flags ui did
                                     (append (if (= n today) '(today) '())
@@ -2163,6 +2255,16 @@
                (cadr m) (ui-dialog-lines message (caddr m)))))
 
 ;;; ------------------------------------------------------------------ reload
+
+;; Every window's regions are its next draw's (an older kit's are records
+;; of another type).
+(for-each (lambda (win)
+            (let ([ui (window-ref win 'ui #f)])
+              (when (ui-state? ui)
+                (ui-state-regions-set! ui '())
+                (ui-state-active-set! ui #f)
+                (ui-stale! ui))))
+          (windows))
 
 ;; A window opened under an older kit holds that kit's ui, a record this
 ;; code cannot read: its app opens again in its place, once the reload

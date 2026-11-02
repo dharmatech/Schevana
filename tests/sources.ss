@@ -292,7 +292,7 @@
                       cairo-surface-destroy cairo-surface-write-to-png
                       draw-into-layer!)))
        (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
-                   '("fill-" "stroke-" "draw-" "cairo-"))
+                   '("fill-" "stroke-" "draw-" "cairo-" "px-"))
            (and (memq s '(set-color! use-font! clear! blit-layer!)) #t))))
 
 ;; What a form does that only a drawing procedure may: ((draws . name)
@@ -381,7 +381,7 @@
 
 (check "the REPL's docs read the folders too, parts and their built-ins"
        (for-all (lambda (name) (hashtable-contains? (name-docs) name))
-                '("ui-button" "mac-draw-under" "fill-shade" "settings"
+                '("ui-button" "mac-draw-under" "px-fill" "settings"
                   "ui-draw-button" "ui-draw-button*")))
 
 (check "the tests never load ~/.schevana.d"

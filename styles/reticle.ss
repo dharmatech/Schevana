@@ -17,9 +17,7 @@
 
 ;; Device pixels per logical pixel where we draw: the picker's miniature
 ;; is drawn scaled down.
-(define (reticle-k)
-  (cairo-get-matrix *cr* *scratch*)
-  (foreign-ref 'double *scratch* 0))
+(define (reticle-k) (let-values ([(k ox oy) (px-device)]) k))
 
 ;; Whole device pixels, so that lines are crisp at any scale: v to the
 ;; nearest one (or by floor or ceiling, to stay inside a box), and a
@@ -48,10 +46,9 @@
 ;; capitals on cy, on a whole device pixel, and the capitals' middle. The
 ;; cap height is measured on *cr*, at the scale it is drawn.
 (define (reticle-caps cy)
-  (use-font! (get-font reticle-font))
-  (cairo-text-extents *cr* "H" *scratch*)
-  (let* ([cap (- (foreign-ref 'double *scratch* 8))]
-         [base (reticle-snap (+ cy (/ cap 2)))])
+  (let*-values ([(l top w h) (text-ink "H" reticle-font)]
+                [(cap) (- top)]
+                [(base) (reticle-snap (+ cy (/ cap 2)))])
     (values base (- base (/ cap 2)))))
 
 (define (reticle-track)   ; between capitals: a sixth of the font's size

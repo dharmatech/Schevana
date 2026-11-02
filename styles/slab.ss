@@ -44,37 +44,20 @@
     (map (lambda (kind i) (list kind (+ x0 (* i p)) 0 p (title-height)))
          '(minimize maximize close) '(0 1 2))))
 
-;; Boxes ((x y w h) ...) filled with their edges moved to the nearest
-;; device pixels, so that every line is crisp at any scale, in the
-;; picker's half-size miniature too.
-(define (slab-boxes boxes color)
-  (cairo-get-matrix *cr* *scratch*)
-  (let ([s (foreign-ref 'double *scratch* 0)]
-        [ox (foreign-ref 'double *scratch* 32)]
-        [oy (foreign-ref 'double *scratch* 40)])
-    (define (snap v o) (/ (- (floor (+ (* v s) o 1/2)) o) s))
-    (fill-rects (map (lambda (b)
-                       (let ([x (snap (car b) ox)] [y (snap (cadr b) oy)])
-                         (list x y (- (snap (+ (car b) (caddr b)) ox) x)
-                               (- (snap (+ (cadr b) (cadddr b)) oy) y))))
-                     boxes)
-                color)))
-
-(define (slab-box x y w h color) (slab-boxes (list (list x y w h)) color))
-
-;; What shows of a slab o below and right of the box x y w h.
+;; What shows of a slab o below and right of the box x y w h. Slab's
+;; boxes are px-fill's, every edge on a device pixel, so that every line
+;; is crisp at any scale, in the picker's half-size miniature too.
 (define (slab-under x y w h o color)
-  (slab-boxes (list (list (+ x w) (+ y o) o h) (list (+ x o) (+ y h) (- w o) o))
-              color))
+  (px-fill (+ x w) (+ y o) o h color)
+  (px-fill (+ x o) (+ y h) (- w o) o color))
 
 ;; The title's y, its capitals centered on cy. The cap height is measured
 ;; on *cr* at the scale it is drawn (hinting makes it 9 pixels at 100%
 ;; and 10 at 200%), and the baseline goes on the nearest device pixel,
 ;; the higher one when two are as near.
 (define (slab-title-y cy)
-  (use-font! (get-font 'title))
-  (cairo-text-extents *cr* "H" *scratch*)
-  (let ([base (- cy (/ (foreign-ref 'double *scratch* 8) 2))])
+  (let*-values ([(l top w h) (text-ink "H" 'title)]
+                [(base) (- cy (/ top 2))])
     (- (/ (ceiling (- (* base *scale*) 1/2)) *scale*) (font-ascent 'title))))
 
 ;; ×, −, a square, or (to restore) a square on its slab, 2a wide around
@@ -84,15 +67,16 @@
   (let ([t slab-line])
     (case kind
       [(close) (let ([e (- a (/ t 4))])
-                 (draw-line (- cx e) (- cy e) (+ cx e) (+ cy e) ink t)
-                 (draw-line (+ cx e) (- cy e) (- cx e) (+ cy e) ink t))]
-      [(minimize) (slab-box (- cx a) (- cy (/ t 2)) (* 2 a) t ink)]
+                 (ui-draw-glyph (- cx e) (- cy e) (* 2 e) (* 2 e)
+                                (list (cons 'ink ink) (cons 'width t))
+                                'close))]
+      [(minimize) (px-fill (- cx a) (- cy (/ t 2)) (* 2 a) t ink)]
       [else
        (let* ([d (if (maximized? win) (/ t 2) 0)]
               [x (- cx a d)] [y (- cy a d)] [s (* 2 a)])
          (when (maximized? win) (slab-under x y s s t ink))
-         (slab-box x y s s ink)
-         (slab-box (+ x t) (+ y t) (- s t t) (- s t t) face))])))
+         (px-fill x y s s ink)
+         (px-fill (+ x t) (+ y t) (- s t t) (- s t t) face))])))
 
 (define (slab-draw-key win kind kx ky ink under hover pressed)
   (let* ([k (slab-key)] [t slab-line]
@@ -103,8 +87,8 @@
                      [else 'button-max])]
          [kx (if down? (+ kx t) kx)] [ky (if down? (+ ky t) ky)])
     (unless down? (slab-under kx ky k k t under))
-    (slab-box kx ky k k ink)
-    (slab-box (+ kx t) (+ ky t) (- k t t) (- k t t) face)
+    (px-fill kx ky k k ink)
+    (px-fill (+ kx t) (+ ky t) (- k t t) (- k t t) face)
     (slab-glyph win kind (+ kx (/ k 2)) (+ ky (/ k 2)) (round (* 2/9 k))
                 (if hot? (readable-on face) ink) face)))
 
@@ -127,8 +111,8 @@
          [title (fit-text (window-title win)
                           (- (cadar buttons) t pad pad) 'title)])
     (unless max? (slab-under x y cw ch o under))
-    (slab-box x y cw ch ink)
-    (slab-box bx (+ y t) bw b (if focused? 'title-bg-focus 'title-bg))
+    (px-fill x y cw ch ink)
+    (px-fill bx (+ y t) bw b (if focused? 'title-bg-focus 'title-bg))
     (call-with-clip bx (+ y t) bw b
       (lambda ()
         (draw-text (+ bx pad) (slab-title-y (+ y t (/ b 2))) title

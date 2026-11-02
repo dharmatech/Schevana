@@ -36,16 +36,10 @@
 
 ;; 8 pixels square around (cx, cy), on whole pixels: crisp, on one axis.
 (define (spine-glyph win kind cx cy ink)
-  (case kind
-    [(close) (draw-line (- cx 4) (- cy 4) (+ cx 4) (+ cy 4) ink 1.25)
-             (draw-line (+ cx 4) (- cy 4) (- cx 4) (+ cy 4) ink 1.25)]
-    [(minimize) (fill-rect (- cx 4) cy 8 1 ink)]
-    [(maximize)
-     (if (maximized? win)   ; restore: a window in front of another
-         (begin (stroke-rect (- cx 4) (- cy 2) 6 6 ink)
-                (fill-rect (- cx 2) (- cy 4) 6 1 ink)
-                (fill-rect (+ cx 3) (- cy 4) 1 6 ink))
-         (stroke-rect (- cx 4) (- cy 4) 8 8 ink))]))
+  (ui-draw-glyph (- cx 4) (- cy 4) 8 8
+                 (cons (cons 'ink ink)
+                       (if (eq? kind 'close) '((width . 1.25)) '()))
+                 (ui-frame-glyph win kind)))
 
 (define (spine-draw-button win kind cx cy focused? hover pressed ink)
   (let* ([down? (eq? pressed kind)] [hot? (or down? (eq? hover kind))]

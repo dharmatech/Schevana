@@ -1,5 +1,6 @@
 ;;; topbar.ss — the bar at the top: the launcher, the focused window's
-;;; title and the status segments (status.ss), redrawn once a second.
+;;; title and the status segments (status.ss), redrawn once a second; or,
+;;; in their place, the mouse documentation where the style shows it.
 
 (theme-default! 'topbar-height-min
                 (rule (exact (round (+ (font-line-height 'ui) 7)))))
@@ -54,7 +55,9 @@
                               'panel-text 'ui-bold)
                    0)])
           ;; status segments from the right, while they fit beside the title
-          (let loop ([segs (reverse (shown-status-strings))]
+          (let loop ([segs (if (theme 'mouse-doc)
+                               (list (mouse-doc-text (mouse-doc)))
+                               (reverse (shown-status-strings)))]
                      [x (- w 14)]
                      [first? #t])
             (unless (null? segs)
@@ -87,9 +90,12 @@
   (when (and *dirty*
              (holds? (frame-box *dirty*)
                      (call-with-values topbar-box pixel-box)))
-    (refresh-status!)))
+    (refresh-status!))
+  (mouse-doc-tick topbar-box))
+
+(define (topbar-doc what) (if (eq? what 'launcher) '((L . "Apps")) '()))
 
 (define-surface topbar 20
   'draw 'draw-topbar 'box 'topbar-box 'at 'topbar-at 'mouse 'topbar-mouse
-  'tick 'topbar-tick)
+  'tick 'topbar-tick 'doc 'topbar-doc)
 (define-strip topbar 'top 'topbar-height)

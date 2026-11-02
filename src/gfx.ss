@@ -7,7 +7,8 @@
 ;;;   (fill-rect 10 10 100 40 'accent)
 ;;;   (draw-text 16 20 "hello" 'text 'mono)
 ;;;
-;;; Colors are #xRRGGBB fixnums, theme keys ('accent), or (alpha c 0.5).
+;;; Colors are #xRRGGBB fixnums, theme keys ('accent), (alpha c 0.5), or
+;;; stipples, patterns used as colors (stipple, below).
 
 (define pi (* 4 (atan 1)))
 
@@ -122,6 +123,14 @@
 (define (rgb r g b) (fxior (fxsll r 16) (fxsll g 8) b))
 (define (alpha c a) (cons c a))
 
+;; A pattern used as a color: rows of one length, of #\# (ink) and of
+;; anything else (paper; #f paper is clear), a logical pixel each, tiled
+;; from the screen's device origin, so tiles line up across windows as
+;; Medley's textures do. Plain data: it saves and prints.
+;;   (stipple 'text 'bg-1 "#..." "...." "..#." "....")
+(define (stipple ink paper . rows) (cons* 'stipple ink paper rows))
+(define (stipple? c) (and (pair? c) (eq? (car c) 'stipple)))
+
 (define (color-rgba c)
   (cond
     [(fixnum? c)
@@ -130,6 +139,16 @@
              (fl/ (fixnum->flonum (fxand c 255)) 255.0)
              1.0)]
     [(symbol? c) (color-rgba (theme c))]
+    [(stipple? c)   ; its ink and paper mixed by coverage
+     (let*-values ([(cells) (string->list (apply string-append (cdddr c)))]
+                   [(k) (/ (length (filter (lambda (ch) (char=? ch #\#)) cells))
+                           (length cells))]
+                   [(r g b a) (color-rgba (cadr c))]
+                   [(r2 g2 b2 a2) (color-rgba (or (caddr c) (alpha 0 0)))]
+                   [(wi wp) (values (* k a) (* (- 1 k) a2))])
+       (define (m x y)
+         (if (zero? (+ wi wp)) 0.0 (/ (+ (* wi x) (* wp y)) (+ wi wp))))
+       (values (m r r2) (m g g2) (m b b2) (+ wi wp)))]
     [(pair? c)
      (let-values ([(r g b a) (color-rgba (car c))])
        (values r g b (* a (cdr c))))]
@@ -179,8 +198,39 @@
     (rgb (m r1 r2) (m g1 g2) (m b1 b2))))
 
 (define (set-color! c)
-  (let-values ([(r g b a) (color-rgba c)])
-    (cairo-set-source-rgba *cr* r g b a)))
+  (let ([c (let key ([c c]) (if (symbol? c) (key (theme c)) c))])
+    (if (stipple? c)
+        (set-stipple! c)
+        (let-values ([(r g b a) (color-rgba c)])
+          (cairo-set-source-rgba *cr* r g b a)))))
+
+;; A stipple's tile on device pixels where px's rule puts them at our
+;; scale (logical ceiling((d + 1/2)/s) - 1), whole periods: exact anywhere.
+(define (set-stipple! c)
+  (cairo-get-matrix *cr* *scratch*)   ; the pattern's space is the device's
+  (let* ([s (rationalize (exact (foreign-ref 'double *scratch* 0)) 1/100000)]
+         [w (string-length (cadddr c))] [h (length (cdddr c))]
+         [pw (numerator (* w s))] [ph (numerator (* h s))]
+         [at (lambda (d n) (mod (- (ceiling (/ (+ d 1/2) s)) 1) n))]
+         [us (list->vector (map (lambda (x) (at x w)) (iota pw)))]
+         [tile (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph)]
+         [pat (cairo-pattern-create-for-surface tile)]
+         [ink (color->pixel (cadr c))]
+         [paper (color->pixel (or (caddr c) (alpha 0 0)))])
+    (do ([y 0 (+ y 1)]) ((= y ph))
+      (let ([row (list-ref (cdddr c) (at y h))])
+        (do ([x 0 (+ x 1)]) ((= x pw))
+          (foreign-set! 'unsigned-32 (cairo-image-surface-get-data tile)
+                        (* 4 (+ x (* y pw)))
+                        (if (char=? #\# (string-ref row (vector-ref us x)))
+                            ink paper)))))
+    (cairo-surface-mark-dirty tile)
+    (cairo-pattern-set-matrix pat *scratch*)
+    (cairo-pattern-set-extend pat CAIRO_EXTEND_REPEAT)
+    (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
+    (cairo-set-source *cr* pat)   ; which keeps the pattern and its tile
+    (cairo-pattern-destroy pat)
+    (cairo-surface-destroy tile)))
 
 ;;; ------------------------------------------------------------------ fonts
 ;;; A font is a setting: the theme's roles ('ui, 'mono, 'title, ...) are
@@ -188,11 +238,16 @@
 ;;; the theme.
 
 (define-record-type (font-type make-font font?)
-  (nongenerative schevana-font-2)
+  (nongenerative schevana-font-3)
   (fields (immutable family font-family) (immutable slant font-slant)
           (immutable weight font-weight) (immutable size font-size)
           (immutable face font-face)
-          (mutable cache font-cache font-cache-set!)))
+          (mutable cache font-cache font-cache-set!)
+          (immutable options font-options)))   ; cairo's: antialiased or not
+
+(defvar plain-font-options (cairo-font-options-create))
+(defvar crisp-font-options (cairo-font-options-create))
+(cairo-font-options-set-antialias crisp-font-options CAIRO_ANTIALIAS_NONE)
 
 (define (make-font* family size . opts)
   (let ([slant (if (memq 'italic opts)
@@ -202,11 +257,13 @@
                     CAIRO_FONT_WEIGHT_BOLD
                     CAIRO_FONT_WEIGHT_NORMAL)])
     (make-font family slant weight size
-               (cairo-toy-font-face-create family slant weight) #f)))
+               (cairo-toy-font-face-create family slant weight) #f
+               (if (memq 'crisp opts) crisp-font-options plain-font-options))))
 
-;; (font family size . opts), opts bold and italic: one record for each,
-;; so that every theme asking for it shares its face, its metrics and
-;; what is laid out in it.
+;; (font family size . opts), opts bold, italic and crisp (not
+;; antialiased: Platinum's text): one record for each, so that every
+;; theme asking for it shares its face, its metrics and what is laid out
+;; in it.
 (define *font-specs* (make-hashtable equal-hash equal?))
 (define (font family size . opts)
   (let ([spec (cons* family size opts)])
@@ -251,7 +308,8 @@
 
 (define (use-font-on! cr f)
   (cairo-set-font-face cr (font-face f))
-  (cairo-set-font-size cr (font-size f)))
+  (cairo-set-font-size cr (font-size f))
+  (cairo-set-font-options cr (font-options f)))
 
 ;; #(ascent descent height char-width), measured on first use (on the
 ;; measuring context, see above).
@@ -271,6 +329,7 @@
               m))))))
 
 (define (font-ascent f) (vector-ref (font-metrics f) 0))
+(define (font-descent f) (vector-ref (font-metrics f) 1))
 (define (font-line-height f) (vector-ref (font-metrics f) 2))
 (define (font-char-width f) (vector-ref (font-metrics f) 3))
 
@@ -297,6 +356,14 @@
      (use-font-on! *measure-cr* (get-font font))
      (cairo-text-extents *measure-cr* str *scratch*)
      (foreign-ref 'double *scratch* 32)]))
+
+;; The ink of str in font as *cr* draws it, hinted at its scale: (values
+;; left top width height) from the pen on the baseline (top < 0 above).
+(define (text-ink str font)
+  (use-font! (get-font font))
+  (cairo-text-extents *cr* str *scratch*)
+  (apply values (map (lambda (i) (foreign-ref 'double *scratch* i))
+                     '(0 8 16 24))))
 
 ;; Width of the widest of strs (0 for none).
 (define (widest-text strs font)

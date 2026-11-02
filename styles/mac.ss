@@ -19,8 +19,9 @@
 (define (mac-glyph kind cx cy ink)
   (let ([a 3] [lw 1.5])
     (case kind
-      [(close) (draw-line (- cx a) (- cy a) (+ cx a) (+ cy a) ink lw)
-               (draw-line (+ cx a) (- cy a) (- cx a) (+ cy a) ink lw)]
+      [(close) (ui-draw-glyph (- cx a) (- cy a) (* 2 a) (* 2 a)
+                              (list (cons 'ink ink) (cons 'width lw))
+                              'close)]
       [(minimize) (draw-line (- cx a) cy (+ cx a) cy ink lw)]
       [(maximize) (draw-line (- cx a) cy (+ cx a) cy ink lw)
                   (draw-line cx (- cy a) cx (+ cy a) ink lw)])))

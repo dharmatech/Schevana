@@ -29,6 +29,20 @@
 
 (defvar *wallpaper* #f)   ; (layer key . theme): the picture, and what it is of
 
+;; The theme as it is now; theme-same? tells whether it still is, however
+;; it changed meanwhile (set-theme!, or hashtable-set! behind its back).
+(define (theme-snapshot)
+  (let-values ([(keys vals) (hashtable-entries *theme*)]) (cons keys vals)))
+
+(define (theme-same? snapshot)
+  (let ([keys (car snapshot)] [vals (cdr snapshot)])
+    (and (= (vector-length keys) (hashtable-size *theme*))
+         (let loop ([i 0])
+           (or (= i (vector-length keys))
+               (and (equal? (hashtable-ref *theme* (vector-ref keys i) keys)
+                            (vector-ref vals i))
+                    (loop (+ i 1))))))))
+
 (define (wallpaper-key)
   (list *canvas-w* *canvas-h* *scale* draw-wallpaper *wallpapers*
         *theme-version*))
@@ -106,4 +120,4 @@
 
 (define-surface desktop -10
   'draw 'draw-desktop 'at (lambda (x y) 'desktop) 'mouse 'desktop-mouse
-  'tick 'desktop-tick)
+  'tick 'desktop-tick 'doc (lambda (what) '((L . "Unfocus") (R . "Apps"))))

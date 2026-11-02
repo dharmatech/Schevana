@@ -75,7 +75,12 @@
 (define (taskbar-mouse kind what x y button clicks)
   (bar-mouse (with-place 'bar taskbar-areas) kind what x y button clicks))
 
+(define (taskbar-doc what)
+  (if (window? what)
+      '((L . "Focus or minimize") (M . "Close") (R . "Window menu"))
+      '()))
+
 (define-surface taskbar 10
   'draw 'draw-taskbar 'box 'taskbar-box 'at 'taskbar-at
-  'mouse 'taskbar-mouse)
+  'mouse 'taskbar-mouse 'doc 'taskbar-doc)
 (define-strip taskbar 'bottom 'taskbar-height)

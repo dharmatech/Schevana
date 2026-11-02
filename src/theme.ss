@@ -75,7 +75,11 @@
             mono-font-size 14
             palette tokyo-night
             ;; a wallpaper's name: gradient, flat or shade
-            wallpaper gradient)
+            wallpaper gradient
+            ;; the behaviors a style chooses: today's feel
+            frame-edge 5  frame-corner 14  title-double-click maximize
+            button-double-click ()  title-wheel none  drag-feedback live
+            raise-on-click #t)
           *more-defaults*))
 
 (define color-keys
@@ -116,20 +120,6 @@
   (vector->list
    (vector-sort (lambda (a b) (string<? (symbol->string a) (symbol->string b)))
                 (hashtable-keys *theme*))))
-
-;; The theme as it is now; theme-same? tells whether it still is, however
-;; it changed meanwhile (set-theme!, or hashtable-set! behind its back).
-(define (theme-snapshot)
-  (let-values ([(keys vals) (hashtable-entries *theme*)]) (cons keys vals)))
-
-(define (theme-same? snapshot)
-  (let ([keys (car snapshot)] [vals (cdr snapshot)])
-    (and (= (vector-length keys) (hashtable-size *theme*))
-         (let loop ([i 0])
-           (or (= i (vector-length keys))
-               (and (equal? (hashtable-ref *theme* (vector-ref keys i) keys)
-                            (vector-ref vals i))
-                    (loop (+ i 1))))))))
 
 ;;; ------------------------------------------------------------------
 ;;; palettes
@@ -548,18 +538,18 @@
                  (save-theme!)))))
 
 ;; A palette or style that is gone falls back, a wallpaper that is gone
-;; draws as the default; a value that does not fit its key is dropped.
+;; draws as the default; a value not of its default's kind is dropped.
 (define (valid-theme-value? key v)
-  (let ([d (theme-default key)])
+  (let ([d (plist-ref default-theme key theme-unset)])
     (cond
       [(memq key color-keys)
-       (or (fixnum? v)
+       (or (fixnum? v) (stipple? v)
            (and (pair? v) (or (fixnum? (car v)) (symbol? (car v)))
                 (real? (cdr v))))]
       [(eq? key 'palette) (and (assq v *themes*) #t)]
-      [(eq? key 'wallpaper) (symbol? v)]
-      [(fixnum? d) (fixnum? v)]
-      [else (and (string? d) (string? v))])))
+      [else (and (not (eq? d theme-unset))
+                 (exists (lambda (kind?) (and (kind? d) (kind? v)))
+                         (list fixnum? string? symbol? boolean? list?)))])))
 
 (define (registered-style s) (if (find-style s) s 'mac))
 

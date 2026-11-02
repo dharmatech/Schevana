@@ -17,6 +17,7 @@
     (open-window "Sketch"
       'size '(560 . 380)
       'cursor 'crosshair
+      'mouse-doc '((L . "Draw"))
       'strokes '()
       'draw (lambda (win w h)
               (fill-rect 0 0 w h 'bg-1)

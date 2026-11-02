@@ -386,6 +386,25 @@
         (draw-text (+ sx sw 18) (settings-text-y sy 24 'ui) (format "~a px" v)
                    'text-dim 'ui)))))
 
+;; A miniature focused window in style name, for the style cards.
+(define (draw-style-preview name x y w h scale)
+  (let ([win (make-window 0 'preview "Preview" 16 14
+                          (- (/ w scale) 32) (- (/ h scale) 6) 'normal #f
+                          (make-eq-hashtable) (make-eq-hashtable) #f 40 20)])
+    (hashtable-set! (window-props win) 'window-style name)
+    (hashtable-set! (window-handlers win) 'draw
+      (lambda (win cw ch)
+        (for-each (lambda (i color frac)
+                    (fill-round-rect 14 (+ 14 (* i 16)) (* frac (- cw 28))
+                                     7 3.5 color))
+                  '(0 1 2 3) '(accent-2 accent green text-dim)
+                  '(0.45 0.7 0.5 0.35))))
+    (call-with-clip x y w h
+      (lambda ()
+        (call-with-translation x y
+          (lambda ()
+            (call-with-scale scale (lambda () (draw-window* win #t)))))))))
+
 (define (draw-style-card ui x y w h name selected?)
   (let ([label-h (settings-card-label-height 28)]
         [r 10])

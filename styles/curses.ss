@@ -48,12 +48,6 @@
          (or (fit (+ s (* 5 c)) (- w s (* 9 c)))
              (and (not buttons?) (fit (+ s c) (- w s c)))))))
 
-;; (values k ox oy): the logical x is the device pixel (+ (* k x) ox).
-(define (curses-device)
-  (cairo-get-matrix *cr* *scratch*)
-  (apply values (map (lambda (i) (foreign-ref 'double *scratch* i))
-                     '(0 32 40))))
-
 ;; s in device pixels, k of them to the logical one: its ink centered on x
 ;; and its capitals' on y, measured as drawn (hinting makes the capitals
 ;; 10 pixels high at 100%, 21 at 200%), on whole pixels.
@@ -73,7 +67,7 @@
 ;; Drawn in device pixels, in pens: squares a line wide, 1 pixel at 100%
 ;; and 2 at 200%.
 (define (curses-draw-under win x y w h focused? hover pressed)
-  (let*-values ([(k ox oy) (curses-device)] [(p) (max 1 (round k))]
+  (let*-values ([(k ox oy) (px-device)] [(p) (max 1 (round k))]
                 [(c) (curses-cell)] [(bg) (window-bg win)]
                 [(ink) (if focused? 'accent 'text-faint)]
                 [(fg) (if focused? 'title-text 'title-text-dim)]

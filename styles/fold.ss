@@ -35,20 +35,17 @@
 
 ;; The y nearest to v on a whole device pixel, however *cr* is scaled.
 (define (fold-snap v)
-  (cairo-get-matrix *cr* *scratch*)
-  (let ([k (foreign-ref 'double *scratch* 24)]
-        [o (foreign-ref 'double *scratch* 40)])
-    (/ (- (round (+ (* k v) o)) o) k)))
+  (let-values ([(k ox oy) (px-device)])
+    (/ (- (round (+ (* k v) oy)) oy) k)))
 
 ;; (values baseline middle): where the title stands so that the middle of
 ;; its capitals is the middle of the top strip under its 1-pixel edge.
 ;; The cap height is measured on *cr*, at the scale it is drawn: hinting
 ;; makes it 9 pixels at 100% but 10 at 200%.
 (define (fold-baseline y th)
-  (use-font! (get-font 'title))
-  (cairo-text-extents *cr* "H" *scratch*)
-  (let* ([cap (- (foreign-ref 'double *scratch* 8))]
-         [base (fold-snap (+ y (/ (+ th 1) 2) (/ cap 2)))])
+  (let*-values ([(l top w h) (text-ink "H" 'title)]
+                [(cap) (- top)]
+                [(base) (fold-snap (+ y (/ (+ th 1) 2) (/ cap 2)))])
     (values base (- base (/ cap 2)))))
 
 ;; A polygon with a 1-pixel edge: outer in edge, inner (1 pixel in) in fill.
@@ -74,16 +71,6 @@
                  (list (cons (+ l 1) (+ y 1 d)) (cons (- r 1 d) (+ y f -1))
                        (cons (+ l 1) (+ y f -1)))
                  edge back)))
-
-;; A dash, a square, or two squares to restore, in the mark's box at (x, y).
-(define (fold-draw-mark win kind x y ink)
-  (let ([s fold-mark])
-    (cond [(eq? kind 'minimize) (fill-rect x (+ y (quotient s 2)) s 1 ink)]
-          [(maximized? win)   ; a sheet in front of another
-           (stroke-rect x (+ y 2) (- s 2) (- s 2) ink)
-           (fill-rect (+ x 2) y (- s 2) 1 ink)
-           (fill-rect (+ x s -1) y 1 (- s 2) ink)]
-          [else (stroke-rect x y s s ink)])))
 
 (define (fold-draw-under win x y w h focused? hover pressed)
   (let*-values ([(th) (title-height)] [(g) (fold-gap)] [(paper) (window-bg win)]
@@ -119,19 +106,21 @@
            (when (memq kind (list hover pressed))   ; square, like the sheet
              (fill-rect (- mx 5) (- top 5) s s
                         (alpha 'text (if (eq? pressed kind) 0.22 0.12))))
-           (fold-draw-mark win kind mx top
-                           (if (eq? hover kind) 'title-text (alpha ink 0.6))))))
+           (ui-draw-glyph mx top fold-mark fold-mark
+                          (list (cons 'ink (if (eq? hover kind)
+                                               'title-text
+                                               (alpha ink 0.6))))
+                          (ui-frame-glyph win kind)))))
      (fold-regions win))
     (fold-flap! (+ x w) y f (or back 'window-border)
                 (or back (mix paper 'text 0.1)))
     (when close?   ; an × in the middle of the dog-ear
       (let ([cx (+ (round (- (+ x w) (/ f (sqrt 2)))) 1/2)]
             [cy (+ (round (+ y (/ f (sqrt 2)))) 1/2)])
-        (for-each (lambda (k)
-                    (draw-line (- cx 3.5) (- cy (* k 3.5)) (+ cx 3.5)
-                               (+ cy (* k 3.5)) (readable-on 'button-close)
-                               1.5))
-                  '(1 -1))))))
+        (ui-draw-glyph (- cx 3.5) (- cy 3.5) 7 7
+                       (list (cons 'ink (readable-on 'button-close))
+                             '(width . 1.5))
+                       'close)))))
 
 (define-style fold "Fold"
   'frame-insets 'fold-insets

@@ -83,8 +83,8 @@
 (define (halo-glyph win kind x y ink)
   (define (line . points) (draw-polyline points ink 1.25))
   (case kind
-    [(close) (line (cons (- x 3.5) (- y 3.5)) (cons (+ x 3.5) (+ y 3.5)))
-             (line (cons (+ x 3.5) (- y 3.5)) (cons (- x 3.5) (+ y 3.5)))]
+    [(close) (ui-draw-glyph (- x 3.5) (- y 3.5) 7 7
+                            (list (cons 'ink ink) '(width . 1.25)) 'close)]
     [(minimize) (line (cons (- x 3.5) y) (cons (+ x 3.5) y))]
     [else
      (let ([d (if (maximized? win) 1 3)] [a (if (maximized? win) -3 3)])

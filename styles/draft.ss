@@ -37,9 +37,8 @@
 ;; on a whole device pixel, from their height measured on *cr*: hinting
 ;; makes them 9 pixels tall at 100% but 10 logical pixels at 200%.
 (define (draft-baseline cy)
-  (use-font! (get-font 'title))
-  (cairo-text-extents *cr* "H" *scratch*)
-  (let ([base (+ cy (/ (- (foreign-ref 'double *scratch* 8)) 2))])
+  (let*-values ([(l top w h) (text-ink "H" 'title)]
+                [(base) (+ cy (/ (- top) 2))])
     (/ (round (* base *scale*)) *scale*)))
 
 ;; The dimension's text in room, as (values title size): both where they
@@ -63,19 +62,14 @@
     (fill-polygon `((,x . ,y) (,bx . ,(- y 5/2)) (,bx . ,(+ y 5/2))) ink)))
 
 ;; A button's mark, 2k + 1 pixels across around the middle of the pixel
-;; at (cx, cy), in 1-pixel lines like the rest of the drawing.
+;; at (cx, cy), in 1-pixel lines like the rest of the drawing (the ×'s
+;; from pixel middle to pixel middle).
 (define (draft-glyph win kind cx cy k ink)
-  (let ([s (+ k k 1)] [x0 (- cx k 1/2)] [y0 (- cy k 1/2)])
-    (case kind
-      [(minimize) (fill-rect x0 (- cy 1/2) s 1 ink)]
-      [(maximize)
-       (if (maximized? win)   ; restore: a sheet in front of another
-           (begin (stroke-rect x0 (+ y0 2) (- s 2) (- s 2) ink)
-                  (fill-rect (+ x0 2) y0 (- s 2) 1 ink)
-                  (fill-rect (+ x0 s -1) y0 1 (- s 2) ink))
-           (stroke-rect x0 y0 s s ink))]
-      [(close) (draw-line (- cx k) (- cy k) (+ cx k) (+ cy k) ink)
-               (draw-line (+ cx k) (- cy k) (- cx k) (+ cy k) ink)])))
+  (let ([flags (list (cons 'ink ink))])
+    (if (eq? kind 'close)
+        (ui-draw-glyph (- cx k) (- cy k) (* 2 k) (* 2 k) flags 'close)
+        (ui-draw-glyph (- cx k 1/2) (- cy k 1/2) (+ k k 1) (+ k k 1) flags
+                       (ui-frame-glyph win kind)))))
 
 ;; The title block: a box the band's height, ruled into cells. The cell
 ;; under the mouse lights in the accent, even on an unfocused window.

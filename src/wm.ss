@@ -49,9 +49,11 @@
 ;; what the next frame draws: #f, #t (the whole screen) or (x0 y0 x1 y1)
 (defvar *dirty* #t)
 (defvar *drag* #f)            ; the current mouse interaction, see drag record
+(defvar *drag-outline* #f)    ; (x y w h): where an outline drag would put it
 (defvar *hover* #f)
 (defvar *mouse-x* 0)
 (defvar *mouse-y* 0)
+(defvar *mouse-button* #f)    ; the button held down, or #f
 (defvar *cascade* 0)
 
 (define-record-type drag
@@ -156,15 +158,16 @@
 ;;; up at each call, so the desktop layer's procedures stay redefinable.
 
 (define-record-type surface
-  (nongenerative schevana-surface-1)
+  (nongenerative schevana-surface-2)
   (fields name depth
           draw    ; ()                           draws it
           box     ; () -> (values x y w h)       what it covers this frame
           at      ; (x y) -> what, or #f         what is there; #f lets
                   ;                              the point through
-          mouse   ; (kind what x y button clicks)    kind: down or move
+          mouse   ; (kind what x y button clicks)    kind: down up move
           key     ; (kind value mods) -> #t if taken; kind: key or text
-          tick))  ; ()                           each step, before a frame
+          tick    ; ()                           each step, before a frame
+          doc))   ; (what) -> ((L . "Apps") ...)  its mouse documentation
 
 (defvar *surfaces* '())   ; by depth
 (set! *surfaces* (filter surface? *surfaces*))
@@ -179,7 +182,8 @@
                    (plist-ref opts 'at (lambda (x y) #f))
                    (plist-ref opts 'mouse void)
                    (plist-ref opts 'key (lambda args #f))
-                   (plist-ref opts 'tick void))
+                   (plist-ref opts 'tick void)
+                   (plist-ref opts 'doc (lambda (what) '())))
                  surface-name)))
   (request-frame!)
   name)
@@ -383,6 +387,9 @@
 (define (frame-call win key . args)
   (in-window-theme win (lambda () (apply (part key) win args))))
 
+;; A setting in win's theme: its own style's, or the chosen one's.
+(define (window-setting win key) (in-window-theme win (lambda () (theme key))))
+
 ;; Frame thickness around the content: (values left top right bottom).
 (define (frame-insets win) (frame-call win 'frame-insets))
 (define (frame-regions win) (frame-call win 'frame-regions))
@@ -424,7 +431,8 @@
   (window-error-set! win (cons kind c))
   (invalidate!))
 
-(define (focus-window! win)
+;; Gives win the keyboard and brings it to the front (raise? #f: not).
+(define (focus-window! win . raise?)
   (unless (eq? win *focus*)
     (let ([old *focus*])
       (set! *focus* win)
@@ -433,7 +441,7 @@
   (when win
     (when (eq? (window-state win) 'minimized)
       (window-state-set! win (if (window-restore win) 'maximized 'normal)))
-    (raise-window! win))
+    (unless (and (pair? raise?) (not (car raise?))) (raise-window! win)))
   (request-frame!))
 
 (define (raise-window! win)
@@ -453,11 +461,14 @@
   (when (memq win *windows*)
     (window-call win 'close)
     (set! *windows* (remq win *windows*))
-    (when (and *drag* (eq? (drag-win *drag*) win)) (set! *drag* #f))
+    (when (and *drag* (eq? (drag-win *drag*) win))
+      (set! *drag* #f)
+      (set! *drag-outline* #f))
     (when (eq? *focus* win) (focus-topmost!))
     (request-frame!)))
 
 (define (minimize-window! win)
+  (unshade-window! win)
   (window-state-set! win 'minimized)
   (when (eq? win *focus*) (focus-topmost!))
   (request-frame!))
@@ -469,7 +480,8 @@
 (define (set-geometry! win x y w h)
   (let*-values ([(l t r b) (frame-insets win)]
                 [(w) (max (+ l r (window-min-w win)) (exact (round w)))]
-                [(h) (max (+ t b (window-min-h win)) (exact (round h)))]
+                [(h) (max (if (shaded? win) 0 (+ t b (window-min-h win)))
+                          (exact (round h)))]
                 [(resized?)
                  (not (and (= w (window-w win)) (= h (window-h win))))]
                 [(ox oy ow oh) (window-extent win)])
@@ -500,6 +512,7 @@
   (request-frame!))
 
 (define (maximize-window! win)
+  (unshade-window! win)
   (unless (eq? (window-state win) 'maximized)
     (window-restore-set! win (list (window-x win) (window-y win)
                                    (window-w win) (window-h win)))
@@ -523,41 +536,35 @@
       (restore-window! win)
       (maximize-window! win)))
 
-(define (cycle-windows!)
-  (let ([ws (reverse *windows*)])
-    (unless (null? ws)
-      (focus-window! (car ws)))))
+;; What an action a style's setting names does to win (a double click's):
+;; maximize, shade, minimize, close; any other nothing.
+(define (window-action! win action)
+  (case action
+    [(maximize) (toggle-maximize! win)]
+    [(shade) (toggle-shade! win)]
+    [(minimize) (minimize-window! win)]
+    [(close) (close-window! win)]))
 
-(define (close-focused-window!) (when *focus* (close-window! *focus*)))
+;; A shaded window shows only its frame's top and bottom (the insets its
+;; frame gives while shaded); its content is not drawn and its app hears
+;; no resize. Its height waits in a property, as the record keeps.
+(define (shaded? win) (and (window-ref win 'unshaded-h) #t))
 
-(define (tile-windows!)
-  (let ([ws (reverse (filter visible? *windows*))])
-    (unless (null? ws)
-      (let-values ([(dx dy dw dh) (desktop-rect)])
-        (let* ([n (length ws)]
-               [cols (exact (ceiling (sqrt n)))]
-               [rows (exact (ceiling (/ n cols)))]
-               [gap 8]
-               [cw (/ (- dw gap) cols)]
-               [ch (/ (- dh gap) rows)])
-          (let loop ([ws ws] [i 0])
-            (unless (null? ws)
-              (let ([win (car ws)])
-                (window-state-set! win 'normal)
-                (window-restore-set! win #f)
-                (set-geometry! win (+ dx gap (* cw (mod i cols)))
-                               (+ dy gap (* ch (quotient i cols)))
-                               (- cw gap) (- ch gap))
-                (loop (cdr ws) (+ i 1)))))))))
-  (request-frame!))
+(define (shade-window! win)
+  (when (and (not (shaded? win)) (eq? (window-state win) 'normal))
+    (window-set! win 'unshaded-h (window-h win))
+    (let-values ([(l t r b) (frame-insets win)])
+      (if (> (+ t b) 0)                     ; a title along the top
+          (window-h-set! win (+ t b))
+          (window-set! win 'unshaded-h #f)))))
 
-(define (cascade-windows!)
-  (set! *cascade* 0)
-  (for-each (lambda (win)
-              (when (eq? (window-state win) 'maximized) (restore-window! win))
-              (place-window! win #f))
-            (reverse *windows*))
-  (request-frame!))
+(define (unshade-window! win)
+  (when (shaded? win)
+    (window-h-set! win (window-ref win 'unshaded-h))
+    (window-set! win 'unshaded-h #f)))
+
+(define (toggle-shade! win)
+  ((if (shaded? win) unshade-window! shade-window!) win))
 
 ;; The host window was resized.
 ;; The screen changed size (or scale): refit maximized windows, and pull
@@ -578,13 +585,16 @@
                 *windows*)))
   (invalidate!))
 
-;; The window style or title height changed: frames keep their outer size,
-;; so tell every app its new content size.
+;; The style or title height changed: frames keep their outer size, so
+;; every app hears its new content size, a shaded one what it unshades to.
 (define (wm-chrome-changed!)
   (wm-screen-resized!)
   (for-each (lambda (w)
-              (let-values ([(cw ch) (window-content-size w)])
-                (window-call w 'resize cw ch)))
+              (let ([shaded? (shaded? w)])
+                (unshade-window! w)   ; then shaded again in its new frame
+                (let-values ([(cw ch) (window-content-size w)])
+                  (window-call w 'resize cw ch))
+                (when shaded? (shade-window! w))))
             *windows*))
 
 ;;; ------------------------------------------------------------------
@@ -597,23 +607,28 @@
                           (window-w w) (window-h w))))
         *windows*))
 
-;; The kind of the frame's region at (lx, ly) in window coordinates.
-(define (window-button-at win lx ly)
-  (let ([b (find (lambda (b)
-                   (point-in? lx ly (list-ref b 1) (list-ref b 2)
-                              (list-ref b 3) (list-ref b 4)))
-                 (frame-regions win))])
-    (and b (car b))))
+;; A resize region's kind names the sides a drag on it moves: l, r, t, b.
+(define resize-kinds
+  '(resize-l resize-r resize-t resize-b resize-tl resize-tr resize-bl
+    resize-br))
 
-;; Which part of the window is at screen point (x, y)?
+;; Which part of the window is at screen point (x, y)? Its style's
+;; regions, then the window manager's resize edges, 'frame-edge wide
+;; (0: none) with corners 'frame-corner long, the title, the content.
 (define (window-region win x y)
   (let*-values ([(lx) (- x (window-x win))] [(ly) (- y (window-y win))]
                 [(w) (window-w win)] [(h) (window-h win)]
                 [(l t r b) (frame-insets win)]
-                [(edge corner) (values 5 14)]
-                [(resizable?) (not (eq? (window-state win) 'maximized))])
+                [(edge) (window-setting win 'frame-edge)]
+                [(corner) (window-setting win 'frame-corner)]
+                [(free?) (and (eq? (window-state win) 'normal)
+                              (not (shaded? win)))]   ; it may resize
+                [(resizable?) (and free? (> edge 0))])
     (cond
-      [(window-button-at win lx ly)]
+      [(find (lambda (r) (and (or free? (not (memq (car r) resize-kinds)))
+                              (apply point-in? lx ly (list-head (cdr r) 4))))
+             (frame-regions win))
+       => car]
       [(and resizable? (>= ly (- h corner)) (>= lx (- w corner))) 'resize-br]
       [(and resizable? (>= ly (- h corner)) (< lx corner)) 'resize-bl]
       [(and resizable? (>= lx (- w edge)) (> ly edge)) 'resize-r]
@@ -625,10 +640,10 @@
 
 (define (region-cursor win region)
   (case region
-    [(resize-br) 'resize-nwse]
-    [(resize-bl) 'resize-nesw]
+    [(resize-br resize-tl) 'resize-nwse]
+    [(resize-bl resize-tr) 'resize-nesw]
     [(resize-r resize-l) 'resize-ew]
-    [(resize-b) 'resize-ns]
+    [(resize-b resize-t) 'resize-ns]
     [(content) (if (window-error win) 'hand (window-ref win 'cursor 'arrow))]
     [else 'arrow]))
 
@@ -686,17 +701,18 @@
        (let ([h *hover*])
          (case (and h (car h))
            [(surface) (surface-mouse! h 'move x y #f 0)]
-           [(window)
-            (when (eq? (caddr h) 'content)
+           [(window)   ; a frame's outside scroll bar is the app's too
+            (when (memq (caddr h) '(content scrollbar))
               (let-values ([(lx ly) (window-local (cadr h) x y)])
                 (window-call (cadr h) 'mouse-move lx ly)))]))]
       [(eq? (drag-kind d) 'move) (drag-move! d x y)]
       [(eq? (drag-kind d) 'capture)
-       (let ([win (drag-win d)])
+       (let ([win (drag-win d)] [h (screen-at x y)])
+         (when (and h (eq? (car h) 'surface))   ; a menu it opened
+           (surface-mouse! h 'move x y (drag-button d) 0))
          (let-values ([(lx ly) (window-local win x y)])
            (window-call win 'mouse-move lx ly)))]
-      [(memq (drag-kind d) '(resize-r resize-l resize-b resize-br resize-bl))
-       (drag-resize! d x y)]
+      [(memq (drag-kind d) resize-kinds) (drag-resize! d x y)]
       [else (update-hover! x y)])))
 
 (define (drag-move! d x y)
@@ -713,33 +729,50 @@
               (set! *drag* (make-drag 'move win 'left x y
                                       (window-x win) (window-y win) 0 0))))))
         (let-values ([(dx dy dw dh) (desktop-rect)])
-          (move-window! win
-                        (clamp (+ (drag-x d) (- x (drag-mx d)))
-                               (- (+ dx 80) (window-w win)) (- (+ dx dw) 80))
-                        (clamp (+ (drag-y d) (- y (drag-my d)))
-                               dy (- (+ dy dh) 20)))))))
+          (drag-to! win
+                    (clamp (+ (drag-x d) (- x (drag-mx d)))
+                           (- (+ dx 80) (window-w win)) (- (+ dx dw) 80))
+                    (clamp (+ (drag-y d) (- y (drag-my d)))
+                           dy (- (+ dy dh) 20))
+                    (window-w win) (window-h win))))))
 
+;; Where a drag puts its window: there at once, or (drag-feedback outline)
+;; in the outline the desktop draws within it, until the release does.
+(define (drag-to! win x y w h)
+  (if (eq? (window-setting win 'drag-feedback) 'outline)
+      (let ([old *drag-outline*])
+        (set! *drag-outline* (list x y w h))
+        (when old (apply request-frame! old))
+        (request-frame! x y w h))
+      (set-geometry! win x y w h)))
+
+;; The sides the drag's kind names follow the pointer, the top kept on the
+;; desktop as a move keeps it; the others stay.
 (define (drag-resize! d x y)
-  (let* ([k (drag-kind d)] [win (drag-win d)]
-         [dx (- x (drag-mx d))] [dy (- y (drag-my d))]
-         [min-w (let-values ([(l t r b) (frame-insets win)])
-                  (+ l r (window-min-w win)))]
-         [nw (case k
-               [(resize-r resize-br) (+ (drag-w d) dx)]
-               [(resize-l resize-bl) (- (drag-w d) dx)]
-               [else (drag-w d)])]
-         [nw (max nw min-w)]
-         [nh (if (memq k '(resize-b resize-br resize-bl))
-                 (+ (drag-h d) dy)
-                 (drag-h d))]
-         [nx (if (memq k '(resize-l resize-bl))
-                 (- (+ (drag-x d) (drag-w d)) nw)
-                 (drag-x d))])
-    (set-geometry! win nx (drag-y d) nw nh)))
+  (let*-values ([(win) (drag-win d)] [(left top dw dh) (desktop-rect)]
+                [(side?) (let ([k (string->list
+                                   (symbol->string (drag-kind d)))])
+                           (lambda (c) (memv c (list-tail k 7))))]
+                [(dx dy) (values (- x (drag-mx d)) (- y (drag-my d)))]
+                [(l t r b) (frame-insets win)]
+                [(nw) (max (+ l r (window-min-w win))
+                           (cond [(side? #\r) (+ (drag-w d) dx)]
+                                 [(side? #\l) (- (drag-w d) dx)]
+                                 [else (drag-w d)]))]
+                [(nh) (max (+ t b (window-min-h win))
+                           (cond [(side? #\b) (+ (drag-h d) dy)]
+                                 [(side? #\t) (- (drag-h d)
+                                                 (max dy (- top (drag-y d))))]
+                                 [else (drag-h d)]))])
+    (drag-to! win
+              (if (side? #\l) (- (+ (drag-x d) (drag-w d)) nw) (drag-x d))
+              (if (side? #\t) (- (+ (drag-y d) (drag-h d)) nh) (drag-y d))
+              nw nh)))
 
 (define (wm-mouse-down x y button clicks)
   (set! *mouse-x* x)
   (set! *mouse-y* y)
+  (set! *mouse-button* button)
   (let ([h (screen-at x y)])
     (case (and h (car h))
       [(surface) (surface-mouse! h 'down x y button clicks)]
@@ -747,23 +780,34 @@
 
 (define (window-mouse-down win x y button clicks)
   (let ([region (window-region win x y)])
-    ;; The depth gadget decides about raising on release.
-    (unless (eq? region 'depth) (focus-window! win))
+    ;; The depth gadget decides about raising on release; a press in the
+    ;; content raises where the style's raise-on-click says so.
+    (unless (eq? region 'depth)
+      (focus-window! win (or (not (eq? region 'content))
+                             (window-setting win 'raise-on-click))))
     (case region
-      [(close minimize maximize depth)
-       (when (eq? button 'left)
-         (set! *drag* (make-drag region win button x y 0 0 0 0))
-         (invalidate! win))]   ; its style draws the button pressed
+      ;; buttons act on release, the window menu's on press; a double
+      ;; click on one may name an action of its own
+      [(close minimize maximize depth shade menu)
+       (cond
+         [(and (>= clicks 2)
+               (assq region (window-setting win 'button-double-click)))
+          => (lambda (a) (window-action! win (cdr a)))]
+         [(eq? region 'menu) ((part 'open-window-menu) win x y)]
+         [(eq? button 'left)
+          (set! *drag* (make-drag region win button x y 0 0 0 0))
+          (invalidate! win)])]   ; its style draws the button pressed
       [(frame) (void)]
       [(title)
        (cond
          [(eq? button 'right) ((part 'open-window-menu) win x y)]
-         [(and (eq? button 'left) (>= clicks 2)) (toggle-maximize! win)]
+         [(and (eq? button 'left) (>= clicks 2))
+          (window-action! win (window-setting win 'title-double-click))]
          [(eq? button 'left)
           (set! *drag* (make-drag 'move win button x y
                                   (window-x win) (window-y win) 0 0))
           (host-set-cursor! 'move)])]
-      [(content)
+      [(content scrollbar)
        (cond
          [(window-error win)
           (when (eq? button 'left)
@@ -786,7 +830,7 @@
     (when d
       (let ([win (drag-win d)] [kind (drag-kind d)])
         (case kind
-          [(close minimize maximize depth)
+          [(close minimize maximize depth shade)
            (set! *drag* #f)
            (when (and (memq win *windows*)
                       (eq? (window-at x y) win)
@@ -795,21 +839,32 @@
                [(close) (close-window! win)]
                [(minimize) (minimize-window! win)]
                [(maximize) (toggle-maximize! win)]
-               [(depth) (depth-window! win)]))]
+               [(depth) (depth-window! win)]
+               [(shade) (toggle-shade! win)]))]
           [(capture)
            (when (eq? button (drag-button d)) (set! *drag* #f))
            (let-values ([(lx ly) (window-local win x y)])
              (window-call win 'mouse-up lx ly button))]
-          [else (set! *drag* #f)])))
+          [else (set! *drag* #f)   ; a move or resize: an outline lands
+                (let ([o *drag-outline*])
+                  (set! *drag-outline* #f)
+                  (when o (apply set-geometry! win o)))])))
+    (set! *mouse-button* #f)
+    (let ([h (screen-at x y)])   ; a menu chooses on release, say
+      (when (and h (eq? (car h) 'surface)) (surface-mouse! h 'up x y button 1)))
     (update-hover! x y)
     (request-frame!)))
 
 ;; The window under the pointer scrolls, unless a surface over it (a bar,
-;; an open menu) is there.
+;; an open menu) is there; on a title whose style's title-wheel is shade,
+;; the wheel up shades and down unshades.
 (define (wm-wheel dx dy)
   (let ([h (screen-at *mouse-x* *mouse-y*)])
-    (when (and h (eq? (car h) 'window) (eq? (caddr h) 'content))
-      (window-call (cadr h) 'wheel dx dy))))
+    (when (and h (eq? (car h) 'window))
+      (case (caddr h)
+        [(content scrollbar) (window-call (cadr h) 'wheel dx dy)]
+        [(title) (when (eq? (window-setting (cadr h) 'title-wheel) 'shade)
+                   ((if (> dy 0) shade-window! unshade-window!) (cadr h)))]))))
 
 ;;; ------------------------------------------------------------------ keyboard
 
@@ -886,17 +941,18 @@
             [hover (window-hover win)]
             [pressed (window-pressed win)])
         ((part 'frame-under) win x y w h focused? hover pressed)
-        (let-values ([(cx cy cw ch) (content-rect win)])
-          (call-with-round-clip x y w h (frame-radius win)
-            (lambda ()
-              (call-with-clip cx cy cw ch
-                (lambda ()
-                  (call-with-translation cx cy
-                    (lambda ()
-                      (fill-rect 0 0 cw ch (window-bg win))
-                      (if (window-error win)
-                          ((part 'draw-crash-panel) win cw ch)
-                          (window-call win 'draw cw ch)))))))))
+        (unless (shaded? win)
+          (let-values ([(cx cy cw ch) (content-rect win)])
+            (call-with-round-clip x y w h (frame-radius win)
+              (lambda ()
+                (call-with-clip cx cy cw ch
+                  (lambda ()
+                    (call-with-translation cx cy
+                      (lambda ()
+                        (fill-rect 0 0 cw ch (window-bg win))
+                        (if (window-error win)
+                            ((part 'draw-crash-panel) win cw ch)
+                            (window-call win 'draw cw ch))))))))))
         ((part 'frame-over) win x y w h focused? hover pressed)))))
 
 ;; the last frame's time: drawing it, comparing its rows

@@ -69,13 +69,11 @@
                    (cond [red? (if down? (mix 'button-close ink 0.25)
                                    'button-close)]
                          [else (alpha ink (if down? 0.3 0.16))])))
-    (case kind
-      [(minimize) (fill-rect (- cx g 1) (- cy 1) (+ g g 2) 2 ink)]
-      [(maximize) (stroke-rect (- cx g 1) (- cy g 1) (+ g g 2) (+ g g 2)
-                               ink 2)]
-      [(close)
-       (draw-line (- cx g) (- cy g) (+ cx g) (+ cy g) ink 2)
-       (draw-line (+ cx g) (- cy g) (- cx g) (+ cy g) ink 2)])))
+    (let ([flags (list (cons 'ink ink) '(width . 2))])
+      (if (eq? kind 'close)
+          (ui-draw-glyph (- cx g) (- cy g) (* 2 g) (* 2 g) flags 'close)
+          (ui-draw-glyph (- cx g 1) (- cy g 1) (+ g g 2) (+ g g 2) flags
+                         kind)))))
 
 (define (lambda-draw-under win x y w h focused? hover pressed)
   (let*-values ([(th) (lambda-tab-height)] [(bw) (lambda-button-width)]

@@ -129,7 +129,9 @@
 (define (make-repl-port r)
   (let ([p (make-custom-textual-output-port "repl"
              (lambda (s start n)
-               (repl-emit! r 'output (substring s start (+ start n)))
+               (let ([out (substring s start (+ start n))])
+                 (when (memv #\alarm (string->list out)) (bell))
+                 (repl-emit! r 'output out))
                n)
              #f #f #f)])
     (set-textual-port-output-size! p 0)
@@ -876,6 +878,7 @@
     (if (and (eq? kind 'symbols) (string=? typed ""))
         (repl-insert! r "  ")
         (let ([items (rank-choices typed choices)])
+          (when (zero? (vector-length items)) (bell))   ; nothing to complete
           (if (and (= 1 (vector-length items))
                    (carries-on? kind (vector-ref items 0)))
               (accept-completion! r kind start (vector-ref items 0))

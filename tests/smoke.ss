@@ -3155,7 +3155,7 @@
                              (cairo-toy-font-face-create (font-family f)
                                                          (font-slant f)
                                                          (font-weight f))
-                             #f))))
+                             #f (font-options f)))))
 
 (with-quiet-status
  (lambda ()
@@ -3727,6 +3727,23 @@
                   (= (window-w new) w) (= (window-h new) h)
                   (not (window-error new))))
       (when new (close-window! new)))))
+
+;; The REPL rings the bell: for a #\alarm it writes, and for a Tab with
+;; nothing to complete.
+(let ([w (repl)] [rings 0] [real bell])
+  (set! bell (lambda () (set! rings (+ rings 1))))
+  (steps 2)
+  (type! "(display (integer->char 7))")
+  (press! 'return)
+  (let ([alarm (wait-for (lambda () (= rings 1)))])
+    (type! "(zqxjvwq")
+    (press! 'tab)
+    (steps 2)
+    (set! bell real)
+    (close-window! w)
+    (check "the REPL rings the bell for #\\alarm and a Tab with nothing to \
+            complete"
+           (and alarm (= rings 2)))))
 
 (check "frame time is sane" (< *frame-ms* 200))
 (printf "frame: ~,1f ms, heap: ~,1f MB\n" *frame-ms*

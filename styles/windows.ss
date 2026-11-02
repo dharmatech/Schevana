@@ -27,18 +27,8 @@
                  (if close?
                      (if down? #xf1707a #xe81123)
                      (alpha 'text (if down? 0.16 0.09)))))
-    (case kind
-      [(minimize) (fill-rect (- cx 5) cy 10 1 ink)]
-      [(maximize)
-       (if (maximized? win)
-           (begin
-             (stroke-rect (- cx 5) (- cy 3) 8 8 ink)
-             (fill-rect (- cx 3) (- cy 5) 8 1 ink)
-             (fill-rect (+ cx 4) (- cy 5) 1 8 ink))
-           (stroke-rect (- cx 5) (- cy 5) 10 10 ink))]
-      [(close)
-       (draw-line (- cx 5) (- cy 5) (+ cx 5) (+ cy 5) ink 1)
-       (draw-line (+ cx 5) (- cy 5) (- cx 5) (+ cy 5) ink 1)])))
+    (ui-draw-glyph (- cx 5) (- cy 5) 10 10 (list (cons 'ink ink))
+                   (ui-frame-glyph win kind))))
 
 (define (windows-draw-under win x y w h focused? hover pressed)
   (let* ([th (title-height)] [r (windows-radius win)]

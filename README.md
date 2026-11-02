@@ -125,6 +125,8 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (override! 'ui-font-size 15)               ; ... in every style
 (theme-source 'accent)                     ; which layer gives it
+(set-theme! 'title-double-click 'shade)    ; a double click rolls a window up
+(override! 'mouse-doc #t)                  ; what the buttons do, in the top bar
 (add-status-segment! 'hi (lambda () (format "~a windows" (length (windows)))))
 (bind-key! '(ctrl shift #\l) life)
 ; watch it in (monitor); Ctrl+C or kill!
@@ -204,21 +206,23 @@ styles/      styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
-             default keys
+             default keys, the commands that arrange the windows
 kits/        complete: a completion list beside a caret (matching, keys,
              clicks, placement); edit: text editing, pure, and a text's
-             rows, computed only as far as they are shown; ui:
+             rows, computed only as far as they are shown; px: pixel art
+             on whole device pixels (rectangles, bevels, small pictures,
+             text); ui:
              immediate-mode widgets (buttons, text fields and areas,
              dropdowns, tabs, checkboxes, a table, a tree, chips, a date
              picker, scroll views, tooltips, a dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
-src/styles   the frame's parts and its plain built-ins, previews
+src/styles   the frame's parts and its plain built-ins
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!
 src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
-src/gfx      immediate-mode drawing API, colors, fonts, layers; the two
-             screen buffers
+src/gfx      immediate-mode drawing API, colors and stipples, fonts and
+             ink, layers; the two screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
 src/theme    settings in layers, rules, palettes, styles, parts; save/load
 src/ffi      the only file that knows about C (SDL3 + Cairo)
@@ -353,13 +357,45 @@ Decisions worth keeping in mind for the real design:
   `bar`, `toast`), so a style can color what sits there, an app's own
   cells too, by its `'places`. `define-window-style`, the older form,
   still loads.
+  Styles share their drawing too. A stipple, `(stipple ink paper row
+  ...)`, is a pattern used wherever a color is (a fill, a line, text, a
+  theme key's value), tiled on the screen's device pixels where px's
+  rule puts each logical pixel, so it lines up across windows at any
+  scale. `text-ink` measures what a string inks as `*cr*`
+  draws it (capitals centered on a line), and a font made with `'crisp`
+  is not antialiased. `kits/px.ss` draws on whole device pixels at any
+  scale, never antialiased: `px-fill`, `px-bevel` (Motif's corners or
+  the Mac's), `px-ring`, `px-bits` for small pictures, `px-text`. The
+  kit's `ui-draw-glyph` draws a window's buttons (`close`, `minimize`,
+  `maximize`, `restore`, `shade`) and the triangles (`up`, `down`,
+  `left`, `right`), which the styles share.
   The two 1980s Lisp environments were matched against real screens:
   Interlisp (Interlisp-D/Medley, Xerox PARC) with its black title bars, and
   Genera (Symbolics Lisp Machines), built to the margins its 1986 manuals
   specify, with the window's label in the bottom-left corner, which is
   also where you drag it: a style can list any area as its `'title`. Each
   brings the palette of the same name and its wallpaper: Interlisp's is
-  the dotted desktop shade (the `wallpaper` theme key).
+  the dotted desktop shade, a stipple (the `wallpaper` theme key).
+- **How it feels is settings too.** Shared code does what a style
+  chooses, each a setting whose default is today's feel: a double click
+  on the title (`title-double-click`: `maximize`, `shade` or `none`) or
+  on a frame button (`button-double-click`: `((menu . close))` is CDE's);
+  a shaded window, only its frame's top and bottom (`shade-window!`,
+  `unshade-window!`, `shaded?`), from a region of kind `shade`, the
+  title's double click or its wheel (`title-wheel`); dragging live or as
+  an outline (`drag-feedback`, drawn by the `draw-drag-outline` part);
+  the window manager's resize edges (`frame-edge`, `frame-corner`; a
+  style's regions may resize from the top too, `resize-t`, `resize-tl`,
+  `resize-tr`); whether a click in a window raises it
+  (`raise-on-click`); the bell, `(bell)` (`none`, or `screen` or
+  `window` flashed inverted); menus (`menu-choose`: `click` or
+  `release`, `menu-blink`, `menu-hover`: `fill` or `outline`); scroll
+  bars (`scrollbar-side`: `right`, `left`, or `outside` in a margin the
+  frame leaves; `scrollbar-show`: `always` or `hover`); and the mouse
+  documentation, `(mouse-doc)`, what each button does under the pointer
+  as data (from the window's regions, a kit widget's `'doc`, an app's
+  `'mouse-doc`, a surface's `'doc`), which the top bar shows where
+  `mouse-doc` is on.
 - **Every frame is drawn from scratch, where something changed.** The
   canvas is the exact screen. A change says where it shows: input to a
   window and `(invalidate! win)` ask for the window's extent (its frame

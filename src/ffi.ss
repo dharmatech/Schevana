@@ -180,6 +180,7 @@
 (define CAIRO_OPERATOR_CLEAR 0)
 (define CAIRO_OPERATOR_SOURCE 1)
 (define CAIRO_OPERATOR_OVER 2)
+(define CAIRO_OPERATOR_DIFFERENCE 23)
 (define-foreign cairo-set-operator "cairo_set_operator" (uptr int) void)
 (define-foreign cairo-set-source-rgba "cairo_set_source_rgba"
   (uptr double double double double) void)
@@ -231,3 +232,13 @@
   (uptr int) void)
 (define CAIRO_EXTEND_REPEAT 1)
 (define CAIRO_FILTER_NEAREST 3)
+;; Six doubles xx yx xy yy x0 y0 at the address, from user space.
+(define-foreign cairo-pattern-set-matrix "cairo_pattern_set_matrix"
+  (uptr uptr) void)
+;; text drawn without antialiasing (a crisp font)
+(define CAIRO_ANTIALIAS_NONE 1)
+(define-foreign cairo-font-options-create "cairo_font_options_create" () uptr)
+(define-foreign cairo-font-options-set-antialias
+  "cairo_font_options_set_antialias" (uptr int) void)
+(define-foreign cairo-set-font-options "cairo_set_font_options"
+  (uptr uptr) void)

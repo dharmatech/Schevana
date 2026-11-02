@@ -2,7 +2,8 @@
 ;;; context, pixmaps, Life's generations and grid, and invalidation; the
 ;;; edit kit (editing, rows and their lazy layout), the widget kit's dates
 ;;; and layout, Tasks' own procedures, the window manager's surfaces
-;;; and strips, and styles: derived ones, parts by name, a window's own.
+;;; and strips, and styles: derived ones, parts by name, a window's own;
+;;; the shared drawing primitives and the behaviors a style chooses.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -2282,7 +2283,8 @@
                     (not hover) (= keys 1)))))))
 
 ;; A surface of one's own with a strip on the left: it is drawn over the
-;; windows, takes the presses on it, and maximized windows go beside it.
+;; windows, takes the presses and releases on it, and maximized windows
+;; go beside it.
 (let* ([pressed '()]
        [w (open-window "Beside" 'size '(200 . 100) 'pos '(300 . 200))])
   (define-surface dock 15
@@ -2317,7 +2319,8 @@
                                           (taskbar-height))))
                       (equal? (list dx dy dw dh) at)
                       (= px #xffcc3300)
-                      (equal? pressed '((down dock left) (move dock #f)))
+                      (equal? pressed '((up dock left) (down dock left)
+                                        (move dock #f)))
                       (equal? hover '(surface dock dock))
                       (= back 0))))))))
 
@@ -3049,6 +3052,1157 @@
               (set! now-ms real)
               (close-window! w)
               (and seen (equal? (car seen) (cadr seen))))))))
+
+;;; ------------------------------------------------------------------
+;;; shared drawing primitives: stipples, ink, crisp fonts, pixel art,
+;;; glyphs
+
+(for-each close-window! (windows))
+(reset-theme!)
+
+;; An image's pixels as rows of characters, by colors ((pixel . char)
+;; ...); # for any other.
+(define (pixel-rows surface key)
+  (let ([w (cairo-image-surface-get-width surface)]
+        [h (cairo-image-surface-get-height surface)])
+    (map (lambda (y)
+           (list->string
+            (map (lambda (x)
+                   (let ([p (assv (pixel-at surface x y) key)])
+                     (if p (cdr p) #\#)))
+                 (iota w))))
+         (iota h))))
+
+(define gray-light-dark
+  '((#xff808080 . #\.) (#xffffffff . #\L) (#xff000000 . #\D)))
+
+;; A bevel on gray in an 8 × 8 image at 100 %.
+(define (bevel-rows h n . rule)
+  (pixel-rows (image 8 8 1 (lambda ()
+                             (fill-rect 0 0 8 8 #x808080)
+                             (apply px-bevel 1 1 6 h #xffffff #x000000 n
+                                    rule)))
+              gray-light-dark))
+
+;; Written from the sources' facts: Motif's segments (Xm/Draw.c:98-116:
+;; the top rows to the right less their depth, the left sides from the
+;; depth down, the dark sides a pixel in, drawn last) and Platinum's
+;; window edge (platinum.md 5.1: the highlight to W-3 and H-3, the shade
+;; from 2, its two off corners the face's).
+(check "px-bevel at 1 and 2 pixels, Motif's corners: light owns them, then \
+        stairs"
+       (and (equal? (bevel-rows 5 1)
+                    '("........" ".LLLLLL." ".L....D." ".L....D." ".L....D."
+                      ".LDDDDD." "........" "........"))
+            (equal? (bevel-rows 6 2)
+                    '("........" ".LLLLLL." ".LLLLLD." ".LL..DD." ".LL..DD."
+                      ".LLDDDD." ".LDDDDD." "........"))))
+(check "px-bevel at 1 and 2 pixels, the Mac's corners keep what is under"
+       (and (equal? (bevel-rows 5 1 'mac)
+                    '("........" ".LLLLL.." ".L....D." ".L....D." ".L....D."
+                      "..DDDDD." "........" "........"))
+            (equal? (bevel-rows 6 2 'mac)
+                    '("........" ".LLLLL.." ".LLLL.D." ".LL..DD." ".LL..DD."
+                      ".L.DDDD." "..DDDDD." "........"))))
+
+;; At a fractional scale and translation (a miniature), every pixel of
+;; bevels, rings and pictures is one of their colors: none antialiased.
+(define pixel-art-roles
+  (list (cons #\a #xffffff) (cons #\b #x000000) (cons #\c #xcc3333)))
+(check "at 125, 150 and 175 % every pixel of a bevel or a map is its color"
+       (for-all
+        (lambda (s)
+          (let ([img (image 120 90 s
+                            (lambda ()
+                              (fill-rect 0 0 120 90 #x808080)
+                              (cairo-translate *cr* 0.37 0.61)
+                              (px-bevel 3 2 17 11 #xffffff #x000000 2)
+                              (px-bevel 25 3 13 9 #x000000 #xffffff 2 'mac)
+                              (px-ring 41 4 9 7 #xcc3333)
+                              (px-bits 3 20 '("aab.c" "abbcc" ".c.ba")
+                                       pixel-art-roles)
+                              (px-bits 20 20 '("abc" "bcb" "cba")
+                                       pixel-art-roles 'stretch '(1 . 11))))])
+            (for-all (lambda (row) (not (memv #\# (string->list row))))
+                     (pixel-rows img (append gray-light-dark
+                                             '((#xffcc3333 . #\c)))))))
+        '(1.25 1.5 1.75)))
+(check "px-bits stretches its column to the width and skips clear cells"
+       (equal? (pixel-rows (image 8 2 1
+                                  (lambda ()
+                                    (fill-rect 0 0 8 2 #x808080)
+                                    (px-bits 1 0 '("abd" "d.b")
+                                             pixel-art-roles
+                                             'stretch '(1 . 6))))
+                           gray-light-dark)
+               '(".LDDDD.." "......D.")))
+
+;; A stipple in two windows at odd places, at scales Settings offers and
+;; others (Xft.dpi 128 is 133 %): every device pixel their content covers
+;; whole is as px's rule places the pattern: device pixel d is logical
+;; pixel ceiling((d + 1/2)/s) - 1 (half up, a tie the lower).
+(define-style test-plain "Plain")
+(check "a stipple lines up across two windows at 100, 125, 133, 150, 165, \
+        175, 200 and 270 %, every pixel of their content as px places it"
+       (let* ([rows '("#.." ".#." "#.#")]
+              [st (apply stipple #x000000 #xffffff rows)]
+              [ws (map (lambda (pos)
+                         (open-window "Stippled" 'size '(201 . 101) 'pos pos
+                                      'window-style 'test-plain
+                                      'draw (lambda (win w h)
+                                              (fill-rect 0 0 w h st))))
+                       '((101 . 101) (357 . 163)))]
+              [ink (color->pixel #x000000)])
+         (define (inked? s x y)
+           (let ([u (- (ceiling (/ (+ x 1/2) s)) 1)]
+                 [v (- (ceiling (/ (+ y 1/2) s)) 1)])
+             (char=? #\# (string-ref (list-ref rows (mod v 3)) (mod u 3)))))
+         (let ([ok
+                (for-all
+                 (lambda (pct)
+                   (set-theme! 'scale pct)
+                   (steps 2)
+                   (cairo-surface-flush *canvas*)
+                   (let ([s (/ pct 100)])
+                     (for-all
+                      (lambda (w)
+                        (let-values ([(cx cy cw ch) (content-rect w)])
+                          (let ([x0 (ceiling (* s cx))] [y0 (ceiling (* s cy))]
+                                [x1 (floor (* s (+ cx cw)))]
+                                [y1 (floor (* s (+ cy ch)))])
+                            (let loop ([x x0] [y y0])
+                              (cond
+                                [(>= y y1) #t]
+                                [(>= x x1) (loop x0 (+ y 1))]
+                                [(eq? (= (pixel-at *canvas* x y) ink)
+                                      (inked? s x y))
+                                 (loop (+ x 1) y)]
+                                [else #f])))))
+                      ws)))
+                 '(100 125 133 150 165 175 200 270))])
+           (set-theme! 'scale 0)
+           (steps 1)
+           (for-each close-window! ws)
+           ok)))
+
+(check "at 113 % (a tie in floating point a hair off) px-fill's checker is \
+        a stipple's, pixel for pixel"
+       (let ([at (lambda (thunk)
+                   (image 136 23 1.13 (lambda ()
+                                        (fill-rect 0 0 120 20 #x808080)
+                                        (thunk))))])
+         (zero? (max-diff
+                 (at (lambda ()
+                       (do ([i 0 (+ i 1)]) ((= i 2400))
+                         (let ([u (mod i 120)] [v (quotient i 120)])
+                           (px-fill u v 1 1 (if (even? (+ u v))
+                                                #x000000
+                                                #xffffff))))))
+                 (at (lambda ()
+                       (px-fill 0 0 120 20
+                                (stipple #x000000 #xffffff "#." ".#"))))))))
+
+(define (rgba c) (call-with-values (lambda () (color-rgba c)) list))
+(check "a stipple's color-rgba is its coverage average, a clear paper's too"
+       (and (equal? (rgba (stipple #xffffff #x000000 "#..." "...."))
+                    '(0.125 0.125 0.125 1.0))
+            (equal? (rgba (stipple #xff0000 #f "#." ".."))
+                    '(1.0 0.0 0.0 0.25))
+            ;; a theme key's stipple, through mix
+            (begin (set-theme! 'test-gray (stipple 'text #f "#." ".."))
+                   (equal? (mix 'test-gray 'test-gray 0.5)
+                           (color->fixnum 'text)))))
+(reset-theme!)
+
+(check "a stipple given as a color is saved and loads back"
+       (let ([gray (stipple 'text #f "#." "..")])
+         (set-theme! 'accent-2 gray)
+         (save-theme!)
+         (reset-theme!)
+         (load-saved-theme!)
+         (let ([back (theme 'accent-2)])
+           (reset-theme!)
+           (save-theme!)
+           (equal? back gray))))
+
+(check "text-ink: a capital's ink stands on the baseline, as wide as it \
+        inks; font-descent is the font's"
+       (let-values ([(l top w h) (text-ink "H" 'ui)]
+                    [(l2 top2 w2 h2) (text-ink "Hi there" 'ui)])
+         (and (< top 0) (< (abs (+ top h)) 1) (> w 0) (> w2 w)
+              (= (font-descent 'ui) (vector-ref (font-metrics 'ui) 1))
+              (> (font-descent 'ui) 0))))
+
+;; How many pixels of text drawn on white are neither white nor black.
+(define (gray-pixels font)
+  (let ([img (image 120 30 1 (lambda ()
+                               (fill-rect 0 0 120 30 #xffffff)
+                               (draw-text 4 4 "Crisp text" #x000000 font)))])
+    (apply + (map (lambda (row) (length (filter (lambda (ch) (char=? ch #\#))
+                                                (string->list row))))
+                  (pixel-rows img '((#xffffffff . #\.) (#xff000000 . #\k)))))))
+(check "a crisp font is its own record and draws no antialiased pixel"
+       (let ([crisp (font "DejaVu Sans" 12 'crisp)]
+             [plain (font "DejaVu Sans" 12)])
+         (and (not (eq? crisp plain)) (eq? crisp (font "DejaVu Sans" 12 'crisp))
+              (zero? (gray-pixels crisp)) (> (gray-pixels plain) 0))))
+
+(check "px-text puts the baseline and the pen on whole device pixels; \
+        px-fit cuts until the ink fits"
+       (let ([at (lambda (thunk) (image 100 40 1.5 thunk))])
+         (and (zero? (max-diff
+                      (at (lambda () (px-text 10.3 20.4 "Etched" 'text 'ui)))
+                      (at (lambda ()
+                            (draw-text (/ 15 1.5) (- (/ 31 1.5)
+                                                     (font-ascent 'ui))
+                                       "Etched" 'text 'ui)))))
+              (let ([s (px-fit "A rather long window title" 60 'ui)])
+                (and (string-suffix? "…" s)
+                     (let-values ([(l t w h) (text-ink s 'ui)]) (<= w 60)))))))
+
+;; Each window glyph and triangle inks inside its box and nowhere else.
+(check "ui-draw-glyph's window glyphs and triangles ink their box only"
+       (for-all
+        (lambda (name)
+          (let ([rows (pixel-rows
+                       (image 24 24 1
+                              (lambda ()
+                                (fill-rect 0 0 24 24 #x808080)
+                                (ui-draw-glyph 6 6 12 12
+                                               '((ink . #x000000)) name)))
+                       '((#xff808080 . #\.)))])
+            (and (exists (lambda (r) (memv #\# (string->list r))) rows)
+                 (for-all (lambda (y)
+                            (or (<= 5 y 18)
+                                (not (memv #\# (string->list
+                                                (list-ref rows y))))))
+                          (iota 24)))))
+        '(close minimize maximize restore shade up down left right)))
+
+;;; ------------------------------------------------------------------
+;;; behaviors a style chooses (each a setting, today's feel by default)
+
+(for-each close-window! (windows))
+(reset-theme!)
+(steps 1)
+
+;; win's region at its own point (lx, ly).
+(define (region-at win lx ly)
+  (window-region win (+ (window-x win) lx) (+ (window-y win) ly)))
+
+;; A left drag on the screen from (x0, y0) to (x1, y1).
+(define (drag-on! x0 y0 x1 y1)
+  (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1)
+           `(mouse-move ,x1 ,y1) `(mouse-up ,x1 ,y1 left))
+  (steps 1))
+
+(define (geometry w) (list (window-x w) (window-y w) (window-w w) (window-h w)))
+
+(let ([w (open-window "Edges" 'size '(300 . 200) 'pos '(200 . 150))])
+  (define (at)
+    (map (lambda (p) (region-at w (car p) (cdr p)))
+         (list (cons (- (window-w w) 3) 100) (cons (- (window-w w) 7) 100)
+               (cons (- (window-w w) 3) (- (window-h w) 17)))))
+  (check "the resize edges are settings: frame-edge wide, frame-corner long, \
+          an edge of 0 none"
+         (and (equal? (at) '(resize-r content resize-r))
+              (begin (set-theme! 'frame-edge 9) (set-theme! 'frame-corner 20)
+                     (equal? (at) '(resize-r resize-r resize-br)))
+              (begin (set-theme! 'frame-edge 0)
+                     (equal? (at) '(content content content)))))
+  (reset-theme!)
+  (close-window! w))
+
+;; A style resizing from its top edge and corners, the window manager's
+;; edges off.
+(define (test-top-regions win)
+  (let ([w (window-w win)])
+    (list (list 'resize-tl 0 0 8 8) (list 'resize-tr (- w 8) 0 8 8)
+          (list 'resize-t 8 0 (- w 16) 4))))
+(define-style test-top "Top resizes"
+  'frame-regions 'test-top-regions 'frame-edge 0)
+
+(check "a style's regions move the clicks: its top edge and corners resize \
+        from the top, the other sides staying"
+       (let ([w (open-window "Top" 'size '(300 . 200) 'pos '(300 . 300)
+                             'window-style 'test-top)])
+         (steps 1)
+         (let* ([g0 (geometry w)] [x (car g0)] [y (cadr g0)]
+                [r (+ x (caddr g0))] [b (+ y (cadddr g0))])
+           (drag-on! (+ x 100) (+ y 2) (+ x 100) (- y 28))
+           (let ([g1 (geometry w)])
+             (drag-on! (+ x 3) (- y 27) (- x 17) (- y 37))
+             (let ([g2 (geometry w)])
+               (drag-on! (- r 3) (- y 37) (+ r 17) (- y 47))
+               (let ([g3 (geometry w)] [cursor (region-cursor w 'resize-t)]
+                     [edge (region-at w (- (window-w w) 3) 100)])
+                 (close-window! w)
+                 (and (equal? g1 (list x (- y 30) (caddr g0)
+                                       (+ (cadddr g0) 30)))
+                      (equal? g2 (list (- x 20) (- y 40) (+ (caddr g0) 20)
+                                       (+ (cadddr g0) 40)))
+                      (equal? g3 (list (- x 20) (- y 50) (+ (caddr g0) 40)
+                                       (+ (cadddr g0) 50)))
+                      (= b (+ (cadr g3) (cadddr g3)))
+                      (eq? cursor 'resize-ns) (eq? edge 'content))))))))
+
+;; A left double click at screen point (x, y).
+(define (double-click! x y)
+  (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left)
+           `(mouse-down ,x ,y left 2) `(mouse-up ,x ,y left))
+  (steps 1))
+
+(check "a double click on the title does what title-double-click names: \
+        maximize (by default), minimize or nothing"
+       (let ([w (open-window "Twice" 'size '(300 . 200) 'pos '(250 . 200))])
+         (define (twice!)
+           (double-click! (+ (window-x w) 150) (+ (window-y w) 10))
+           (window-state w))
+         (let* ([a (twice!)]
+                [b (begin (restore-window! w)
+                          (set-theme! 'title-double-click 'none)
+                          (twice!))]
+                [c (begin (set-theme! 'title-double-click 'minimize)
+                          (twice!))])
+           (reset-theme!)
+           (close-window! w)
+           (equal? (list a b c) '(maximized normal minimized)))))
+
+;; A style with a window-menu button, a double click on which closes the
+;; window (CDE's).
+(define (test-menu-regions win) (list (list 'menu 4 4 20 20)))
+(define-style test-menu "Menu button"
+  'frame-regions 'test-menu-regions 'button-double-click '((menu . close)))
+
+(check "a press on a frame's menu button opens the window's menu; a double \
+        click there does what button-double-click names"
+       (let* ([w (open-window "Menu button" 'size '(300 . 200)
+                              'pos '(250 . 200) 'window-style 'test-menu)]
+              [x (+ (window-x w) 10)] [y (+ (window-y w) 10)])
+         (steps 1)
+         (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1))
+         (steps 1)
+         (let ([opened (and *menu*
+                            (equal? (menu-tag *menu*) (cons 'window w)))])
+           (inject! `(mouse-up ,x ,y left) `(mouse-down ,x ,y left 2)
+                    `(mouse-up ,x ,y left))
+           (steps 1)
+           (and opened (not *menu*) (not (memq w (windows)))))))
+
+;; A window counting its draws and resizes.
+(define (counting-window title . opts)
+  (let ([n (vector 0 0)])
+    (values (apply open-window title 'size '(300 . 200) 'pos '(250 . 200)
+                   'draw (lambda (win w h)
+                           (vector-set! n 0 (+ 1 (vector-ref n 0))))
+                   'resize (lambda (win w h)
+                             (vector-set! n 1 (+ 1 (vector-ref n 1))))
+                   opts)
+            n)))
+
+(check "a shaded window is its frame's top and bottom: its content is not \
+        drawn, it keeps its content size, its app hears no resize, and a \
+        move keeps it shaded"
+       (let-values ([(w n) (counting-window "Shade me")])
+         (steps 1)
+         (let-values ([(cw ch) (window-content-size w)]
+                      [(l t r b) (frame-insets w)])
+           (shade-window! w)
+           (vector-set! n 0 0)
+           (invalidate!)
+           (steps 1)
+           (let ([shaded (list (shaded? w) (window-h w) (vector-ref n 0))])
+             (move-window! w 260 220)
+             (let ([moved (list (shaded? w) (window-h w))])
+               (unshade-window! w)
+               (steps 1)
+               (let-values ([(cw2 ch2) (window-content-size w)])
+                 (close-window! w)
+                 (and (equal? shaded (list #t (+ t b) 0))
+                      (equal? moved (list #t (+ t b)))
+                      (= cw cw2) (= ch ch2) (zero? (vector-ref n 1))
+                      (> (vector-ref n 0) 0))))))))
+
+;; A style with a shade button at its top left.
+(define (test-shade-regions win) (list (list 'shade 4 4 20 20)))
+(define-style test-shade "Shade button" 'frame-regions 'test-shade-regions)
+
+(check "a window shades by its style's triggers: a double click on the \
+        title, the wheel on it (up shades, down unshades), a shade button, \
+        the window menu; maximizing unshades"
+       (let-values ([(w n) (counting-window "Triggers")])
+         (define (title-x) (+ (window-x w) 150))
+         (define (title-y) (+ (window-y w) 10))
+         (define (wheel! dy)
+           (inject! `(mouse-move ,(title-x) ,(title-y)) `(wheel 0 ,dy))
+           (steps 1)
+           (shaded? w))
+         (set-theme! 'title-double-click 'shade)
+         (double-click! (title-x) (title-y))
+         (let ([a (shaded? w)])
+           (double-click! (title-x) (title-y))
+           (let ([b (shaded? w)])
+             (set-theme! 'title-wheel 'shade)
+             (let* ([c (wheel! 1)] [d (wheel! -1)])
+               (reset-theme!)
+               (let ([e (wheel! 1)])   ; title-wheel none again: nothing
+                 (close-window! w)
+                 (let ([s (open-window "Button" 'size '(300 . 200)
+                                       'pos '(250 . 200)
+                                       'window-style 'test-shade)])
+                   (steps 1)
+                   (drag-on! (+ (window-x s) 10) (+ (window-y s) 10)
+                             (+ (window-x s) 10) (+ (window-y s) 10))
+                   (let ([f (shaded? s)])
+                     (inject! `(mouse-move ,(+ (window-x s) 150)
+                                           ,(+ (window-y s) 10))
+                              `(mouse-down ,(+ (window-x s) 150)
+                                           ,(+ (window-y s) 10) right 1))
+                     (steps 1)
+                     (let ([offered (map car (filter pair?
+                                                     (menu-entries *menu*)))])
+                       (close-menu!)
+                       (maximize-window! s)
+                       (let ([g (list (shaded? s) (window-state s))])
+                         (close-window! s)
+                         (and (equal? (list a b c d e f) '(#t #f #t #f #f #t))
+                              (member "Unshade" offered)
+                              (equal? g '(#f maximized)))))))))))))
+
+(check "the window menu offers Shade only where the style shades"
+       (let ([w (open-window "Plain" 'size '(300 . 200) 'pos '(250 . 200))])
+         (open-window-menu w 300 220)
+         (let ([offered (map car (filter pair? (menu-entries *menu*)))])
+           (close-menu!)
+           (close-window! w)
+           (not (member "Shade" offered)))))
+
+;; A full render of the screen now.
+(define (full-render)
+  (let ([s (cairo-image-surface-create CAIRO_FORMAT_ARGB32 *canvas-pw*
+                                       *canvas-ph*)])
+    (render-full-into! s)
+    s))
+
+;; Is the screen what a full render draws?
+(define (screen-whole?)
+  (let ([ref (full-render)])
+    (let ([d (max-diff *canvas* ref)]) (cairo-surface-destroy ref) (zero? d))))
+
+(check "an outline drag leaves the window until the release lands it in \
+        the outline, which the desktop draws; each move asks for the old \
+        and the new outline only, and the frames stay the whole screen's"
+       (let ([w (open-window "Outline" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set-theme! 'drag-feedback 'outline)
+         (steps 1)
+         (let* ([g (geometry w)] [x0 (car g)] [y0 (cadr g)]
+                [ww (caddr g)] [wh (cadddr g)]
+                [tx (+ x0 150)] [ty (+ y0 10)])
+           (wm-mouse-move tx ty)
+           (wm-mouse-down tx ty 'left 1)
+           (steps 1)
+           (set! *dirty* #f)
+           (wm-mouse-move (+ tx 40) (+ ty 30))
+           (let ([first *dirty*] [o1 *drag-outline*] [g1 (geometry w)])
+             (set! *dirty* #f)
+             (wm-mouse-move (+ tx 60) (+ ty 50))
+             (let ([second *dirty*])
+               (steps 1)
+               (let* ([whole1 (screen-whole?)]
+                      [with (full-render)]
+                      [without (fluid-let ([*drag-outline* #f]) (full-render))]
+                      [drawn (> (max-diff with without) 0)])
+                 (cairo-surface-destroy with)
+                 (cairo-surface-destroy without)
+                 (wm-mouse-up (+ tx 60) (+ ty 50) 'left)
+                 (steps 1)
+                 (let ([landed (geometry w)] [whole2 (screen-whole?)])
+                   (reset-theme!)
+                   (close-window! w)
+                   (and (equal? g1 g)
+                        (equal? o1 (list (+ x0 40) (+ y0 30) ww wh))
+                        (equal? first (list (+ x0 40) (+ y0 30)
+                                            (+ x0 40 ww) (+ y0 30 wh)))
+                        (equal? second (list (+ x0 40) (+ y0 30)
+                                             (+ x0 60 ww) (+ y0 50 wh)))
+                        drawn whole1 whole2 (not *drag-outline*)
+                        (equal? landed (list (+ x0 60) (+ y0 50) ww wh))))))))))
+
+(check "an outline resize lands the outline's size at the release"
+       (let ([w (open-window "Outline" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set-theme! 'drag-feedback 'outline)
+         (steps 1)
+         (let* ([g (geometry w)] [r (+ (car g) (caddr g) -2)]
+                [b (+ (cadr g) (cadddr g) -2)])
+           (inject! `(mouse-move ,r ,b) `(mouse-down ,r ,b left 1)
+                    `(mouse-move ,(+ r 30) ,(+ b 20)))
+           (steps 1)
+           (let ([during (geometry w)])
+             (inject! `(mouse-up ,(+ r 30) ,(+ b 20) left))
+             (steps 1)
+             (let ([after (geometry w)])
+               (reset-theme!)
+               (close-window! w)
+               (and (equal? during g)
+                    (equal? after (list (car g) (cadr g) (+ (caddr g) 30)
+                                        (+ (cadddr g) 20)))))))))
+
+(check "raise-on-click #f: a press in a window's content gives it the \
+        keyboard without raising it; a press on its title raises it"
+       (let* ([a (open-window "Under" 'size '(300 . 200) 'pos '(200 . 200))]
+              [b (open-window "Over" 'size '(300 . 200) 'pos '(350 . 260))]
+              [press! (lambda (x y)
+                        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                                 `(mouse-up ,x ,y left))
+                        (steps 1)
+                        (list (focused-window) (car (windows))))])
+         (steps 1)
+         (set-theme! 'raise-on-click #f)
+         (let* ([content (press! (+ (window-x a) 40) (+ (window-y a) 100))]
+                [title (press! (+ (window-x a) 150) (+ (window-y a) 10))])
+           (raise-window! b)
+           (reset-theme!)
+           (let ([default (press! (+ (window-x a) 40) (+ (window-y a) 100))])
+             (close-window! a)
+             (close-window! b)
+             (and (equal? content (list a b)) (equal? title (list a a))
+                  (equal? default (list a a)))))))
+
+;; The canvas's pixel at the device pixel (x, y).
+(define (device-pixel x y)
+  (cairo-surface-flush *canvas*)
+  (pixel-at *canvas* x y))
+
+(define (inverted p) (fxior #xff000000 (fxxor (fxand p #xffffff) #xffffff)))
+
+(check "the bell flashes the screen (or the focused window) inverted for \
+        100 ms, at 100 and 200 %, then the screen is as it was; none rings \
+        nothing"
+       (let* ([real now-ms] [t (now-ms)]
+              [w (open-window "Bell" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set! now-ms (lambda () t))
+         (let ([ok
+                (for-all
+                 (lambda (pct)
+                   (set-theme! 'scale pct)
+                   (steps 2)
+                   (let* ([s *scale*]
+                          [in (list (exact (round (* s 300)))
+                                    (exact (round (* s 300))))]
+                          [out (list (exact (round (* s 60)))
+                                     (exact (round (* s 600))))]
+                          [px (lambda (p) (apply device-pixel p))]
+                          [before (map px (list in out))])
+                     (define (rung how)
+                       (set-theme! 'bell how)
+                       (steps 1)
+                       (bell)
+                       (steps 1)
+                       (let ([flash (map px (list in out))])
+                         (set! t (+ t 99))
+                         (steps 1)
+                         (let ([still (px in)])
+                           (set! t (+ t 1))
+                           (steps 2)
+                           (list flash still (map px (list in out))
+                                 (screen-whole?)))))
+                     (let ([screen (rung 'screen)] [window (rung 'window)]
+                           [none (rung 'none)])
+                       (and (equal? (car screen) (map inverted before))
+                            (= (cadr screen) (inverted (car before)))
+                            (equal? (caddr screen) before) (cadddr screen)
+                            (equal? (car window) (list (inverted (car before))
+                                                       (cadr before)))
+                            (equal? (caddr window) before) (cadddr window)
+                            (equal? (car none) before)))))
+                 '(100 200))])
+           (set! now-ms real)
+           (reset-theme!)
+           (set-theme! 'scale 0)
+           (steps 1)
+           (close-window! w)
+           ok)))
+
+;; The middle of the open menu's entry labeled label.
+(define (menu-entry-point label)
+  (let* ([i (list-index (lambda (e) (and (pair? e) (string=? (car e) label)))
+                        (menu-entries *menu*))]
+         [a (assv i (placed-menu-areas *menu*))])
+    (values (+ (cadr a) (quotient (cadddr a) 2))
+            (+ (caddr a) (quotient (list-ref a 4) 2)))))
+
+(check "menu-choose release: a menu opened by a press chooses the entry the \
+        button is released over; click (today's) leaves it open"
+       (let ([w (open-window "Menus" 'size '(300 . 200) 'pos '(250 . 200))])
+         (define (press-drag-release!)
+           (let ([tx (+ (window-x w) 150)] [ty (+ (window-y w) 10)])
+             (inject! `(mouse-move ,tx ,ty) `(mouse-down ,tx ,ty right 1))
+             (steps 1)
+             (let-values ([(mx my) (menu-entry-point "Minimize")])
+               (inject! `(mouse-move ,mx ,my) `(mouse-up ,mx ,my right))
+               (steps 1)
+               (let ([r (list (window-state w) (and *menu* #t))])
+                 (close-menu!)
+                 (focus-window! w)
+                 (steps 1)
+                 r))))
+         (let ([click (press-drag-release!)])
+           (set-theme! 'menu-choose 'release)
+           (let ([release (press-drag-release!)])
+             (reset-theme!)
+             (close-window! w)
+             (and (equal? click '(normal #t))
+                  (equal? release '(minimized #f)))))))
+
+(check "menu-choose release: released over its opener the menu stays open, \
+        and a click then chooses"
+       (let ([w (open-window "Sticky" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set-theme! 'menu-choose 'release)
+         (let ([tx (+ (window-x w) 150)] [ty (+ (window-y w) 10)])
+           (inject! `(mouse-move ,tx ,ty) `(mouse-down ,tx ,ty right 1)
+                    `(mouse-up ,tx ,ty right))
+           (steps 1)
+           (let ([open (and *menu* #t)])
+             (let-values ([(mx my) (menu-entry-point "Minimize")])
+               (inject! `(mouse-move ,mx ,my) `(mouse-down ,mx ,my left 1))
+               (steps 1)
+               (let ([held (list (window-state w) (and *menu* #t))])
+                 (inject! `(mouse-up ,mx ,my left))
+                 (steps 1)
+                 (let ([done (window-state w)])
+                   (reset-theme!)
+                   (close-window! w)
+                   (and open (equal? held '(normal #t))
+                        (eq? done 'minimized)))))))))
+
+(check "menu-blink: a chosen entry blinks (off, on) n times, 60 ms a phase, \
+        then the menu closes and its action runs"
+       (let ([real now-ms] [t (now-ms)] [ran 0] [drawn #f])
+         (set! now-ms (lambda () t))
+         (set-theme! 'menu-blink 2)
+         (set-theme! 'ui-draw-highlight
+                     (lambda (x y w h flags) (set! drawn #t)))
+         (open-menu! 300 300 (list (cons "One" (lambda () (set! ran (+ ran 1))))
+                                   (cons "Two" void)))
+         (steps 1)
+         (let-values ([(x y) (menu-entry-point "One")])
+           (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                    `(mouse-up ,x ,y left))
+           (steps 1)
+           (let ([phases   ; in order: map may call in any
+                  (let loop ([ats '(30 60 60 60 30)])
+                    (if (null? ats)
+                        '()
+                        (begin (set! t (+ t (car ats)))
+                               (set! drawn #f)
+                               (steps 1)
+                               (cons (list ran (and *menu* #t) drawn)
+                                     (loop (cdr ats))))))])
+             (set! now-ms real)
+             (reset-theme!)
+             (equal? phases '((0 #t #f) (0 #t #t) (0 #t #f) (0 #t #t)
+                              (1 #f #f)))))))
+
+(check "menu-hover outline: the highlight is told outline, and pressed while \
+        a button is held on the entry; drawn as a 1-pixel box, then filled"
+       (let ([seen '()])
+         (set-theme! 'ui-draw-highlight
+                     (lambda (x y w h flags) (set! seen flags)))
+         (set-theme! 'menu-hover 'outline)
+         (set-theme! 'menu-choose 'release)
+         (open-menu! 300 300 (list (cons "One" void) (cons "Two" void)))
+         (steps 1)
+         (let-values ([(x y) (menu-entry-point "One")])
+           (inject! `(mouse-move ,x ,y))
+           (steps 1)
+           (let ([hover seen])
+             (inject! `(mouse-down ,x ,y left 1))
+             (steps 1)
+             (let ([held seen])
+               (inject! `(mouse-up ,x ,y left))
+               (steps 1)
+               (reset-theme!)
+               (let ([box (lambda (flags)
+                            (pixel-rows (image 8 6 1
+                                               (lambda ()
+                                                 (fill-rect 0 0 8 6 #x808080)
+                                                 (ui-draw-highlight 1 1 6 4
+                                                                    flags)))
+                                        (list (cons #xff808080 #\.)
+                                              (cons (color->pixel 'text)
+                                                    #\t))))])
+                 (and (equal? hover '(outline)) (equal? held '(outline pressed))
+                      (not *menu*)
+                      (equal? (box '(outline))
+                              '("........" ".tttttt." ".t....t." ".t....t."
+                                ".tttttt." "........"))
+                      (equal? (box '(outline pressed))
+                              '("........" ".tttttt." ".tttttt." ".tttttt."
+                                ".tttttt." "........")))))))))
+
+;; Genera's recipe for a window it is not using: its frame-over grays the
+;; content with a sparse stipple of ink on clear paper.
+(define (test-gray-over win x y w h focused? hover pressed)
+  (unless focused?
+    (let-values ([(cx cy cw ch) (content-rect win)])
+      (fill-rect cx cy cw ch (stipple 'text #f "#..." "...." "...." "....")))))
+(define-style test-gray "Gray when unfocused" 'frame-over 'test-gray-over)
+
+(check "an unfocused window is drawn by its style: a stipple of clear paper \
+        over its content grays one pixel in sixteen, lined up with the \
+        screen; the focused one is untouched"
+       (let* ([a (open-window "Unfocused" 'size '(200 . 120) 'pos '(201 . 203)
+                              'window-style 'test-gray
+                              'draw (lambda (win w h)
+                                      (fill-rect 0 0 w h #x000000)))]
+              [b (open-window "Focused" 'size '(200 . 120) 'pos '(601 . 203)
+                              'window-style 'test-gray
+                              'draw (lambda (win w h)
+                                      (fill-rect 0 0 w h #x000000)))])
+         (steps 1)
+         (let ([ink (color->pixel 'text)])
+           (define (dots win)   ; the inked device pixels of 40 × 40 inside
+             (let-values ([(cx cy cw ch) (content-rect win)])
+               (let loop ([i 0] [acc '()])
+                 (if (= i 1600)
+                     (reverse acc)
+                     (let ([x (+ cx 10 (mod i 40))]
+                           [y (+ cy 10 (quotient i 40))])
+                       (loop (+ i 1)
+                             (if (= (canvas-pixel x y) ink)
+                                 (cons (cons (mod x 4) (mod y 4)) acc)
+                                 acc)))))))
+           (let ([da (dots a)] [db (dots b)])
+             (close-window! a)
+             (close-window! b)
+             (and (= (length da) 100) (null? db)
+                  (for-all (lambda (p) (equal? p '(0 . 0))) da))))))
+
+;; The device rows that differ between two of canvas-bytes' copies.
+(define (rows-between a b)
+  (let ([stride (cairo-image-surface-get-stride *canvas*)])
+    (filter (lambda (y)
+              (not (bytevector=? (bytevector-copy-range a y stride)
+                                 (bytevector-copy-range b y stride))))
+            (iota (quotient (bytevector-length a) stride)))))
+
+(define (bytevector-copy-range bv row stride)
+  (let ([out (make-bytevector stride)])
+    (bytevector-copy! bv (* row stride) out 0 stride)
+    out))
+
+;; A window of kit widgets, drawn by draw (ui w h).
+(define (kit-window title draw)
+  (let ([ui (make-ui)])
+    (apply open-window title 'size '(400 . 200) 'pos '(300 . 200)
+           'draw (lambda (win w h)
+                   (ui-begin! ui) (draw ui w h) (ui-end! ui w h))
+           (ui-handlers ui))))
+
+(define (doc-at x y)
+  (inject! `(mouse-move ,x ,y))
+  (steps 1)
+  (mouse-doc))
+
+(check "(mouse-doc) is what each button does under the pointer: on a \
+        title, a close button, a kit button (its label), a text box, a \
+        taskbar button, the desktop"
+       (let ([w (kit-window "Docs"
+                            (lambda (ui w h)
+                              (ui-button ui 'b 20 20 100 30 "Button" void)
+                              (ui-text-field ui 't 20 70 200 30 "text"
+                                             void)))])
+         (steps 2)
+         (let*-values ([(cx cy cw ch) (content-rect w)]
+                       [(title) (doc-at (+ (window-x w) 200)
+                                        (+ (window-y w) 10))]
+                       [(close) (doc-at (+ (window-x w) 18)
+                                        (+ (window-y w) 15))]
+                       [(button) (doc-at (+ cx 50) (+ cy 35))]
+                       [(text) (doc-at (+ cx 50) (+ cy 85))]
+                       [(taskbar)
+                        (let ([a (assq w (with-place 'bar taskbar-areas))])
+                          (doc-at (+ (cadr a) 20) (+ (caddr a) 10)))]
+                       [(desktop) (doc-at 100 600)])
+           (close-window! w)
+           (and (equal? title '((L . "Move") (L2 . "Maximize")
+                                (R . "Window menu")))
+                (equal? close '((L . "Close")))
+                (equal? button '((L . "Button")))
+                (equal? text '((L . "Place the caret")
+                               (L2 . "Select a word")))
+                (equal? taskbar '((L . "Focus or minimize") (M . "Close")
+                                  (R . "Window menu")))
+                (equal? desktop '((L . "Unfocus") (R . "Apps")))))))
+
+;; A style whose shade button words itself.
+(define (test-words-regions win)
+  (list (list 'shade 30 4 20 20 '((L . "Roll up") (R . "Nothing")))))
+(define-style test-words "Own words" 'frame-regions 'test-words-regions)
+
+(check "a style's regions word themselves, and the actions its settings \
+        name read: a shading title, a menu button closing on a double click"
+       (let ([w (open-window "Words" 'size '(300 . 200) 'pos '(250 . 200)
+                             'window-style 'test-menu)]
+             [v (open-window "Own" 'size '(300 . 200) 'pos '(600 . 200)
+                             'window-style 'test-words)])
+         (override! 'title-double-click 'shade)
+         (override! 'title-wheel 'shade)
+         (steps 1)
+         (let* ([title (doc-at (+ (window-x w) 150) (+ (window-y w) 10))]
+                [menu (doc-at (+ (window-x w) 10) (+ (window-y w) 10))]
+                [own (doc-at (+ (window-x v) 40) (+ (window-y v) 10))])
+           (reset-theme!)
+           (close-window! w)
+           (close-window! v)
+           (and (equal? title '((L . "Move") (L2 . "Shade")
+                                (R . "Window menu") (W . "Shade")))
+                (equal? menu '((L . "Window menu") (L2 . "Close")))
+                (equal? own '((L . "Roll up") (R . "Nothing")))))))
+
+(check "with mouse-doc on the top bar shows it, and a move between regions \
+        of other words changes the bar's rows alone, one between regions of \
+        the same words nothing"
+       (let ([w (kit-window "Areas"
+                            (lambda (ui w h)
+                              (ui-area ui 'a 0 0 100 100 void #f
+                                       'doc '((L . "One")))
+                              (ui-area ui 'b 100 0 100 100 void #f
+                                       'doc '((L . "Two")))
+                              (ui-area ui 'c 200 0 100 100 void #f
+                                       'doc '((L . "Two")))))])
+         (set-theme! 'mouse-doc #t)
+         (steps 2)
+         (let-values ([(cx cy cw ch) (content-rect w)])
+           (define (rows-after-move x)
+             (let ([before (canvas-bytes)])
+               (inject! `(mouse-move ,x ,(+ cy 50)))
+               (steps 1)
+               (rows-between before (canvas-bytes))))
+           (rows-after-move (+ cx 50))
+           (let* ([shown (mouse-doc)]
+                  [text (mouse-doc-text shown)]
+                  [other (rows-after-move (+ cx 150))]
+                  [same (rows-after-move (+ cx 250))])
+             (reset-theme!)
+             (close-window! w)
+             (and (equal? shown '((L . "One"))) (equal? text "L: One")
+                  (pair? other)
+                  (for-all (lambda (y) (< y (* *scale* (topbar-height))))
+                           other)
+                  (null? same))))))
+
+;; A window whose content is a scroll view of 40 bars, 800 high.
+(define (scroll-window title . opts)
+  (let ([ui (make-ui)])
+    (apply open-window title 'size '(300 . 200) 'pos '(300 . 200)
+           'draw (lambda (win w h)
+                   (ui-begin! ui)
+                   (ui-scroll ui 'v 0 0 w h
+                     (lambda (top)
+                       (do ([i 0 (+ i 1)]) ((= i 40))
+                         (fill-rect 10 (+ top (* i 20)) 260 10 'accent))
+                       (+ top 800)))
+                   (ui-end! ui w h))
+           (append opts (ui-handlers ui)))))
+
+;; Where the window's view has its bar: its region's x, or #f for none.
+(define (bar-x win)
+  (let ([r (ui-find (window-ref win 'ui) '(v bar))]) (and r (ui-region-x r))))
+
+(check "a scroll bar is on the right by default, on the left where the \
+        style says so"
+       (let ([w (scroll-window "Sides")])
+         (steps 1)
+         (let ([right (bar-x w)])
+           (set-theme! 'scrollbar-side 'left)
+           (steps 1)
+           (let ([left (bar-x w)])
+             (reset-theme!)
+             (close-window! w)
+             (and (= right (- 300 (ui-scrollbar-width))) (= left 0))))))
+
+(check "a scroll bar shown on hover appears while the pointer is over the \
+        view, over its content, which does not move"
+       (let ([w (scroll-window "Hover")])
+         (set-theme! 'scrollbar-show 'hover)
+         (inject! '(mouse-move 100 700))
+         (steps 2)
+         (let-values ([(cx cy cw ch) (content-rect w)])
+           (let* ([row (lambda () (map (lambda (dx) (canvas-pixel (+ cx dx)
+                                                                  (+ cy 5)))
+                                       '(10 100 200)))]
+                  [away (list (bar-x w) (row))])
+             (inject! `(mouse-move ,(+ cx 100) ,(+ cy 100)))
+             (steps 2)
+             (let ([over (list (bar-x w) (row))])
+               (reset-theme!)
+               (close-window! w)
+               (and (not (car away)) (car over)
+                    (equal? (cadr away) (cadr over))))))))
+
+;; Medley's scroll bars: a 24-pixel margin at the left of the frame,
+;; clear but for the bar while the pointer is there.
+(define (test-out-insets win) (values 24 (title-height) 0 0))
+(define (test-out-regions win)
+  (list (list 'scrollbar 0 (title-height) 24
+              (- (window-h win) (title-height)))))
+(define (test-out-over win x y w h focused? hover pressed)
+  (ui-frame-scrollbar win))
+(define-style test-out "Outside scroll bars"
+  'frame-insets 'test-out-insets 'frame-regions 'test-out-regions
+  'frame-over 'test-out-over 'scrollbar-side 'outside 'scrollbar-width 24
+  'scrollbar-show 'hover)
+
+(check "a scroll bar outside the window: its margin clear, the bar there \
+        while the pointer is, a press there the app's (it scrolls)"
+       (let* ([w (scroll-window "Outside" 'window-style 'test-out)]
+              [mx (+ (window-x w) 12)] [my (+ (window-y w) 150)])
+         (inject! '(mouse-move 100 700))
+         (steps 2)
+         (let ([clear (canvas-pixel mx (+ (window-y w) 50))])
+           (minimize-window! w)
+           (steps 2)
+           (let ([desk (canvas-pixel mx (+ (window-y w) 50))])
+             (focus-window! w)
+             (inject! `(mouse-move ,mx ,my))
+             (steps 2)
+             (let ([region (window-region w mx my)] [at (bar-x w)]
+                   [shown (canvas-pixel mx (+ (window-y w) 50))])   ; thumb
+               (inject! `(mouse-down ,mx ,my left 1) `(mouse-up ,mx ,my left))
+               (steps 2)
+               (let ([off (car (ui-memo (window-ref w 'ui) 'v '(0 . 0)))])
+                 (close-window! w)
+                 (and (= clear desk) (eq? region 'scrollbar)
+                      (not (= shown desk)) (= at -24) (> off 0))))))))
+
+;;; the verifier's findings on the behaviors switched on
+
+(check "behavior settings survive a save and load, each of its kind; a \
+        value of another kind is dropped"
+       (let ([set '((title-double-click . shade) (raise-on-click . #f)
+                    (bell . screen) (mouse-doc . #t) (frame-edge . 8)
+                    (menu-blink . 2) (title-wheel . shade)
+                    (drag-feedback . outline) (scrollbar-side . left)
+                    (button-double-click . ((menu . close))))])
+         (for-each (lambda (kv) (override! (car kv) (cdr kv))) set)
+         (save-theme!)
+         (reset-theme!)
+         (load-saved-theme!)
+         (let ([got (map (lambda (kv) (theme (car kv))) set)])
+           (reset-theme!)
+           (save-theme!)
+           (and (equal? got (map cdr set))
+                (not (valid-theme-value? 'bell #t))
+                (not (valid-theme-value? 'frame-edge 'wide))
+                (not (valid-theme-value? 'no-such-key 3))))))
+
+(check "menu-choose release: a menu that opens under the pointer stays open \
+        when the press that opened it is released there (a taskbar \
+        button's, the desktop's)"
+       (let ([w (open-window "Under" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set-theme! 'menu-choose 'release)
+         (steps 1)
+         (let* ([a (assq w (with-place 'bar taskbar-areas))]
+                [x (+ (cadr a) 20)] [y (+ (caddr a) 10)])
+           (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1))
+           (steps 1)
+           (let ([under (and (menu-entry-at x y) #t)])
+             (inject! `(mouse-up ,x ,y right))
+             (steps 1)
+             (let ([taskbar (list under (and *menu* #t)
+                                  (and (memq w (windows)) #t))])
+               (close-menu!)
+               (inject! '(mouse-move 900 500) '(mouse-down 900 500 right 1)
+                        '(mouse-up 900 500 right))
+               (steps 1)
+               (let ([desk (launcher-open?)])
+                 (close-menu!)
+                 (reset-theme!)
+                 (when (memq w (windows)) (close-window! w))
+                 (and (equal? taskbar '(#t #t #t)) desk)))))))
+
+(check "menu-hover outline: moved off the menu with the button held, the \
+        entry is drawn pressed no more"
+       (begin
+         (set-theme! 'menu-hover 'outline)
+         (set-theme! 'menu-choose 'release)
+         (open-menu! 300 300 (list (cons "One" void) (cons "Two" void)))
+         (steps 1)
+         (let-values ([(x y) (menu-entry-point "One")])
+           (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1))
+           (steps 1)
+           (inject! `(mouse-move ,x ,(- y 200)))
+           (steps 1)
+           (let ([whole (screen-whole?)])
+             (inject! `(mouse-up ,x ,(- y 200) left))
+             (steps 1)
+             (close-menu!)
+             (reset-theme!)
+             whole))))
+
+(check "a blinking entry asks for the menu's box, not the screen"
+       (let ([real now-ms] [t (now-ms)])
+         (set! now-ms (lambda () t))
+         (set-theme! 'menu-blink 2)
+         (open-menu! 300 300 (list (cons "One" void) (cons "Two" void)))
+         (steps 1)
+         (let-values ([(x y) (menu-entry-point "One")])
+           (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                    `(mouse-up ,x ,y left))
+           (steps 1)
+           (set! t (+ t 70))
+           (set! *dirty* #f)
+           (wm-tick!)
+           (let ([asked *dirty*]
+                 [box (call-with-values (lambda () (menu-geometry *menu*))
+                        (lambda (mx my mw mh)
+                          (list mx my (+ mx mw) (+ my mh))))])
+             (set! t (+ t 300))
+             (steps 1)
+             (set! now-ms real)
+             (reset-theme!)
+             (equal? asked box)))))
+
+;; An outside bar's style whose bars are narrower than its margin.
+(define-style test-out-narrow "Outside, narrow"
+  'parent 'test-out 'scrollbar-width 10)
+
+(check "an outside scroll bar fills its margin, however narrow the style's \
+        bars, and the wheel there scrolls its view"
+       (let* ([w (scroll-window "Narrow" 'window-style 'test-out-narrow)]
+              [mx (+ (window-x w) 3)]
+              [off (lambda () (car (ui-memo (window-ref w 'ui) 'v '(0 . 0))))])
+         (inject! `(mouse-move ,mx ,(+ (window-y w) 150)))
+         (steps 2)
+         (inject! `(mouse-down ,mx ,(+ (window-y w) 150) left 1)
+                  `(mouse-up ,mx ,(+ (window-y w) 150) left))
+         (steps 2)
+         (let ([pressed (off)])
+           (inject! `(mouse-move ,mx ,(+ (window-y w) 60)) '(wheel 0 1))
+           (steps 2)
+           (let ([wheeled (off)])
+             (close-window! w)
+             (and (> pressed 0) (< wheeled pressed))))))
+
+(check "across a change of the chrome a shaded window stays shaded, in its \
+        new frame's height, and its app hears the size it unshades to; \
+        under a style that cannot shade it unshades, and hears it too"
+       (let* ([heard '()]
+              [w (open-window "Stays shaded" 'size '(300 . 200)
+                              'pos '(250 . 200)
+                              'resize (lambda (win cw ch)
+                                        (set! heard (cons (cons cw ch)
+                                                          heard))))]
+              [content (lambda () (call-with-values
+                                    (lambda () (window-content-size w))
+                                    cons))])
+         (steps 1)
+         (shade-window! w)
+         (set-theme! 'title-height 40)
+         (steps 1)
+         (let*-values ([(l t r b) (frame-insets w)]
+                       [(after) (list (shaded? w) (window-h w))]
+                       [(told) (car heard)])
+           (unshade-window! w)
+           (let ([unshaded (content)])
+             (shade-window! w)
+             (set-style! 'spine)
+             (steps 1)
+             (let ([spine (list (shaded? w) (equal? (car heard) (content)))])
+               (set-style! 'mac)
+               (reset-theme!)
+               (close-window! w)
+               (and (equal? after (list #t (+ t b))) (equal? told unshaded)
+                    (equal? spine '(#f #t))))))))
+
+(check "menu-choose release: a press that opened a menu under the pointer \
+        and wobbles on its entry, then releases there, chooses nothing"
+       (let ([w (open-window "Wobble" 'size '(300 . 200) 'pos '(250 . 200))])
+         (set-theme! 'menu-choose 'release)
+         (steps 1)
+         (let* ([a (assq w (with-place 'bar taskbar-areas))]
+                [x (+ (cadr a) 20)] [y (+ (caddr a) 10)])
+           (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1))
+           (steps 1)
+           (let ([entry (menu-entry-at x y)])
+             (inject! `(mouse-move ,(+ x 5) ,y) `(mouse-move ,x ,y)
+                      `(mouse-up ,x ,y right))
+             (steps 1)
+             (let ([open (and *menu* #t)] [alive (and (memq w (windows)) #t)])
+               (close-menu!)
+               (reset-theme!)
+               (when alive (close-window! w))
+               (and entry open alive))))))
+
+(check "scroll bars outside fall back to the right where the frame leaves \
+        no margin"
+       (let ([w (scroll-window "No margin")])
+         (set-theme! 'scrollbar-side 'outside)
+         (steps 1)
+         (let ([x (bar-x w)])
+           (reset-theme!)
+           (close-window! w)
+           (= x (- 300 (ui-scrollbar-width))))))
+
+;; A style whose grow box resizes, the window manager's edges off.
+(define (test-grow-regions win)
+  (list (list 'resize-br (- (window-w win) 15) (- (window-h win) 15) 15 15)))
+(define-style test-grow "Grow box"
+  'frame-regions 'test-grow-regions 'frame-edge 0)
+
+(check "a style's own resize region resizes a normal window only, not a \
+        shaded or a maximized one"
+       (let* ([w (open-window "Grow" 'size '(300 . 200) 'pos '(250 . 200)
+                              'window-style 'test-grow)]
+              [size (lambda () (list (window-w w) (window-h w)))]
+              [grow! (lambda ()
+                       (let ([x (+ (window-x w) (window-w w) -5)]
+                             [y (+ (window-y w) (window-h w) -5)])
+                         (drag-on! x y (+ x 30) (+ y 20))
+                         (size)))])
+         (steps 1)
+         (let* ([s0 (size)] [normal (grow!)]
+                [shaded (begin (shade-window! w) (let ([s (size)])
+                                                   (list s (grow!))))]
+                [maxed (begin (unshade-window! w) (maximize-window! w)
+                              (let ([s (size)]) (list s (grow!))))])
+           (close-window! w)
+           (and (equal? normal (list (+ (car s0) 30) (+ (cadr s0) 20)))
+                (equal? (car shaded) (cadr shaded))
+                (equal? (car maxed) (cadr maxed))))))
+
+(check "a top resize keeps the window's top on the desktop, its bottom \
+        where it was"
+       (let ([w (open-window "Top" 'size '(300 . 200) 'pos '(300 . 100)
+                             'window-style 'test-top)])
+         (steps 1)
+         (let* ([g (geometry w)] [x (+ (car g) 100)] [y (+ (cadr g) 2)]
+                [bottom (+ (cadr g) (cadddr g))])
+           (drag-on! x y x 2)
+           (let-values ([(dx dy dw dh) (desktop-rect)])
+             (let ([g2 (geometry w)])
+               (close-window! w)
+               (and (= (cadr g2) dy) (= (+ (cadr g2) (cadddr g2)) bottom)))))))
+
+(check "old calls keep working: ui-pressable! without a doc, the glyphs \
+        sort-up and sort-down; a text field's 'doc is its own"
+       (let* ([glyph (lambda (name)
+                       (image 20 20 1 (lambda ()
+                                        (ui-draw-glyph 2 2 16 16 '() name))))]
+              [same (lambda (a b) (zero? (max-diff (glyph a) (glyph b))))]
+              [w (kit-window "Old calls"
+                             (lambda (ui w h)
+                               (ui-pressable! ui 'p 20 20 100 30 void '() '())
+                               (ui-text-field ui 't 20 70 200 30 "text" void
+                                              'doc '((L . "Edit me")))))])
+         (steps 2)
+         (let-values ([(cx cy cw ch) (content-rect w)])
+           (let ([doc (doc-at (+ cx 50) (+ cy 85))])
+             (close-window! w)
+             (and (same 'sort-up 'up) (same 'sort-down 'down)
+                  (not (window-error w))
+                  (equal? doc '((L . "Edit me"))))))))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)
