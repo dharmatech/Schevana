@@ -336,43 +336,22 @@
   (not (or (char-whitespace? c)
            (memv c '(#\( #\) #\[ #\] #\" #\' #\` #\, #\;)))))
 
-(define (common-prefix strs)
-  (fold-left (lambda (a b)
-               (let loop ([i 0])
-                 (if (and (< i (string-length a)) (< i (string-length b))
-                          (char=? (string-ref a i) (string-ref b i)))
-                     (loop (+ i 1))
-                     (substring a 0 i))))
-             (car strs) (cdr strs)))
-
 ;;; ------------------------------------------------------------------
 ;;; completion
-;;; Tab opens a list of completions under the cursor, which narrows as you
-;;; type: Up/Down choose, Tab or Enter accept, Esc closes. What it offers
-;;; depends on where the cursor is: inside a string, file names; after a
-;;; quote in (theme '…), (launch-app '…) and the like, the theme keys,
-;;; apps, palettes or styles that fit there; inside (import (…)), library
-;;; names a part at a time; otherwise every name bound in
-;;; this REPL's environment. Names match by prefix, then substring, then
-;;; letters in order ("stp" finds set-theme-plist!), Schevana's own first.
-;;; The chosen name shows its argument list and the comment above its
-;;; definition, read from the sources.
-
-(define-record-type completion
-  (nongenerative schevana-completion)
-  (fields kind              ; symbols or path
-          start             ; where the text being completed starts
-          (mutable items)   ; #((name kind matched-indices) ...), best first
-          (mutable sel)
-          (mutable top)))
-
-(defvar *completions* (make-weak-eq-hashtable))   ; repl -> its open list
-
-(define (repl-completion r) (hashtable-ref *completions* r #f))
-(define (close-completion! r) (hashtable-delete! *completions* r))
-
-(define completion-rows 8)        ; visible at once
-(define completion-max-items 200)
+;;; Tab completes the name before the cursor through the completion kit
+;;; (kits/complete.ss): it extends the name to what the matches starting
+;;; with it share and lists the matches under the cursor, narrowing as you
+;;; type: Up/Down choose, Tab and Shift+Tab page, Enter or a click
+;;; accepts, Esc, a click elsewhere in it or the keyboard going elsewhere
+;;; closes. With nothing to choose, a popup says so: the sole completion,
+;;; with its description, or none. What it offers depends on where the
+;;; cursor is: inside a string, file names; after a quote in (theme '…),
+;;; (launch-app '…) and the like, the theme keys, apps, palettes or styles
+;;; that fit there; inside (import (…)), library names a part at a time;
+;;; otherwise every name bound in this REPL's environment. Names match by
+;;; the kit's segments ("dtc" puts draw-text-centered first), Schevana's
+;;; own first among equals. The chosen name shows its argument list and
+;;; the comment above its definition, read from the sources.
 
 ;;; Names, and what the sources say about them.
 
@@ -806,288 +785,108 @@
 
 ;;; Ranking.
 
-(define (string-index-ci str sub)
-  (let ([n (string-length str)] [m (string-length sub)])
-    (let loop ([i 0])
-      (cond
-        [(> (+ i m) n) #f]
-        [(string-ci=? (substring str i (+ i m)) sub) i]
-        [else (loop (+ i 1))]))))
-
-;; Does a word of name start at index j? (after -, _, /, :, . or *)
-(define (word-start? name j)
-  (or (= j 0) (memv (string-ref name (- j 1)) '(#\- #\_ #\/ #\: #\. #\*))))
-
-;; Indices of name matching typed's characters in order, the first
-;; character first, each preferably at the start of a word ("stp" takes
-;; s-t-p of set-theme-plist!); or #f.
-(define (subsequence-match typed name)
-  (let ([n (string-length typed)] [m (string-length name)])
-    (define (next-at j ch start-only?)
-      (let loop ([k j])
-        (cond [(>= k m) #f]
-              [(and (char-ci=? ch (string-ref name k))
-                    (or (not start-only?) (word-start? name k)))
-               k]
-              [else (loop (+ k 1))])))
-    (and (> n 0) (> m 0) (char-ci=? (string-ref typed 0) (string-ref name 0))
-         (let loop ([i 1] [j 1] [acc '(0)])
-           (if (= i n)
-               (reverse acc)
-               (let ([k (or (next-at j (string-ref typed i) #t)
-                            (next-at j (string-ref typed i) #f))])
-                 (and k (loop (+ i 1) (+ k 1) (cons k acc)))))))))
-
-;; (values key matched) for how typed matches name, key #f when it
-;; doesn't. Keys compare as lists of numbers, smaller first.
-(define (match-key typed name own?)
-  (let ([n (string-length typed)] [m (string-length name)] [own (if own? 0 1)])
-    (cond
-      [(and (<= n m) (string-ci=? typed (substring name 0 n)))
-       (values (list 0 own) (iota n))]
-      [(and (> n 1) (string-index-ci name typed))
-       => (lambda (i)
-            (values (list 1 own i m) (map (lambda (k) (+ i k)) (iota n))))]
-      [(and (> n 1) (subsequence-match typed name))
-       => (lambda (ix)
-            (let ([initials (length (filter (lambda (j) (word-start? name j))
-                                            ix))])
-              (values (list 2 (- n initials) own
-                            (- (car (last-pair ix)) (- n 1)) m)
-                      ix)))]
-      [else (values #f '())])))
-
-(define (key<? a b)
-  (cond [(null? a) #f]
-        [(< (car a) (car b)) #t]
-        [(> (car a) (car b)) #f]
-        [else (key<? (cdr a) (cdr b))]))
-
 ;; The choices matching typed, best first: #((name kind matched) ...).
 (define (rank-choices typed choices)
-  (let* ([docs (name-docs)]
-         [scored
-          (filter-map
-           (lambda (c)
-             (let-values ([(key ix)
-                           (match-key typed (car c)
-                                      (hashtable-contains? docs (car c)))])
-               (and key (list key (car c) (cdr c) ix))))
-           choices)]
-         [sorted (sort (lambda (a b)
-                         (or (key<? (car a) (car b))
-                             (and (not (key<? (car b) (car a)))
-                                  (string<? (cadr a) (cadr b)))))
-                       scored)])
-    (list->vector
-     (map cdr (list-head sorted (min completion-max-items (length sorted)))))))
-
-(define (prefix-matches items typed)
-  (filter (lambda (name) (string-prefix? typed name))
-          (map car (vector->list items))))
+  (let ([docs (name-docs)])
+    (complete-rank typed choices
+                   (lambda (name) (hashtable-contains? docs name)))))
 
 ;;; Opening, narrowing and accepting.
 
-;; Tab.
+;; Tab (see complete-tab!). A sole folder or library group goes in, to
+;; carry on inside it.
 (define (repl-complete! r)
   (let-values ([(kind start typed choices) (completion-context r)])
     (if (and (eq? kind 'symbols) (string=? typed ""))
         (repl-insert! r "  ")
         (let ([items (rank-choices typed choices)])
-          (cond
-            [(= 0 (vector-length items)) (close-completion! r)]
-            [(= 1 (vector-length items))
-             (accept-completion! r kind start (vector-ref items 0))]
-            [else
-             ;; first take what all names starting with it share, as a shell
-             ;; would
-             (let ([prefixed (prefix-matches items typed)])
-               (when (pair? prefixed)
-                 (let ([common (common-prefix prefixed)])
-                   (when (> (string-length common) (string-length typed))
-                     (repl-delete! r start (repl-point r))
-                     (repl-insert! r common)))))
-             (hashtable-set! *completions* r
-                             (make-completion kind start items 0 0))
-             (refresh-completion! r)])))))
+          (if (and (= 1 (vector-length items))
+                   (carries-on? kind (vector-ref items 0)))
+              (accept-completion! r kind start (vector-ref items 0))
+              (complete-tab! r kind start typed items
+                             (lambda (shared)
+                               (repl-delete! r start (repl-point r))
+                               (repl-insert! r shared)
+                               (refresh-completion! r))
+                             (lambda (item)
+                               (accept-completion! r kind start item))))))))
 
 ;; After the input changed while the list is open: narrow it, or close it
-;; when the cursor has left the name (or nothing matches).
+;; when the cursor has left the name.
 (define (refresh-completion! r)
-  (let ([c (repl-completion r)])
+  (let ([c (complete-of r)])
     (when c
       (let-values ([(kind start typed choices) (completion-context r)])
-        (if (or (not (eq? kind (completion-kind c)))
+        (if (or (not (eq? kind (complete-context c)))
                 (and (memq kind '(symbols library))
-                     (not (= start (completion-start c))))
+                     (not (= start (complete-start c))))
                 (and (eq? kind 'symbols) (string=? typed "")))
-            (close-completion! r)
-            (let ([items (rank-choices typed choices)])
-              ;; nothing left, or just what is typed
-              (if (or (= 0 (vector-length items))
-                      (and (= 1 (vector-length items))
-                           (string=? typed (car (vector-ref items 0)))))
-                  (close-completion! r)
-                  (hashtable-set! *completions* r
-                                  (make-completion kind start items 0 0)))))))))
+            (complete-close! r)
+            (complete-narrow! r kind start typed
+                              (rank-choices typed choices)))))))
+
+;; Does taking item carry on inside it: a directory, or the start of
+;; longer library names?
+(define (carries-on? kind item)
+  (or (and (eq? kind 'path) (string-suffix? "/" (car item)))
+      (and (eq? kind 'library) (equal? (cadr item) "group"))))
 
 (define (accept-completion! r kind start item)
   (repl-delete! r start (repl-point r))
   (repl-insert! r (car item))
-  (close-completion! r)
-  ;; a directory, or the start of longer library names: carry on inside it
-  (when (or (and (eq? kind 'path) (string-suffix? "/" (car item)))
-            (and (eq? kind 'library) (equal? (cadr item) "group")))
+  (complete-close! r)
+  (when (carries-on? kind item)
     (when (eq? kind 'library) (repl-insert! r " "))
     (let-values ([(kind start typed choices) (completion-context r)])
-      (let ([items (rank-choices typed choices)])
-        (when (> (vector-length items) 0)
-          (hashtable-set! *completions* r
-                          (make-completion kind start items 0 0)))))))
+      (complete-open! r kind start (rank-choices typed choices)))))
 
-(define (move-completion! c delta)
-  (let* ([n (vector-length (completion-items c))]
-         [sel (mod (+ (completion-sel c) delta) n)])
-    (completion-sel-set! c sel)
-    (completion-top-set! c (clamp (completion-top c)
-                                  (max 0 (- sel (- completion-rows 1)))
-                                  sel))))
+;; The item chosen from r's open list goes in.
+(define (repl-accept! r item)
+  (let ([c (complete-of r)])
+    (accept-completion! r (complete-context c) (complete-start c) item)))
 
-;; A key while the list is open; #t when the list used it.
-(define (completion-key! r c key mods)
-  (case key
-    [(down) (move-completion! c 1) #t]
-    [(up) (move-completion! c -1) #t]
-    [(page-down) (move-completion! c completion-rows) #t]
-    [(page-up) (move-completion! c (- completion-rows)) #t]
-    [(tab return)
-     (accept-completion! r (completion-kind c) (completion-start c)
-                         (vector-ref (completion-items c) (completion-sel c)))
-     #t]
-    [(escape) (close-completion! r) #t]
-    [else #f]))
+;; (values signature doc) for an item of c, r's list.
+(define (completion-description r c item)
+  (case (complete-context c)
+    [(symbols) (name-description (car item) (repl-environment r))]
+    [(library)
+     (let* ([s (repl-input r)] [start (complete-start c)]
+            [lib (let-values ([(stack str?) (scan-parens s start)])
+                   (library-context s start stack))])
+       (if lib
+           (library-description (car lib) (car item) (cadr item))
+           (values "" "")))]
+    [else (values "" "")]))
 
-;;; Drawing.
-
-;; The list under the text being completed; caret is the cursor's (x . y).
-(define (draw-completion r c caret w h cw lh)
-  (let* ([items (completion-items c)]
-         [n (vector-length items)]
-         [rows (min completion-rows n)]
-         [top (completion-top c)]
-         [env (repl-environment r)]
-         ;; indices of the visible rows
-         [shown (map (lambda (k) (+ top k)) (iota rows))]
-         [visible (map (lambda (i) (vector-ref items i)) shown)]
-         [kinds (map (lambda (it) (or (cadr it) (name-kind (car it) env)))
-                     visible)]
-         [kind-w (+ 14 (widest-text kinds 'ui-small))]
-         [names-w (* cw (apply max (map (lambda (it) (string-length (car it)))
-                                        visible)))]
-         [pw (min (- w 8) (max 260 (+ 20 names-w kind-w)))]
-         [sel-item (vector-ref items (completion-sel c))]
-         [detail (case (completion-kind c)
-                   [(symbols)
-                    (let-values ([(sig doc)
-                                  (name-description (car sel-item) env)])
-                      (list sig doc))]
-                   [(library)
-                    (let* ([s (repl-input r)] [start (completion-start c)]
-                           [lib (let-values ([(stack str?)
-                                              (scan-parens s start)])
-                                  (library-context s start stack))])
-                      (if lib
-                          (let-values ([(sig doc)
-                                        (library-description (car lib)
-                                                             (car sel-item)
-                                                             (cadr sel-item))])
-                            (list sig doc))
-                          '("" "")))]
-                   [else '("" "")])]
-         [small-lh (font-line-height 'ui-small)]
-         [detail-h-of (lambda (lines)
-                        (round (+ 12 (font-line-height 'mono-small)
-                                  (* lines (+ small-lh 2)))))]
-         ;; Below the line, or above it, by the tallest the list can be:
-         ;; it stays on its side while typing narrows it and descriptions
-         ;; change length. Where that fits neither, the side with more
-         ;; room, and the description keeps the lines that fit in it.
-         [below (+ (cdr caret) lh 2)]
-         [room-below (- h 4 below)]
-         [room-above (- (cdr caret) 2 4)]
-         [below? (or (<= (+ 8 (* completion-rows lh) (detail-h-of 3))
-                         room-below)
-                     (>= room-below room-above))]
-         [doc-lines
-          (let ([d (cadr detail)]
-                [fit (exact (floor (/ (- (if below? room-below room-above)
-                                         8 (* rows lh) (detail-h-of 0))
-                                      (+ small-lh 2))))])
-            (if (string=? d "")
-                '()
-                (list-head* (wrap-text d (- pw 20) 'ui-small)
-                            (max 0 (min 3 fit)))))]
-         [detail-h (if (string=? (car detail) "")
-                       0
-                       (detail-h-of (length doc-lines)))]
-         [ph (+ 8 (* rows lh) detail-h)]
-         [typed-w (* cw (- (repl-point r) (completion-start c)))]
-         [px (clamp (- (car caret) typed-w 10) 4 (max 4 (- w pw 4)))]
-         [py (if below? below (max 4 (- (cdr caret) ph 2)))])
-    (draw-shadow px py pw ph 6 10)   ; shadow
-    (fill-round-rect px py pw ph 6 'bg-2)
-    (stroke-round-rect px py pw ph 6 'window-border-focus)
-    (for-each
-      (lambda (it kind i)
-        (let ([ry (+ py 4 (* (- i top) lh))]
-              [selected? (= i (completion-sel c))])
-          (when selected?
-            (fill-round-rect (+ px 4) ry (- pw 8) lh 4 (alpha 'accent 0.25)))
-          (let ([tx (+ px 10)]
-                [ty (+ ry (/ (- lh (font-line-height 'mono)) 2))])
-            (draw-text tx ty (car it) (if selected? 'text 'text-dim) 'mono)
-            (for-each (lambda (j)
-                        (when (< j (string-length (car it)))
-                          (draw-text (+ tx (* j cw)) ty
-                                     (string (string-ref (car it) j))
-                                     'accent 'mono-bold)))
-                      (caddr it)))
-          (draw-text (- (+ px pw) kind-w -4) (+ ry (/ (- lh small-lh) 2))
-                     kind 'text-faint 'ui-small)))
-      visible kinds shown)
-    (when (> n rows)   ; where the visible rows are in the whole list
-      (let* ([track (* rows lh)] [bar (max 12 (* track (/ rows n)))]
-             [by (+ py 4 (* (- track bar) (/ top (max 1 (- n rows)))))])
-        (fill-round-rect (+ px pw -5) by 3 bar 1.5 (alpha 'text 0.3))))
-    (unless (= detail-h 0)
-      (let ([dy (+ py 4 (* rows lh) 4)])
-        (draw-line (+ px 6) (+ dy 0.5) (+ px pw -6) (+ dy 0.5) 'window-border)
-        (draw-text (+ px 10) (+ dy 5)
-                   (fit-text (car detail) (- pw 20) 'mono-small)
-                   'text 'mono-small)
-        (for-each (lambda (line i)
-                    (draw-text (+ px 10)
-                               (+ dy 5 (font-line-height 'mono-small) 3
-                                  (* i (+ small-lh 2)))
-                               line 'text-faint 'ui-small))
-                  doc-lines (iota (length doc-lines)))))))
-
-(define (list-head* l n) (if (> (length l) n) (list-head l n) l))
-
-;; With the completion list open, it takes the keys it uses. Moving the
-;; cursor away closes it; editing narrows it. (Printable characters arrive
-;; as 'text, and modifier keys alone change nothing.)
+;; With the completion list open, it takes the keys it uses, and a popup
+;; goes at any key. Moving the cursor away closes the list; editing
+;; narrows it. (Printable characters arrive as 'text, and modifier keys
+;; alone change nothing.)
 (define (repl-key r win key mods)
-  (let ([c (repl-completion r)])
-    (cond
-      [(and c (null? (remq 'shift mods)) (completion-key! r c key mods))
-       (invalidate! win)]
-      [else
-       (when (and c (or (memq key '(left right home end))
-                        (memq 'ctrl mods) (memq 'alt mods)))
-         (close-completion! r))
-       (repl-edit-key r win key mods)
-       (when (and c (memq key '(backspace delete))) (refresh-completion! r))])))
+  (if (complete-key! r key mods (lambda (item) (repl-accept! r item)))
+      (invalidate! win)
+      (let ([c (complete-of r)])
+        (when (and c (or (memq key '(left right home end))
+                         (memq 'ctrl mods) (memq 'alt mods)))
+          (complete-close! r))
+        (repl-edit-key r win key mods)
+        (when (and c (memq key '(backspace delete)))
+          (refresh-completion! r)))))
+
+;; A press goes to the completion list; the REPL has no other use for it.
+(define (repl-mouse-down r)
+  (lambda (win x y button clicks)
+    (complete-mouse-down! r x y button
+                          (lambda (item) (repl-accept! r item)))))
+
+;; Losing the keyboard closes the list or popup: a click on another
+;; window or on the desktop, a key or a call that focuses another window,
+;; the REPL minimized. A press on its own title bar or frame, or on an
+;; empty part of a bar, leaves the REPL the keyboard, and the list open.
+(define (repl-blur r)
+  (lambda (win)
+    (complete-close! r)
+    (invalidate! win)))
 
 (define (repl-edit-key r win key mods)
   (repl-blink-set! r #t)
@@ -1140,6 +939,7 @@
     (invalidate! win)))
 
 (define (repl-text r win str)
+  (complete-text! r)
   (repl-insert! r str)
   (refresh-completion! r)
   (repl-scroll-set! r 0)
@@ -1371,8 +1171,11 @@
              [pos (* (- track bar)
                      (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))])
         (fill-round-rect (- w 7) (+ 4 pos) 4 bar 2 (alpha 'text 0.25))))
-    (let ([c (repl-completion r)])
-      (when (and c caret) (draw-completion r c caret w h cw lh)))))
+    (let ([c (complete-of r)] [env (repl-environment r)])
+      (when c
+        (complete-show c caret (* cw (- (repl-point r) (complete-start c)))
+                       lh w h (lambda (name) (name-kind name env))
+                       (lambda (item) (completion-description r c item)))))))
 
 (define (vector-fill-range! v a b x)
   (do ([i a (+ i 1)]) ((>= i (min b (vector-length v)))) (vector-set! v i x)))
@@ -1451,11 +1254,11 @@
     'key (lambda (win key mods) (repl-key r win key mods))
     'text (lambda (win str) (repl-text r win str))
     'wheel (lambda (win dx dy)
-             (let ([c (repl-completion r)])
-               (if c
-                   (move-completion! c (- dy))
-                   (repl-scroll-set! r (max 0 (+ (repl-scroll r) (* 3 dy))))))
+             (unless (complete-wheel! r dy)
+               (repl-scroll-set! r (max 0 (+ (repl-scroll r) (* 3 dy)))))
              (invalidate! win))
+    'mouse-down (repl-mouse-down r)
+    'blur (repl-blur r)
     'tick (lambda (win)
             (repl-drain! r)
             (when (and (eq? win (focused-window))
@@ -1465,3 +1268,15 @@
               (invalidate! win)))
     'close (lambda (win) (when (repl-proc r) (kill! (repl-proc r))))
     'state r))
+
+;; A REPL opened before a reload has no mouse or blur handler: it gets
+;; them, where it has none (one of a user's stays). Those it has call the
+;; kit by name, so they run the code just loaded.
+(for-each (lambda (win)
+            (let ([r (window-ref win 'state #f)] [hs (window-handlers win)])
+              (when (repl? r)
+                (unless (hashtable-contains? hs 'mouse-down)
+                  (hashtable-set! hs 'mouse-down (repl-mouse-down r)))
+                (unless (hashtable-contains? hs 'blur)
+                  (hashtable-set! hs 'blur (repl-blur r))))))
+          (windows))

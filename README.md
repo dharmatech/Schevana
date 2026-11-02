@@ -57,15 +57,25 @@ REPL: Enter evaluates when the form is complete (otherwise it inserts an
 indented newline), Shift+Enter always adds a newline, Up/Down walk history,
 Ctrl+C interrupts, Ctrl+L clears, Ctrl+V pastes.
 
-Tab opens a completion list under the cursor that narrows as you type
-(Up/Down choose, Tab or Enter accept, Esc closes). It offers what fits
-where the cursor is: names bound in that REPL's environment; theme keys,
-apps, palettes or window styles after a quote in `(theme '…)`,
+Tab extends the name before the cursor to what the matches starting with
+it share, and opens a list of the matches under the cursor that narrows
+as you type: Up/Down choose, Tab and Shift+Tab go a page on or back,
+Enter or a click takes one, Esc or a click elsewhere in the REPL closes
+it, and so does a click on another window or the desktop, or anything
+else that takes the keyboard from the REPL (a press on its title bar or
+an empty part of a bar does not). With nothing to add, a popup says so:
+the sole completion, with its description, or no completions; the next
+key, text, click or wheel closes it. It offers what fits where the
+cursor is: names bound in that REPL's environment; theme keys, apps,
+palettes or window styles after a quote in `(theme '…)`,
 `(set-theme! '…)`, `(launch-app '…)` and the like; file names inside a
 string; library names inside `(import (…))`, a part at a time. Names
-match by prefix, substring, or initials (`stp` → `set-theme-plist!`), and
-the chosen one shows its argument list and the comment above its
-definition, read from the sources (a library shows what it exports).
+match as in the editor e: in segments, each starting where a part of the
+name starts, in any order (`dtc` puts `draw-text-centered` first,
+`winfind` `find-window`); fewer segments, in order, earlier, tighter and
+shorter come first, ignoring case. The chosen one shows its argument
+list and the comment above its definition, read from the sources (a
+library shows what it exports).
 
 There are three kinds of REPL, each in its own environment:
 
@@ -189,11 +199,12 @@ styles/      window styles: cons  curses  draft  fold  genera  halo
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys
-kits/        edit: text editing, pure, and a text's rows, computed only as
-             far as they are shown; ui: immediate-mode widgets (buttons,
-             text fields and areas, dropdowns, tabs, checkboxes, a table,
-             a tree, chips, a date picker, scroll views, tooltips, a
-             dialog), keyboard focus
+kits/        complete: a completion list beside a caret (matching, keys,
+             clicks, placement); edit: text editing, pure, and a text's
+             rows, computed only as far as they are shown; ui:
+             immediate-mode widgets (buttons, text fields and areas,
+             dropdowns, tabs, checkboxes, a table, a tree, chips, a date
+             picker, scroll views, tooltips, a dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/styles   window styles: the record, the registry, previews
 src/wm       window records, z-order, focus, hit testing, drag/resize,
@@ -244,9 +255,10 @@ Decisions worth keeping in mind for the real design:
   folder. Each kind has a definer shaped like `define-app` that registers it by
   name, in a list kept in registration order, and a query that lists them. Kits
   are world code shared by apps: they load at boot, stay top-level and keep a
-  name prefix (`ui-`, `edit-`). Code moves out of an app into a kit when a
-  second app needs it, not before. R6RS libraries are one-way black boxes, like
-  C libraries: the world imports them, they never call into the world.
+  name prefix (`ui-`, `edit-`, `complete-`). Code moves out of an app into a
+  kit when a second app needs it, not before. R6RS libraries are one-way black
+  boxes, like C libraries: the world imports them, they never call into the
+  world.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
@@ -365,7 +377,8 @@ mkdir -p out
 scheme --script tests/smoke.ss out
 ```
 
-This boots the world headlessly, types into the REPL, defines an app, crashes
+This boots the world headlessly, types into the REPL (completing names: Tab's
+pages, its popups, clicks, a small window), defines an app, crashes
 windows, runs away in loops, drags and resizes windows, uses the launcher,
 presses every button of each window style, clicks and drags through every
 Settings tab (checking the theme file round-trips), uses Tasks by mouse and
@@ -469,9 +482,10 @@ This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
 two files, `src/` stays within its size budget (raise it on purpose),
 every file in a folder registers what it defines, under its own name
-(a kit's with its prefix, the desktop's plain), in the widget kit and
-Tasks only the drawing procedures (`ui-draw-…`,
-`tasks-draw-…`) draw or name a theme color, and the edit kit never does.
+(a kit's with its prefix, the desktop's plain), in the widget and
+completion kits and Tasks only the drawing procedures (`ui-draw-…`,
+`complete-draw-…`, `tasks-draw-…`) draw or name a theme color, and the
+edit kit never does.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]

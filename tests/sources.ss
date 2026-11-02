@@ -5,9 +5,10 @@
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; every file
 ;;; in a folder registers what it defines (a kit's names keep its prefix;
-;;; desktop/, like src/, defines plain names); and in the widget kit and
-;;; Tasks only the drawing procedures draw or name a color, and the edit
-;;; kit never does. Fast: it loads the world but does not boot it.
+;;; desktop/, like src/, defines plain names); and in the widget and
+;;; completion kits and Tasks only the drawing procedures draw or name a
+;;; color, and the edit kit never does. Fast: it loads the world but does
+;;; not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -192,14 +193,17 @@
      (cond
        [(equal? (file-folder f) "desktop") '()]
        [(not kind)
-        ;; a kit: its names start with its own (ui-, make-ui-state), or
-        ;; are its record's of the same name (edit, make-edit, edit?)
+        ;; a kit: its names start with its own (ui-, make-ui-state,
+        ;; *complete-open*), or are its record's of the same name (edit,
+        ;; make-edit, edit?)
         (filter-map
          (lambda (d)
            (let* ([s (symbol->string (cdr d))]
-                  [s (if (string-prefix? "make-" s)
-                         (substring s 5 (string-length s))
-                         s)]
+                  [s (cond [(string-prefix? "make-" s)
+                            (substring s 5 (string-length s))]
+                           [(string-prefix? "*" s)
+                            (substring s 1 (string-length s))]
+                           [else s])]
                   [p (symbol->string stem)])
              (and (not (or (string=? s p) (string=? s (string-append p "?"))
                            (string-prefix? (string-append p "-") s)))
@@ -229,13 +233,15 @@
 
 ;;; ------------------------------------------------------------------
 ;;; the widgets' seam
-;;; In the kit and in Tasks only the drawing procedures, named ui-draw-…
-;;; and tasks-draw-…, draw or choose a color: no other top-level form
-;;; calls a drawing primitive or quotes a theme color key ('text, also an
-;;; event's name, aside). The style redesign turns each drawing procedure
-;;; into a style's part. The edit kit has none: it never draws.
+;;; In the kits and in Tasks only the drawing procedures, named ui-draw-…,
+;;; complete-draw-… and tasks-draw-…, draw or choose a color: no other
+;;; top-level form calls a drawing primitive or quotes a theme color key
+;;; ('text, also an event's name, aside). The style redesign turns each
+;;; drawing procedure into a style's part. The edit kit has none: it never
+;;; draws.
 
-(define seam-files '("kits/edit.ss" "kits/ui.ss" "apps/tasks.ss"))
+(define seam-files
+  '("kits/complete.ss" "kits/edit.ss" "kits/ui.ss" "apps/tasks.ss"))
 
 (define (drawing-primitive? s)
   (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
@@ -281,7 +287,8 @@
                   (if (and name
                            (exists (lambda (p)
                                      (string-prefix? p (symbol->string name)))
-                                   '("ui-draw-" "tasks-draw-")))
+                                   '("ui-draw-" "complete-draw-"
+                                     "tasks-draw-")))
                       '()
                       (map (lambda (p)
                              (format "~a: ~a ~a ~a" f (or name (car form))

@@ -169,12 +169,16 @@
   (define (fresh! text)
     (repl-input-set! r "")
     (repl-point-set! r 0)
-    (close-completion! r)
+    (complete-close! r)
     (type! text)
     (steps 1))
   (define (offered)
-    (let ([c (repl-completion r)])
-      (and c (map car (vector->list (completion-items c))))))
+    (let ([c (complete-of r)])
+      (and c (map car (vector->list (complete-items c))))))
+  (define (click! x y)
+    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+             `(mouse-up ,x ,y left))
+    (steps 1))
   (fresh! "(set-th")
   (press! 'tab)
   (steps 1)
@@ -184,15 +188,15 @@
                       '("set-theme!" "set-theme-plist!"))))
   (screenshot (string-append out-dir "/completion.png"))
   (press! 'down)
-  (press! 'tab)
+  (press! 'return)
   (steps 1)
-  (check "down and tab take the second one"
+  (check "down and return take the second one"
          (and (string=? "(set-theme-plist!" (repl-input r)) (not (offered))))
   (fresh! "(stp")
   (press! 'tab)
   (steps 1)
-  (check "initials find set-theme-plist! first"
-         (equal? "set-theme-plist!" (car (offered))))
+  (check "initials find set-theme-plist!"
+         (member "set-theme-plist!" (offered)))
   (type! "l")
   (steps 1)
   (check "typing narrows the list"
@@ -255,9 +259,9 @@
     (check "tab in an import completes the first part and offers the next"
            (and (string=? "(import (acme " (repl-input r))
                 (equal? (offered) '("math"))))
-    (press! 'tab)
+    (press! 'return)
     (steps 1)
-    (check "and tab takes the library"
+    (check "and return takes the library"
            (and (string=? "(import (acme math" (repl-input r)) (not (offered))))
     (fresh! "(import (only (acme m")
     (press! 'tab)
@@ -285,7 +289,177 @@
              (and (string=? sig "(acme math)")
                   (string-contains-ci? doc "double square")
                   (string-contains-ci? doc "acme/math.sls")))))
+  ;; Tab pages through the list; Return or a click on a row accepts.
+  (fresh! "(set-")
+  (press! 'tab)
+  (steps 1)
+  (let* ([input (repl-input r)]
+         [n (length (or (offered) '()))]
+         [last-page (* complete-rows (quotient (- n 1) complete-rows))]
+         [sel (lambda () (let ([c (complete-of r)]) (and c (complete-sel c))))])
+    (press! 'tab)
+    (steps 1)
+    (let ([next (sel)])
+      (press! 'tab 'shift)
+      (press! 'tab 'shift)
+      (steps 1)
+      (let ([back (sel)])
+        (press! 'tab)
+        (steps 1)
+        (check "tab selects the next page's first row and shift+tab the \
+                previous one's, both wrapping, and neither takes one"
+               (and (> n (* 2 complete-rows)) (eqv? next complete-rows)
+                    (eqv? back last-page) (eqv? (sel) 0)
+                    (string=? input (repl-input r)))))))
+  (fresh! "(set-th")
+  (press! 'tab)
+  (steps 1)
+  (let-values ([(cx cy cw ch) (content-rect w)])
+    (let* ([c (complete-of r)] [box (complete-box c)]
+           [second (car (vector-ref (complete-items c) 1))])
+      (click! (+ cx (car box) 20)
+              (+ cy (cadr box) 4 (* 3/2 (complete-row-height))))
+      (check "a click on a row takes it"
+             (and (string=? (string-append "(" second) (repl-input r))
+                  (not (offered))))))
+  (fresh! "(set-th")
+  (press! 'tab)
+  (inject! '(wheel 0 -1))
+  (steps 1)
+  (check "the wheel moves the selection"
+         (= 1 (complete-sel (complete-of r))))
+  (let-values ([(cx cy cw ch) (content-rect w)])
+    (click! (+ cx cw -10) (+ cy 10))
+    (check "a click elsewhere in the REPL closes the list"
+           (and (not (offered)) (string=? "(set-theme" (repl-input r)))))
+  ;; Losing the keyboard closes it: a click on another window, or on the
+  ;; desktop.
+  (let ([open-list! (lambda ()
+                      (focus-window! w)
+                      (fresh! "(set-th")
+                      (press! 'tab)
+                      (steps 1)
+                      (and (offered) #t))]
+        [clock (find-window 'clock)])
+    (let-values ([(cx cy cw ch) (content-rect clock)])
+      (let* ([on-clock? (open-list!)]
+             [_ (click! (+ cx (quotient cw 2)) (+ cy (quotient ch 2)))]
+             [after-clock (offered)]
+             [on-desktop? (open-list!)]
+             [_ (click! 1200 700)]
+             [after-desktop (offered)])
+        ;; as before the clicks: w over the private REPL, the pointer on w
+        (focus-window! p)
+        (focus-window! w)
+        (let-values ([(x y ww wh) (content-rect w)])
+          (inject! `(mouse-move ,(+ x 20) ,(+ y 20))))
+        (steps 1)
+        (check "a click on another window or on the desktop closes the list"
+               (and on-clock? (not after-clock) (not (window-at 1200 700))
+                    on-desktop? (not after-desktop))))))
+  ;; With nothing to add, a popup says so; it goes at the next key, text,
+  ;; click or wheel, which then acts as usual.
+  (fresh! "(set-theme-plist!")
+  (press! 'tab)
+  (steps 1)
+  (let ([c (complete-of r)])
+    (check "tab on a sole completion says so, with its description"
+           (and c (equal? (complete-message c) "Sole completion")
+                (equal? (offered) '("set-theme-plist!"))
+                (string=? "(set-theme-plist!" (repl-input r))
+                (>= (cadddr (complete-box c))
+                    (+ 8 (complete-row-height) (complete-detail-height 0))))))
+  (screenshot (string-append out-dir "/completion-sole.png"))
+  (press! 'backspace)
+  (steps 1)
+  (check "the next key closes it and acts as usual"
+         (and (not (complete-of r))
+              (string=? "(set-theme-plist" (repl-input r))))
+  (fresh! "(zzqx")
+  (press! 'tab)
+  (steps 1)
+  (check "tab with nothing matching says so"
+         (let ([c (complete-of r)])
+           (and c (equal? (complete-message c) "No completions")
+                (equal? (offered) '()))))
+  (screenshot (string-append out-dir "/completion-none.png"))
+  (type! "y")
+  (steps 1)
+  (check "typed text closes it and is typed"
+         (and (not (complete-of r)) (string=? "(zzqxy" (repl-input r))))
+  (press! 'tab)
+  (inject! '(wheel 0 1))
+  (steps 1)
+  (check "so does the wheel" (not (complete-of r)))
+  (press! 'tab)
+  (steps 1)
+  (let ([c (complete-of r)])
+    (let-values ([(cx cy cw ch) (content-rect w)])
+      (when c (click! (+ cx (car (complete-box c)) 20)
+                      (+ cy (cadr (complete-box c)) 10)))
+      (check "and a click, even on the popup"
+             (and c (not (complete-of r))))))
+  ;; A small window: the rows shrink so the list leaves the line in view.
+  (resize-window! w 420 140)
+  (fresh! "(set-")
+  (press! 'tab)
+  (steps 1)
+  (let-values ([(cw ch) (window-content-size w)])
+    (let ([box (let ([c (complete-of r)]) (and c (complete-box c)))]
+          [line (- ch repl-pad (repl-line-height))])
+      (check "in a small window the list's rows shrink to leave the line \
+              in view"
+             (and box (< 0 (list-ref box 4) complete-rows)
+                  (<= (+ (cadr box) (cadddr box)) line)))))
+  (screenshot (string-append out-dir "/completion-small.png"))
+  (let* ([c (complete-of r)]
+         [shown (and c (complete-box c) (list-ref (complete-box c) 4))])
+    (press! 'tab)
+    (steps 1)
+    (check "there Tab pages by the rows shown"
+           (and shown (< shown complete-rows)
+                (eqv? shown (complete-sel (complete-of r)))))
+    (press! 'tab 'shift)
+    (press! 'up)
+    (steps 1)
+    (resize-window! w 660 440)
+    (steps 1)
+    (let ([c (complete-of r)])
+      (check "the last row selected there, the window made bigger shows \
+              more rows, the last one last"
+             (and (not (window-error w)) c (complete-box c)
+                  (= (complete-sel c) (- (vector-length (complete-items c)) 1))
+                  (= (+ (complete-top c) (list-ref (complete-box c) 4))
+                     (vector-length (complete-items c)))
+                  (> (list-ref (complete-box c) 4) shown)))))
+  (let ([owner (list 'field)])
+    (complete-open! owner 'symbols 0 (vector))
+    (check "a list opened with no items is closed"
+           (not (complete-of owner))))
+  ;; A REPL's own handler outlives loading the REPL's file again.
+  (let ([mine (lambda (win x y button clicks) #f)])
+    (hashtable-set! (window-handlers w) 'mouse-down mine)
+    (load (source-path "apps/repl.ss"))
+    (check "loading the REPL again keeps a REPL's own mouse handler"
+           (eq? mine (hashtable-ref (window-handlers w) 'mouse-down #f))))
   (close-window! w))
+
+;; Names match as in the editor e: in segments, each starting where a part
+;; of the name starts, in any order.
+(let ([world (map (lambda (s) (cons (symbol->string s) #f))
+                  (environment-symbols (interaction-environment)))]
+      [names (lambda (v) (map car (vector->list v)))])
+  (check "stp still finds set-theme-plist!"
+         (member "set-theme-plist!" (names (rank-choices "stp" world))))
+  (check "a segment starts where a part does: letters in order inside a \
+          part do not match"
+         (null? (names (rank-choices "sem" '(("set-theme!" . #f))))))
+  (check "segments out of order match, after those in order"
+         (equal? (names (rank-choices "thse" '(("set-theme" . #f)
+                                               ("theme-set" . #f))))
+                 '("theme-set" "set-theme")))
+  (check "an exact name comes first"
+         (equal? "string" (car (names (rank-choices "string" world))))))
 (press! #\u 'ctrl)
 (type! "(exit)")
 (press! 'return)
