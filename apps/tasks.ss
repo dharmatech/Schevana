@@ -846,7 +846,7 @@
       its rows with the screen and uploads the ones that differ.")
     (4 done chore normal "Claude" ("structure") #f ()
      "Split the world into folders, at 80 columns"
-     "Kits, styles, themes, wallpapers and apps are folders, one definition \
+     "Kits, styles, palettes, wallpapers and apps are folders, one definition \
       per file, loaded in file-name order.")
     (5 done feature high "Claude" ("render") #f ()
      "HiDPI: draw from outlines at any scale"

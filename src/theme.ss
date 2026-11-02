@@ -124,40 +124,36 @@
 ;;; ------------------------------------------------------------------
 ;;; palettes
 ;;; A palette is named colors, a layer under the styles. Each is a file in
-;;; themes/; the setting 'palette names the one in use:
+;;; palettes/; the setting 'palette names the one in use:
 ;;;
-;;;   (define-theme nord "Nord" '(bg-0 #x242933 ... panel #x1f232b))
+;;;   (define-palette nord "Nord" '(bg-0 #x242933 ... panel #x1f232b))
 
 ;; ((name title plist) ...) in registration order
-(defvar *themes* '())
+(defvar *palettes* '())
 
-(define (register-theme! name title plist)
-  (set! *themes* (registry-add *themes* (list name title plist) car))
+(define (register-palette! name title plist)
+  (set! *palettes* (registry-add *palettes* (list name title plist) car))
   (theme-changed!))
 
-;; (define-theme name "Title" plist) adds a palette, or replaces the one
+;; (define-palette name "Title" plist) adds a palette, or replaces the one
 ;; of that name. Its plist gives colors (and may give derived ones).
-(define-syntax define-theme
+(define-syntax define-palette
   (syntax-rules ()
-    [(_ name title) (register-theme! 'name title '())]
-    [(_ name title plist) (register-theme! 'name title plist)]))
+    [(_ name title) (register-palette! 'name title '())]
+    [(_ name title plist) (register-palette! 'name title plist)]))
 
-(define (themes) (map car *themes*))
+(define (palettes) (map car *palettes*))
 
-(define (preset-title name)
-  (let ([p (assq name *themes*)]) (if p (cadr p) (symbol->string name))))
+(define (palette-title name)
+  (let ([p (assq name *palettes*)]) (if p (cadr p) (symbol->string name))))
 
 ;; (a world from before keeps #f for a palette of no colors until its
 ;; files register again)
 (define (palette-colors name)
-  (let ([p (assq name *themes*)])
-    (let loop ([l (or (and p (caddr p)) '())])   ; old keys renamed
-      (if (and (pair? l) (pair? (cdr l)))
-          (cons* (new-key (car l)) (cadr l) (loop (cddr l)))
-          '()))))
+  (let ([p (assq name *palettes*)]) (or (and p (caddr p)) '())))
 
 ;; The colors and wallpaper the chosen style shows in palette name.
-(define (preset-colors name)
+(define (palette-preview name)
   (let ([t (resolve-theme *style-name* '() (list 'palette name))])
     (fluid-let ([*theme* t])
       (apply append (map (lambda (k) (list k (theme k)))
@@ -394,6 +390,54 @@
           [else #f])))
 
 ;;; ------------------------------------------------------------------
+;;; the frame
+;;; The frame around each window's content: parts of the style that the
+;;; window manager calls with the window, in its theme.
+;;;
+;;;   frame-insets   (win) -> (values left top right bottom), its thickness
+;;;   frame-regions  (win) -> ((kind x y w h) ...) in window coordinates:
+;;;                  close, minimize, maximize and depth (send to back /
+;;;                  bring to front) act on release, menu (the window
+;;;                  menu) on press; title is a drag handle (Genera's
+;;;                  label sits at the bottom); resize-l, -r, -t, -b and
+;;;                  the corners -tl, -tr, -bl, -br start a resize; the
+;;;                  pointer in a scrollbar region is the app's, as in
+;;;                  the content (an outside scroll bar, ui-frame-scrollbar)
+;;;   frame-radius   (win) -> its corners' radius
+;;;   frame-bleed    (win) -> how far, in logical pixels, it draws past
+;;;                  its frame (a glow, say): a window is drawn clipped to
+;;;                  its extent (window-extent in wm.ss), its frame and at
+;;;                  least that bleed, and only that much is drawn again
+;;;                  when it changes
+;;;   frame-under, frame-over   (win x y w h focused? hover pressed) draw
+;;;                  it before the content and after; hover is the region
+;;;                  under the mouse, pressed the drag in progress
+;;;
+;;; A style gives the procedures by name. Each style is a file in styles/;
+;;; add your own there, in ~/.schevana.d/styles/, or from the REPL:
+;;;
+;;;   (define (bare-under win x y w h focused? hover pressed)
+;;;     (fill-rect x y w (title-height) (if focused? 'accent 'bg-3)))
+;;;   (define-style bare "Bare" 'frame-under 'bare-under)
+;;;   (set-style! 'bare)
+;;;   (open-window "Odd one out" 'window-style 'windows)   ; one window's
+
+;; The plain frame, what a style leaves out: a title bar's height on top,
+;; and nothing drawn.
+(define (frame-insets* win) (values 0 (title-height) 0 0))
+(define (frame-regions* win) '())
+(define (frame-radius* win) 0)
+(define (frame-bleed* win) 0)
+(define (frame-under* win x y w h focused? hover pressed) (void))
+(define (frame-over* win x y w h focused? hover pressed) (void))
+
+(for-each theme-default!
+          '(frame-insets frame-regions frame-radius frame-bleed frame-under
+            frame-over)
+          '(frame-insets* frame-regions* frame-radius* frame-bleed*
+            frame-under* frame-over*))
+
+;;; ------------------------------------------------------------------
 ;;; changing settings
 
 ;; Changes the layers by thunk and builds the theme again; if that fails
@@ -408,11 +452,6 @@
       (thunk)
       (theme-changed!))))
 
-;; Old keys still work: preset is the palette, desktop-pattern the
-;; wallpaper.
-(define (new-key key)
-  (case key [(preset) 'palette] [(desktop-pattern) 'wallpaper] [else key]))
-
 (define (set-changes! name plist)
   (set! *changes* (let ([rest (remp (lambda (c) (eq? (car c) name))
                                     *changes*)])
@@ -425,19 +464,18 @@
   (save-theme-soon!))
 
 ;; Your change to the chosen style, remembered for it. window-style
-;; still chooses a style, scale the display's scale.
+;; chooses a style, scale the display's scale.
 (define (set-theme! key value)
   (case key
     [(window-style) (set-style! value)]
     [(scale) (set-scale! value)]
     [else
-     (let ([key (new-key key)])
-       (change-layers!
-        (lambda ()
-          (set-changes! *style-name*
-                        (cons* key value
-                               (plist-remove (changes-of *style-name*) key)))))
-       (save-theme-soon!))]))
+     (change-layers!
+      (lambda ()
+        (set-changes! *style-name*
+                      (cons* key value
+                             (plist-remove (changes-of *style-name*) key)))))
+     (save-theme-soon!)]))
 
 ;; Forgets your changes to the chosen style: those keys, or all.
 (define (reset-style! . keys)
@@ -447,7 +485,7 @@
                    (if (null? keys)
                        '()
                        (fold-left plist-remove (changes-of *style-name*)
-                                  (map new-key keys))))))
+                                  keys)))))
   (save-theme-soon!))
 
 ;; (override! key value) holds in every style that honors key;
@@ -455,12 +493,11 @@
 (define (override! key . value)
   (when (memq key '(window-style scale))
     (errorf 'override! "~s is not a style's setting" key))
-  (let ([key (new-key key)])
-    (change-layers!
-     (lambda ()
-       (set! *overrides*
-         (let ([rest (plist-remove *overrides* key)])
-           (if (pair? value) (cons* key (car value) rest) rest))))))
+  (change-layers!
+   (lambda ()
+     (set! *overrides*
+       (let ([rest (plist-remove *overrides* key)])
+         (if (pair? value) (cons* key (car value) rest) rest)))))
   (save-theme-soon!))
 
 (define (overrides) *overrides*)
@@ -475,9 +512,9 @@
   (for-each (lambda (k) (set-theme! k (plist-ref plist k #f)))
             (plist-keys plist)))
 
-(define (apply-theme-preset! name)
-  (unless (assq name *themes*)
-    (errorf 'apply-theme-preset! "no theme ~s" name))
+(define (set-palette! name)
+  (unless (assq name *palettes*)
+    (errorf 'set-palette! "no theme ~s" name))
   (set-theme! 'palette name))
 
 (define (set-accent! color) (set-theme! 'accent color))
@@ -546,7 +583,7 @@
        (or (fixnum? v) (stipple? v)
            (and (pair? v) (or (fixnum? (car v)) (symbol? (car v)))
                 (real? (cdr v))))]
-      [(eq? key 'palette) (and (assq v *themes*) #t)]
+      [(eq? key 'palette) (and (assq v *palettes*) #t)]
       [else (and (not (eq? d theme-unset))
                  (exists (lambda (kind?) (and (kind? d) (kind? v)))
                          (list fixnum? string? symbol? boolean? list?)))])))
@@ -573,7 +610,7 @@
 (define (old-theme->changes alist)
   (let* ([ref (lambda (k d) (let ([p (assq k alist)]) (if p (cdr p) d)))]
          [style (registered-style (ref 'window-style 'mac))]
-         [palette (if (assq (ref 'preset #f) *themes*)
+         [palette (if (assq (ref 'preset #f) *palettes*)
                       (ref 'preset #f)
                       'tokyo-night)]
          [kvs (valid-plist

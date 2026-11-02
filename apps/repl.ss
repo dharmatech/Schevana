@@ -571,12 +571,9 @@
 (define completion-quoted
   `((set-theme! "style" ,(lambda () (map symbol->string (styles)))
                 window-style)
-    (set-theme! "pattern" ,(lambda () (map symbol->string (wallpapers)))
-                desktop-pattern)
     (set-theme! "wallpaper" ,(lambda () (map symbol->string (wallpapers)))
                 wallpaper)
-    (set-theme! "palette" ,(lambda () (map symbol->string (themes))) preset)
-    (set-theme! "palette" ,(lambda () (map symbol->string (themes))) palette)
+    (set-theme! "palette" ,(lambda () (map symbol->string (palettes))) palette)
     (set-theme! "key" ,(lambda () (map symbol->string (theme-keys))))
     (set-style! "style" ,(lambda () (map symbol->string (styles))))
     (override! "key" ,(lambda () (map symbol->string (theme-keys))))
@@ -586,9 +583,9 @@
     (theme-default "key" ,(lambda () (map symbol->string (theme-keys))))
     (launch-app "app" ,(lambda () (map symbol->string (apps))))
     (find-window "app" ,(lambda () (map symbol->string (apps))))
-    (apply-theme-preset! "palette"
-                         ,(lambda () (map symbol->string (themes))))
-    (preset-colors "palette" ,(lambda () (map symbol->string (themes))))))
+    (set-palette! "palette"
+                         ,(lambda () (map symbol->string (palettes))))
+    (palette-preview "palette" ,(lambda () (map symbol->string (palettes))))))
 
 ;; (values kind start typed choices): choices are (name . kind-or-#f);
 ;; a kind of #f is looked up in the environment when shown.

@@ -118,7 +118,7 @@
     (safely 'init (lambda () (load-file! user-init-file)))))
 
 ;; The user's own folder: lib for libraries, and kits, desktop, styles,
-;; themes, wallpapers and apps like the tree's (see source-folders).
+;; palettes, wallpapers and apps like the tree's (see source-folders).
 (define user-directory (format "~a/.schevana.d" (or (getenv "HOME") ".")))
 
 ;; (import (acme math)) also finds acme/math.sls here.
@@ -149,7 +149,7 @@
 
 ;; The folders after the core, in load order.
 (define source-folders
-  '("kits" "desktop" "styles" "themes" "wallpapers" "apps"))
+  '("kits" "desktop" "styles" "palettes" "wallpapers" "apps"))
 
 ;; main.ss turns this on: a real session loads the user's folders too, at
 ;; boot and at every (reload!). The tests never do.

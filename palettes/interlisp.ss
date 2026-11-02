@@ -1,7 +1,7 @@
-;;; themes/interlisp.ss — the Interlisp palette.
+;;; palettes/interlisp.ss — the Interlisp palette.
 ;;; Interlisp-D: black ink on white paper.
 
-(define-theme interlisp "Interlisp"
+(define-palette interlisp "Interlisp"
   '(bg-0 #xffffff bg-1 #xffffff bg-2 #xf0f0f0 bg-3 #xd8d8d8
     text #x000000 text-dim #x2a2a2a text-faint #x6a6a6a
     accent #x000000 accent-2 #x555555

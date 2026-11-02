@@ -1,6 +1,6 @@
-;;; themes/catppuccin.ss — the Catppuccin palette.
+;;; palettes/catppuccin.ss — the Catppuccin palette.
 
-(define-theme catppuccin "Catppuccin"
+(define-palette catppuccin "Catppuccin"
   '(bg-0 #x181825 bg-1 #x1e1e2e bg-2 #x252537 bg-3 #x313244
     text #xcdd6f4 text-dim #xbac2de text-faint #x6c7086
     accent #x89b4fa accent-2 #xcba6f7

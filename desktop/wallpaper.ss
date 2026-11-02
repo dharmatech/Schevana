@@ -86,14 +86,14 @@
 ;; The desktop's background in a rectangle: the wallpaper named pattern (a
 ;; value of the theme key 'wallpaper) from the colors top and bottom, or a
 ;; plain fill when none is there.
-(define (fill-desktop-pattern x y w h pattern top bottom)
+(define (fill-wallpaper x y w h pattern top bottom)
   (let ([wp (assq (wallpaper-shown pattern) *wallpapers*)])
     (if wp
         ((caddr wp) x y w h top bottom)
         (fill-rect x y w h top))))
 
 (define-part (draw-wallpaper w h)
-  (fill-desktop-pattern 0 0 w h (theme 'wallpaper) 'desktop-top 'desktop-bottom)
+  (fill-wallpaper 0 0 w h (theme 'wallpaper) 'desktop-top 'desktop-bottom)
   (when (eq? (wallpaper-shown (theme 'wallpaper)) 'gradient)
     (fill-glow (* w 0.80) (* h 0.22) (* 0.55 (max w h)) (alpha 'accent-2 0.10))
     (fill-glow (* w 0.12) (* h 0.90) (* 0.50 (max w h)) (alpha 'accent 0.08)))

@@ -1,6 +1,6 @@
-;;; themes/gruvbox.ss — the Gruvbox palette.
+;;; palettes/gruvbox.ss — the Gruvbox palette.
 
-(define-theme gruvbox "Gruvbox"
+(define-palette gruvbox "Gruvbox"
   '(bg-0 #x1d2021 bg-1 #x282828 bg-2 #x32302f bg-3 #x3c3836
     text #xebdbb2 text-dim #xd5c4a1 text-faint #x928374
     accent #x83a598 accent-2 #xd3869b

@@ -1,6 +1,6 @@
-;;; themes/nord.ss — the Nord palette.
+;;; palettes/nord.ss — the Nord palette.
 
-(define-theme nord "Nord"
+(define-palette nord "Nord"
   '(bg-0 #x242933 bg-1 #x2e3440 bg-2 #x353c4a bg-3 #x3b4252
     text #xeceff4 text-dim #xd8dee9 text-faint #x6d7a96
     accent #x88c0d0 accent-2 #xb48ead

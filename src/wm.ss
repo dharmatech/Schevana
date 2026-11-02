@@ -15,7 +15,7 @@
 ;;;           resize focus blur close.
 ;;;
 ;;; The frame around the content (title bar, borders, buttons) belongs to
-;;; the style, see styles.ss. Geometry here is the outer frame;
+;;; the style, see theme.ss. Geometry here is the outer frame;
 ;;; 'size and the w h passed to handlers are always the content size.
 ;;; Every handler runs under safe-call: errors and runaway loops crash only
 ;;; that window, which then shows the error and can be retried.
@@ -383,7 +383,7 @@
                       thunk
                       (lambda () (when (eq? *theme* t) (set! *theme* main)))))))
 
-;; Calls win's frame part key (styles.ss) in win's theme.
+;; Calls win's frame part key (theme.ss) in win's theme.
 (define (frame-call win key . args)
   (in-window-theme win (lambda () (apply (part key) win args))))
 

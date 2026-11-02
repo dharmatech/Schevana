@@ -1,6 +1,6 @@
-;;; themes/paper.ss — the Paper palette.
+;;; palettes/paper.ss — the Paper palette.
 
-(define-theme paper "Paper"
+(define-palette paper "Paper"
   '(bg-0 #xfbfaf7 bg-1 #xf4f2ee bg-2 #xe9e6df bg-3 #xdcd7ce
     text #x2b2a33 text-dim #x4f4d5a text-faint #x8b8794
     accent #x3b6fd8 accent-2 #x8a4fd0

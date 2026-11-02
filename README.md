@@ -29,8 +29,8 @@ install libsdl3-0`. SDL chooses between Wayland and X11 by itself;
 ```
 
 `~/.schevana.ss` is loaded at boot if it exists, like `.emacs`, and so are
-your own apps, styles, themes and wallpapers in `~/.schevana.d/` (see
-"Your own apps, styles, themes and wallpapers" below). The look you choose
+your own apps, styles, palettes and wallpapers in `~/.schevana.d/` (see
+"Your own apps, styles, palettes and wallpapers" below). The look you choose
 in the Settings app is saved to `~/.schevana-theme.ss` (plain data, never
 evaluated) and loaded at boot too. The host window's taskbar icon is the
 wallpaper's λ in your theme's colors, drawn by `draw-app-icon` (redefine
@@ -154,15 +154,15 @@ Define a new app and it appears in the launcher immediately:
       'mouse-down (lambda (win x y button clicks) (set! n (+ n 1))))))
 ```
 
-## Your own apps, styles, themes and wallpapers
+## Your own apps, styles, palettes and wallpapers
 
-Styles, themes (palettes) and wallpapers (desktop fills) have definers
+Styles, palettes (named colors) and wallpapers (desktop fills) have definers
 of the same shape as `define-app`: a name, a title, then the definition.
 Evaluate one in a REPL and the next frame shows it; define a name again
 and the new definition takes the old one's place.
 
 ```scheme
-(define-theme dusk "Dusk"
+(define-palette dusk "Dusk"
   '(bg-0 #x15131c bg-1 #x1c1a26 bg-2 #x24212f bg-3 #x2e2a3b
     text #xe0dcef text-dim #xb8b2cc text-faint #x6e6884
     accent #xf0a35e accent-2 #xc792ea
@@ -185,13 +185,13 @@ and the new definition takes the old one's place.
 ```
 
 To keep one, drop it into a file of its own in `~/.schevana.d/`, under
-`apps/`, `styles/`, `themes/` or `wallpapers/`, with any code your apps
+`apps/`, `styles/`, `palettes/` or `wallpapers/`, with any code your apps
 share under `kits/` and your own bars, menus or keys under `desktop/`.
 These folders load at boot after Schevana's own (`kits` first, then
-`desktop`, `styles`, `themes`, `wallpapers` and `apps`, each in
+`desktop`, `styles`, `palettes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
-styles and themes with the others, and the saved look may name them.
-`(apps)`, `(styles)`, `(themes)`, `(wallpapers)` and
+styles and palettes with the others, and the saved look may name them.
+`(apps)`, `(styles)`, `(palettes)`, `(wallpapers)` and
 `(surfaces)` list what is registered.
 
 ## Architecture
@@ -200,8 +200,8 @@ styles and themes with the others, and the saved look may name them.
 apps/        ordinary procedures: repl  clock  life  sketch  monitor
              settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
-themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
-             tokyo-night
+palettes/    named colors: catppuccin  genera  gruvbox  interlisp  nord
+             paper  tokyo-night
 styles/      styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
@@ -216,7 +216,6 @@ kits/        complete: a completion list beside a caret (matching, keys,
              dropdowns, tabs, checkboxes, a table, a tree, chips, a date
              picker, scroll views, tooltips, a dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
-src/styles   the frame's parts and its plain built-ins
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!
@@ -224,12 +223,13 @@ src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors and stipples, fonts and
              ink, layers; the two screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
-src/theme    settings in layers, rules, palettes, styles, parts; save/load
+src/theme    the whole look: settings in layers, rules, palettes, styles,
+             parts, the frame's parts; save/load
 src/ffi      the only file that knows about C (SDL3 + Cairo)
 ```
 
 `src/` is the core, the explicit, ordered list in `load.ss`. Its last
-file loads the folders: `kits/`, `desktop/`, `styles/`, `themes/`,
+file loads the folders: `kits/`, `desktop/`, `styles/`, `palettes/`,
 `wallpapers/` and `apps/`, one definition per file (`desktop/` aside),
 each folder in file-name order. A file dropped into a folder loads at the
 next boot or `(reload!)`, with no list to edit, and `(source-files)`
@@ -334,7 +334,7 @@ Decisions worth keeping in mind for the real design:
   `'parent`: a derived style changes what it sets and inherits the rest.
   A part is a setting whose value is a procedure or its name, looked up
   at each call, so redefining that procedure at the REPL shows on the
-  next frame. The frame is six parts (`src/styles.ss`): `frame-insets`,
+  next frame. The frame is six parts (`src/theme.ss`): `frame-insets`,
   `frame-regions` (`close`, `minimize`, `maximize`, `depth` buttons and
   `title` areas), `frame-radius`, `frame-bleed`, and two drawing passes
   around the content, `frame-under` and `frame-over`. The window manager
@@ -355,8 +355,7 @@ Decisions worth keeping in mind for the real design:
   container draws its inside in its place (`with-place`: a text box's
   `field`, a table's `list`, `dialog`, `tooltip`, `menu`, the bars'
   `bar`, `toast`), so a style can color what sits there, an app's own
-  cells too, by its `'places`. `define-window-style`, the older form,
-  still loads.
+  cells too, by its `'places`.
   Styles share their drawing too. A stipple, `(stipple ink paper row
   ...)`, is a pattern used wherever a color is (a fill, a line, text, a
   theme key's value), tiled on the screen's device pixels where px's

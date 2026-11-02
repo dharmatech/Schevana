@@ -147,12 +147,12 @@
 ;;; ------------------------------------------------------------------ theme tab
 
 (define (draw-preset-card x y w h name selected? hover?)
-  (let* ([colors (preset-colors name)]
+  (let* ([colors (palette-preview name)]
          [c (lambda (k) (plist-ref colors k #x808080))]
          [label-h (settings-card-label-height 30)] [r 10])
     (call-with-round-clip x y w h r
       (lambda ()
-        (fill-desktop-pattern x y w h (plist-ref colors 'wallpaper 'gradient)
+        (fill-wallpaper x y w h (plist-ref colors 'wallpaper 'gradient)
                               (c 'desktop-top) (c 'desktop-bottom))
         (let ([wx (+ x 18)] [wy (+ y 14)] [ww (- w 36)] [wh (- h label-h 22)])
           (fill-round-rect wx (+ wy 3) ww wh 5 (alpha #x000000 0.25))
@@ -171,7 +171,7 @@
         (fill-rect x (- (+ y h) label-h) w label-h (c 'panel))
         (draw-text (+ x 12) (+ (- (+ y h) label-h)
                                (/ (- label-h (font-line-height 'ui)) 2))
-                   (preset-title name) (c 'panel-text) 'ui)))
+                   (palette-title name) (c 'panel-text) 'ui)))
     (stroke-round-rect x y w h r (cond [selected? 'accent]
                                        [hover? 'text-faint]
                                        [else 'window-border])
@@ -180,18 +180,18 @@
 (define (settings-draw-theme ui x y w)
   (let* ([y0 (settings-heading x y w "Theme"
                "Pick a starting point; fine-tune it under Colors.")]
-         [cw (settings-card-width (map preset-title (themes)))]
+         [cw (settings-card-width (map palette-title (palettes)))]
          [ch (+ 90 (settings-card-label-height 30))]
-         [ay (+ 10 (settings-card-grid (themes) x y0 w cw ch
+         [ay (+ 10 (settings-card-grid (palettes) x y0 w cw ch
                      (lambda (name cx cy)
                        (draw-preset-card cx cy cw ch name
                                          (eq? name (theme 'palette))
                                          (ui-hover? ui cx cy cw ch))
-                       (ui-area ui (list 'preset name) cx cy cw ch
+                       (ui-area ui (list 'palette name) cx cy cw ch
                                 (lambda ()
-                                  (apply-theme-preset! name)
+                                  (set-palette! name)
                                   (save-theme-soon!))))))]
-         [palette (preset-colors (theme 'palette))]
+         [palette (palette-preview (theme 'palette))]
          [per-row (max 1 (exact (floor (/ (+ w 8) 36))))]
          [cy0 (round (+ ay (font-line-height 'ui-bold) 27))])
     (draw-text x ay "Accent color" 'text 'ui-bold)
@@ -410,7 +410,7 @@
         [r 10])
     (call-with-round-clip x y w h r
       (lambda ()
-        (fill-desktop-pattern x y w h (theme 'wallpaper)
+        (fill-wallpaper x y w h (theme 'wallpaper)
                               'desktop-top 'desktop-bottom)
         (draw-style-preview name x y w (- h label-h) 0.5)
         (fill-rect x (- (+ y h) label-h) w label-h 'panel)

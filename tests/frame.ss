@@ -398,9 +398,9 @@
 (define (glow-under win x y w h focused? hover pressed)
   (fill-rect (- x 5) (- y 5) (+ w 10) (+ h 10) #xff00ff)
   (fill-rect x y w (title-height) 'accent))
-(define-window-style glow-5 "Glow, 5" 'bleed (lambda (win) 5)
-  'draw-under glow-under)
-(define-window-style glow "Glow" 'draw-under glow-under)
+(define-style glow-5 "Glow, 5" 'frame-bleed (lambda (win) 5)
+  'frame-under glow-under)
+(define-style glow "Glow" 'frame-under glow-under)
 
 ;; A window's extent, in device rows (y0 . y1).
 (define (extent-rows win)
@@ -1351,7 +1351,7 @@
 
 ;; The wallpaper in use, defined again, shows on the next frame.
 (let ([pattern (theme 'wallpaper)] [plain *wallpapers*])
-  (set-theme! 'desktop-pattern 'flat)
+  (set-theme! 'wallpaper 'flat)
   (steps 1)
   (let ([px0 (desktop-pixel)])
     (define-wallpaper flat "Flat"
@@ -1361,7 +1361,7 @@
           [same (and (wallpaper-is-drawn?)
                      (matches-reference? 'wallpaper-defined-again))])
       (set! *wallpapers* plain)
-      (set-theme! 'desktop-pattern pattern)
+      (set-theme! 'wallpaper pattern)
       (steps 1)
       (check (format "the wallpaper in use, defined again, shows on the next \
                       frame (#x~x -> #x~x)" px0 shown)

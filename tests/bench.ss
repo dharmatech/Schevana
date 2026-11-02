@@ -143,7 +143,7 @@
     (output . "2 Settings")
     (output . "1 REPL")
     (input . "(set-theme! 'accent #xff9e64)")
-    (input . "(apply-theme-preset! 'tokyo-night)")
+    (input . "(set-palette! 'tokyo-night)")
     (input . "(define-app (counter) \"Counter\" (let ([n 0]) \
               (open-window \"Counter\" 'size '(240 . 100))))")
     (result . "counter")

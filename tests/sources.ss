@@ -115,8 +115,8 @@
           [(define-part)
            (names 'name (list (car head)
                               (string->symbol (format "~a*" (car head)))))]
-          [(define-style define-window-style) (names 'style (list head))]
-          [(define-theme) (names 'theme (list head))]
+          [(define-style) (names 'style (list head))]
+          [(define-palette) (names 'palette (list head))]
           [(define-wallpaper) (names 'wallpaper (list head))]
           [(define-surface) (names 'surface (list head))]
           [(define-strip) (names 'strip (list head))]
@@ -167,11 +167,11 @@
 ;;; ------------------------------------------------------------------
 ;;; folders
 
-;; Each file in styles/, themes/ and wallpapers/ defines one of its kind,
+;; Each file in styles/, palettes/ and wallpapers/ defines one of its kind,
 ;; named after the file; each in apps/ at least the app named after it.
 ;; desktop/ has no kind and no prefix: its files define plain names.
 (define folder-kinds
-  '(("styles" . style) ("themes" . theme) ("wallpapers" . wallpaper)
+  '(("styles" . style) ("palettes" . palette) ("wallpapers" . wallpaper)
     ("apps" . app)))
 
 (define world-symbols (environment-symbols (interaction-environment)))
@@ -181,7 +181,7 @@
     [(name) (and (memq (cdr d) world-symbols) #t)]
     [(app) (and (memq (cdr d) (apps)) #t)]
     [(style) (and (find-style (cdr d)) #t)]
-    [(theme) (and (assq (cdr d) *themes*) #t)]
+    [(palette) (and (assq (cdr d) *palettes*) #t)]
     [(wallpaper) (and (assq (cdr d) *wallpapers*) #t)]
     [(surface) (and (find-surface (cdr d)) #t)]
     [(strip) (and (assq (cdr d) *strips*) #t)]))
@@ -230,9 +230,9 @@
   (map cdr (filter (lambda (d) (eq? (car d) kind))
                    (apply append (map definitions (folder-files))))))
 
-(check "styles, themes, wallpapers and apps are listed in file-name order"
+(check "styles, palettes, wallpapers and apps are listed in file-name order"
        (and (equal? (styles) (defined-in-files 'style))
-            (equal? (themes) (defined-in-files 'theme))
+            (equal? (palettes) (defined-in-files 'palette))
             (equal? (wallpapers) (defined-in-files 'wallpaper))
             (equal? (apps) (defined-in-files 'app))))
 

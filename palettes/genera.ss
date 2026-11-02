@@ -1,8 +1,8 @@
-;;; themes/genera.ss — the Genera palette.
+;;; palettes/genera.ss — the Genera palette.
 ;;; Symbolics Genera: ink on paper, and the panels in reverse video like
 ;;; its mouse documentation line.
 
-(define-theme genera "Genera"
+(define-palette genera "Genera"
   '(bg-0 #xffffff bg-1 #xffffff bg-2 #xf0f0f0 bg-3 #xd8d8d8
     text #x000000 text-dim #x222222 text-faint #x666666
     accent #x000000 accent-2 #x444444

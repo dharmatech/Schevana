@@ -697,7 +697,7 @@
              `(mouse-move ,(+ x 20) ,y) `(mouse-up ,(+ x 20) ,y left))
     (steps 2)
     (check "and its corner still resizes it" (= (window-w w) (+ w0 20)))))
-(apply-theme-preset! 'genera)
+(set-palette! 'genera)
 (style-scene! 'genera)
 (screenshot (string-append out-dir "/style-genera-palette.png"))
 (check "genera's palette keeps its own panel text"
@@ -706,9 +706,9 @@
 
 ;; Depth and size gadgets, which no built-in style uses now, still work in
 ;; a style defined at run time.
-(define-window-style gadgets "Gadgets"
-  'insets (lambda (win) (values 4 20 4 12))
-  'buttons (lambda (win)
+(define-style gadgets "Gadgets"
+  'frame-insets (lambda (win) (values 4 20 4 12))
+  'frame-regions (lambda (win)
              (let ([w (window-w win)] [h (window-h win)])
                (list (list 'maximize (- w 48) 0 24 20)
                      (list 'depth (- w 24) 0 24 20)
@@ -741,45 +741,45 @@
 
 ;; A style, theme, wallpaper or app defined again keeps its place and takes
 ;; the new definition.
-(let ([styles0 *styles*] [themes0 *themes*] [papers *wallpapers*]
+(let ([styles0 *styles*] [palettes0 *palettes*] [papers *wallpapers*]
       [apps0 *apps*])
-  (define-window-style genera "Genera, again")
-  (define-theme nord "Nord, again")
+  (define-style genera "Genera, again")
+  (define-palette nord "Nord, again")
   (define-wallpaper flat "Flat, again" (lambda (x y w h top bottom) (void)))
   (register-app! 'clock "Clock, again" (lambda () #f))
   (let ([named (lambda (registry name-of title-of)
                  (map (lambda (e) (cons (name-of e) (title-of e))) registry))])
-    (check "a style, theme, wallpaper or app defined again keeps its place"
+    (check "a style, palette, wallpaper or app defined again keeps its place"
            (and (equal? (styles) (map style-name styles0))
-                (equal? (themes) (map car themes0))
+                (equal? (palettes) (map car palettes0))
                 (equal? (wallpapers) (map car papers))
                 (equal? (apps) (map app-name apps0))
                 (member '(genera . "Genera, again")
                         (named *styles* style-name
                                style-title))
-                (equal? (preset-colors 'nord) (preset-colors 'tokyo-night))
-                (equal? (preset-title 'nord) "Nord, again")
+                (equal? (palette-preview 'nord) (palette-preview 'tokyo-night))
+                (equal? (palette-title 'nord) "Nord, again")
                 (member '(flat . "Flat, again") (named *wallpapers* car cadr))
                 (member '(clock . "Clock, again")
                         (named *apps* app-name app-title)))))
   (set! *styles* styles0)
-  (set! *themes* themes0)
+  (set! *palettes* palettes0)
   (set! *wallpapers* papers)
   (set! *apps* apps0)
   (wm-chrome-changed!))
 
 ;; a palette is a change to the style chosen; the wallpaper is the style's
 (set-theme! 'window-style 'interlisp)
-(apply-theme-preset! 'interlisp)
+(set-palette! 'interlisp)
 (style-scene! 'interlisp)
 (screenshot (string-append out-dir "/style-interlisp-palette.png"))
 (check "the interlisp style shades the desktop"
        (eq? (theme 'wallpaper) 'shade))
-(apply-theme-preset! 'nord)
+(set-palette! 'nord)
 (check "in other palettes too, and Mac in its palette keeps the gradient"
        (and (eq? (theme 'wallpaper) 'shade)
             (begin (set-theme! 'window-style 'mac)
-                   (apply-theme-preset! 'interlisp)
+                   (set-palette! 'interlisp)
                    (eq? (theme 'wallpaper) 'gradient))))
 ;; A theme saved before Amiga and Workbench were removed still loads.
 (reset-theme!)
@@ -809,7 +809,7 @@
     (steps 2)))
 (check "settings opens" (and s (not (window-error s))))
 (check "settings is single-instance" (eq? s (settings)))
-(click-ui! s '(preset nord))
+(click-ui! s '(palette nord))
 (check "clicking a preset applies it"
        (and (= (theme 'accent) #x88c0d0) (eq? (theme 'palette) 'nord)))
 (screenshot (string-append out-dir "/settings-theme.png"))
@@ -910,7 +910,7 @@
          (and (= (theme 'accent) saved-accent) (= 0 (theme 'corner-radius))
               (eq? (theme 'palette) 'nord)
               (equal? (theme 'ui-font) "serif"))))
-(apply-theme-preset! 'paper)
+(set-palette! 'paper)
 (set-theme! 'title-height 30)
 (set-theme! 'mono-font-size 14)
 (set-theme! 'ui-font-size 13)
@@ -3439,9 +3439,9 @@
 
 ;; A style whose drawing fails: nothing of what was under the window
 ;; stays on screen.
-(define-window-style broken "Broken"
-  'radius (lambda (w) 8)
-  'draw-under (lambda (win x y w h focused? hover pressed)
+(define-style broken "Broken"
+  'frame-radius (lambda (w) 8)
+  'frame-under (lambda (win x y w h focused? hover pressed)
                 (error 'broken "broken on purpose")))
 (with-quiet-status
  (lambda ()

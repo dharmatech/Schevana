@@ -879,7 +879,7 @@
         [bleed-of (lambda (w)   ; how far w's extent reaches past its frame
                     (let-values ([(x y ew eh) (window-extent w)])
                       (- (window-x w) x)))])
-    (define-window-style wide "Wide" 'bleed (lambda (win) 5))
+    (define-style wide "Wide" 'frame-bleed (lambda (win) 5))
     (override! 'shadow 0)   ; shadow
     (window-set! w 'window-style 'wide)
     (let ([wide (bleed-of w)])
@@ -2544,17 +2544,17 @@
                  'button-idle (mix (ref 'bg-3) (ref 'text) 0.15)))))
 
 (check (format "every palette resolves to its colors derived as today's \
-                tree derived them (~a)" (themes))
+                tree derived them (~a)" (palettes))
        (for-all (lambda (name)
                   (let* ([given (let ([p (palette-colors name)])
                                   (if (null? p) base-colors p))]
                          [today (derived-as-today given)]
-                         [now (preset-colors name)])
+                         [now (palette-preview name)])
                     (for-all (lambda (k)
                                (equal? (plist-ref now k #f)
                                        (plist-ref today k #f)))
                              palette-keys)))
-                (themes)))
+                (palettes)))
 
 ;;; ------------------------------------------------------------------
 ;;; styles and parts

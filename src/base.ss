@@ -78,7 +78,7 @@
   (let loop ([l lst] [i 0])
     (cond [(null? l) #f] [(pred (car l)) i] [else (loop (cdr l) (+ i 1))])))
 
-;; A registry (apps, window styles, themes, wallpapers) is a list in
+;; A registry (apps, styles, palettes, wallpapers) is a list in
 ;; first-registration order. An entry whose name is already there replaces
 ;; that entry in place. name-of gives an entry's name.
 (define (registry-add entries entry name-of)
