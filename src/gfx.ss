@@ -270,9 +270,15 @@
                    CAIRO_FONT_SLANT_NORMAL)]
         [weight (if (memq 'bold opts)
                     CAIRO_FONT_WEIGHT_BOLD
-                    CAIRO_FONT_WEIGHT_NORMAL)])
+                    CAIRO_FONT_WEIGHT_NORMAL)]
+        ;; a Mac's Cairo takes monospace for Courier, which has no λ
+        [face-family (if (and (equal? family "monospace")
+                              (memq (machine-type)
+                                    '(ta6osx tarm64osx a6osx arm64osx)))
+                         "Menlo"
+                         family)])
     (make-font family slant weight size
-               (cairo-toy-font-face-create family slant weight) #f
+               (cairo-toy-font-face-create face-family slant weight) #f
                (if (memq 'crisp opts) crisp-font-options plain-font-options))))
 
 ;; (font family size . opts), opts bold, italic and crisp (not
