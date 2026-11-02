@@ -115,7 +115,7 @@
 
 (define (load-user-init!)
   (when (file-exists? user-init-file)
-    (safely 'init (lambda () (load user-init-file)))))
+    (safely 'init (lambda () (load-file! user-init-file)))))
 
 ;; The user's own folder: lib for libraries, and kits, desktop, styles,
 ;; themes, wallpapers and apps like the tree's (see source-folders).
@@ -188,7 +188,26 @@
 ;; tests read this list.
 (define (source-files) (append *schevana-sources* (folder-files)))
 
-(define (load-source f) (load (source-path f)))
+;; The text of every source as it was loaded (or, from a REPL, evaluated),
+;; by its name: a file's path, or what the REPL calls its input. What reads
+;; the sources (the REPL's descriptions) reads these, not the files as they
+;; are now, so that it tells of the code that runs. (serial . text), the
+;; serial counting the texts kept.
+(defvar *source-texts* (make-hashtable string-hash string=?))
+(defvar *source-serial* 0)
+
+(define (keep-source-text! name text)
+  (set! *source-serial* (+ *source-serial* 1))
+  (hashtable-set! *source-texts* name (cons *source-serial* text)))
+
+(define (file-text path) (call-with-input-file path get-string-all))
+
+;; Loads a file, keeping its text (read just before load reads it).
+(define (load-file! path)
+  (keep-source-text! path (file-text path))
+  (load path))
+
+(define (load-source f) (load-file! (source-path f)))
 
 ;; Loads files into the world (from a private REPL too). Run as a process
 ;; (the launcher's "Reload sources", (reload!) in a REPL), it names itself
@@ -247,6 +266,14 @@
 ;; Loading this file (at boot, or in a reload) starts the renderer's
 ;; offscreen surfaces afresh; caches make them again when needed.
 (free-owned-surfaces!)
+
+;; load.ss loads the core before this file can keep its texts: kept now,
+;; moments after (a reload keeps them as it loads them).
+(for-each (lambda (f)
+            (let ([path (source-path f)])
+              (unless (hashtable-contains? *source-texts* path)
+                (keep-source-text! path (file-text path)))))
+          *schevana-sources*)
 
 ;; The folders load from here, the end of the last file in load.ss's list,
 ;; so that a reload by older code, which loads only that list, loads them

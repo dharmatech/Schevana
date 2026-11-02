@@ -230,6 +230,46 @@
   (check "other procedures show their arity"
          (string=? "Takes 1 argument."
                    (arity-description (procedure-arity-mask car))))
+  ;; Descriptions tell of the code that runs: the text a file had when it
+  ;; was loaded, a REPL's own definition, or what a value itself tells.
+  (let ([f (let ([p (string-append out-dir "/zz-docs.ss")])
+             (if (path-absolute? p)
+                 p
+                 (string-append (current-directory) "/" p)))]
+        [env (repl-environment r)])
+    (define (write-source! text)
+      (call-with-output-file f (lambda (p) (display text p)) 'replace))
+    (define (doc name)
+      (let-values ([(sig doc) (name-description name env)]) (list sig doc)))
+    (write-source! ";; Doubles x.\n(define (zz-twice x) (* 2 x))\n")
+    (load-sources! (list f))
+    (check "a loaded file's definition is described"
+           (equal? (doc "zz-twice") '("(zz-twice x)" "Doubles x.")))
+    (write-source! ";; Triples x.\n(define (zz-twice x y) (* 3 x))\n")
+    (check "a file edited since it loaded still tells of what loaded"
+           (equal? (doc "zz-twice") '("(zz-twice x)" "Doubles x.")))
+    (load-sources! (list f))
+    (check "and of the new text once that is loaded"
+           (equal? (doc "zz-twice") '("(zz-twice x y)" "Triples x.")))
+    (let ([text ";; Adds them.\n(define (zz-twice a b) (+ a b))"])
+      (repl-input-set! r text)
+      (repl-point-set! r (string-length text)))
+    (press! 'return)
+    (check "a procedure redefined at the REPL is described as typed there"
+           (wait-for (lambda ()
+                       (equal? (doc "zz-twice")
+                               '("(zz-twice a b)" "Adds them.")))))
+    (eval '(set! zz-twice car) env)
+    (check "set! to another procedure: what that procedure tells"
+           (equal? (doc "zz-twice") '("(zz-twice …)" "Takes 1 argument.")))
+    (check "an app's launcher, made by define-app, keeps its description"
+           (equal? (car (doc "clock")) "(clock)"))
+    (fresh! "(let ((x)) x)")
+    (press! 'return)
+    (check "an error in REPL input says where in it"
+           (wait-for (lambda ()
+                       (exists (lambda (l) (string-contains-ci? l "REPL input"))
+                               (transcript w))))))
   ;; Libraries: a folder of our own, searched by import and offered by Tab.
   (let ([lib (string-append out-dir "/lib")])
     (for-each (lambda (d) (unless (file-exists? d) (mkdir d)))

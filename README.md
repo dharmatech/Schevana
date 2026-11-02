@@ -74,8 +74,13 @@ match as in the editor e: in segments, each starting where a part of the
 name starts, in any order (`dtc` puts `draw-text-centered` first,
 `winfind` `find-window`); fewer segments, in order, earlier, tighter and
 shorter come first, ignoring case. The chosen one shows its argument
-list and the comment above its definition, read from the sources (a
-library shows what it exports).
+list and the `;;` comment above its definition (a library shows what it
+exports), as the code that runs has them: the text each file had when it
+was loaded, kept by the core, not the file as it is now; and for a
+procedure, the definition its code was compiled from, so one redefined
+at the REPL shows what was typed there (input is read with its places,
+so errors in it say where too), and one `set!` to another procedure
+what that one tells.
 
 There are three kinds of REPL, each in its own environment:
 

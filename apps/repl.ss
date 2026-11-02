@@ -138,11 +138,23 @@
 ;;; ------------------------------------------------------------------
 ;;; evaluation
 
-(define (read-all-from-string src)
-  (let ([p (open-input-string src)])
-    (let loop ([acc '()])
-      (let ([x (read p)])
-        (if (eof-object? x) (reverse acc) (loop (cons x acc)))))))
+;; The forms of src, one more REPL input: read with their places in it, so
+;; that what they define tells where it came from (its description, an
+;; error's place), and kept as the core keeps a loaded file's text.
+(defvar *repl-inputs* 0)
+
+(define (read-input! src)
+  (set! *repl-inputs* (+ *repl-inputs* 1))
+  (let* ([name (format "REPL input ~a" *repl-inputs*)]
+         [sfd (make-source-file-descriptor
+               name (open-bytevector-input-port (string->utf8 src)))]
+         [p (open-string-input-port src)])
+    (let loop ([pos 0] [acc '()])
+      (let-values ([(x end) (get-datum/annotations p sfd pos)])
+        (cond
+          [(not (eof-object? x)) (loop end (cons x acc))]
+          [(null? acc) '()]
+          [else (keep-source-text! name src) (reverse acc)])))))
 
 (define (value->string v)
   (let ([s (with-output-to-string (lambda () (pretty-print v)))])
@@ -167,7 +179,7 @@
     (repl-point-set! r 0)
     (repl-hist-pos-set! r -1)
     (let ([forms (guard (c [#t (repl-add! r 'error (condition->string c)) #f])
-                   (read-all-from-string src))])
+                   (read-input! src))])
       (when (and forms (pair? forms))
         (repl-eval! r win forms)))))
 
@@ -355,35 +367,59 @@
 
 ;;; Names, and what the sources say about them.
 
-(defvar *name-docs* #f)   ; (file-stamps . table): name -> (signature . doc)
+;; Each name's definitions in the texts the core keeps (*source-texts*):
+;; name -> ((source serial signature doc) ...); and what each source
+;; defined: source -> (serial name ...). A source whose text was kept
+;; again is read again.
+(defvar *source-docs* (make-hashtable string-hash string=?))
+(defvar *source-names* (make-hashtable string-hash string=?))
 
-;; Every top-level definition in the Schevana sources: its argument list
-;; and the ;; comment lines right above it. Re-read when a source changes.
+;; The index, brought up to date with the kept texts.
 (define (name-docs)
-  (let* ([files (map source-path (source-files))]
-         [stamps (map (lambda (f)
-                        (guard (c [#t 0])
-                          (time-second (file-modification-time f))))
-                      files)])
-    (unless (and *name-docs* (equal? (car *name-docs*) stamps))
-      (let ([table (make-hashtable string-hash string=?)])
-        (for-each (lambda (f) (index-source! table f)) files)
-        (set! *name-docs* (cons stamps table))))
-    (cdr *name-docs*)))
+  (let-values ([(sources kept) (hashtable-entries *source-texts*)])
+    (vector-for-each
+     (lambda (source k)
+       (let ([had (hashtable-ref *source-names* source #f)])
+         (unless (and had (= (car had) (car k)))
+           (when had
+             (for-each (lambda (name) (forget-doc! name source)) (cdr had)))
+           (hashtable-set! *source-names* source
+                           (cons (car k) (index-text! source (car k)
+                                                      (cdr k)))))))
+     sources kept))
+  *source-docs*)
 
-(define (index-source! table file)
-  (guard (c [#t (void)])   ; an unreadable file just contributes nothing
-    (let* ([text (call-with-input-file file get-string-all)]
-           [n (string-length text)]
-           [port (open-string-input-port text)])
+(define (forget-doc! name source)
+  (let ([ds (remp (lambda (d) (string=? (car d) source))
+                  (hashtable-ref *source-docs* name '()))])
+    (if (null? ds)
+        (hashtable-delete! *source-docs* name)
+        (hashtable-set! *source-docs* name ds))))
+
+;; Indexes every top-level definition in text: its argument list and the
+;; ;; comment lines right above it. => the names it defines.
+(define (index-text! source serial text)
+  (let ([n (string-length text)] [port (open-string-input-port text)]
+        [names '()])
+    (guard (c [#t (void)])   ; a text that does not read gives what it read
       (let loop ([prev 0])
         (let ([start (skip-blank-and-comments text prev)])
           (when (< start n)
             (set-port-position! port start)
             (let ([form (read port)])
               (unless (eof-object? form)
-                (record-definition! table form (comment-above text prev start))
-                (loop (port-position port))))))))))
+                (for-each
+                 (lambda (d)   ; (name . signature)
+                   (hashtable-update! *source-docs* (car d)
+                     (lambda (ds)
+                       (cons (list source serial (cdr d)
+                                   (comment-above text prev start))
+                             ds))
+                     '())
+                   (set! names (cons (car d) names)))
+                 (form-definitions form))
+                (loop (port-position port))))))))
+    names))
 
 (define (skip-blank-and-comments text i)
   (let ([n (string-length text)])
@@ -408,51 +444,84 @@
                (cons (string-trim (substring l 2 (string-length l))) acc))]
         [else (string-join acc " ")]))))
 
-(define (record-definition! table form doc)
-  (define (add! name signature)
-    (hashtable-set! table (symbol->string name) (cons signature doc)))
-  (when (and (pair? form) (pair? (cdr form)))
-    (let ([head (cadr form)])
-      (case (car form)
-        [(define defvar)
-         (cond
-           [(and (pair? head) (symbol? (car head)))
-            (add! (car head) (format "~s" head))]
-           [(symbol? head)
-            (let ([v (and (pair? (cddr form)) (caddr form))])
-              (cond
-                [(and (pair? v) (eq? (car v) 'lambda) (pair? (cdr v)))
-                 (add! head (format "~s" (cons head (cadr v))))]
-                [(and (pair? v) (eq? (car v) 'case-lambda))
-                 (add! head (string-join
-                             (map (lambda (clause)
-                                    (format "~s" (cons head (car clause))))
-                                  (cdr v))
-                             "  "))]
-                [else (add! head (symbol->string head))]))])]
-        [(define-app)
-         (when (and (pair? head) (symbol? (car head)))
-           (add! (car head) (format "~s" head)))]
-        [(define-syntax)
-         (when (symbol? head) (add! head (format "(~a …)" head)))]))))
+;; What a top-level form defines: ((name . signature) ...), names as
+;; strings.
+(define (form-definitions form)
+  (define (def name signature) (list (cons (symbol->string name) signature)))
+  (if (and (pair? form) (pair? (cdr form)))
+      (let ([head (cadr form)])
+        (case (car form)
+          [(define defvar)
+           (cond
+             [(and (pair? head) (symbol? (car head)))
+              (def (car head) (format "~s" head))]
+             [(symbol? head)
+              (let ([v (and (pair? (cddr form)) (caddr form))])
+                (cond
+                  [(and (pair? v) (eq? (car v) 'lambda) (pair? (cdr v)))
+                   (def head (format "~s" (cons head (cadr v))))]
+                  [(and (pair? v) (eq? (car v) 'case-lambda))
+                   (def head (string-join
+                              (map (lambda (clause)
+                                     (format "~s" (cons head (car clause))))
+                                   (cdr v))
+                              "  "))]
+                  [else (def head (symbol->string head))]))]
+             [else '()])]
+          [(define-app)
+           (if (and (pair? head) (symbol? (car head)))
+               (def (car head) (format "~s" head))
+               '())]
+          [(define-syntax)
+           (if (symbol? head) (def head (format "(~a …)" head)) '())]
+          [else '()]))
+      '()))
 
-;; (values signature doc) for name in env.
+;; Where procedure p's code came from (a file's path, a REPL input), and
+;; the name its code bears; #f for either it does not tell.
+(define (code-source p)
+  (guard (c [#t #f])
+    (let ([so (((inspect/object p) 'code) 'source-object)])
+      (and so (source-file-descriptor-path (source-object-sfd so))))))
+(define (code-name p)
+  (guard (c [#t #f]) (((inspect/object p) 'code) 'name)))
+
+;; The definition that describes v, name's value now: for a procedure,
+;; the one in the source its code came from; for code without a source
+;; that bears the name (an app's launcher, made by define-app), the
+;; newest; none when v came from elsewhere (redefined in another source,
+;; set! to another procedure). A value of another kind: the newest.
+(define (doc-for name v ds)
+  (define (newest)
+    (fold-left (lambda (best d) (if (and best (> (cadr best) (cadr d))) best d))
+               #f ds))
+  (if (procedure? v)
+      (let ([source (code-source v)])
+        (cond [source (find (lambda (d) (string=? (car d) source)) ds)]
+              [(equal? (code-name v) name) (newest)]
+              [else #f]))
+      (newest)))
+
+;; (values signature doc) for name in env: what the source of its value
+;; says, else what the value itself tells.
 (define (name-description name env)
-  (let ([d (hashtable-ref (name-docs) name #f)] [sym (string->symbol name)])
+  (let* ([sym (string->symbol name)]
+         [bound? (top-level-bound? sym env)]
+         [v (and bound? (top-level-value sym env))]
+         [d (doc-for name v (hashtable-ref (name-docs) name '()))])
     (cond
-      [d (values (car d) (cdr d))]
-      [(top-level-bound? sym env)
-       (let ([v (top-level-value sym env)])
-         (if (procedure? v)
-             (values (format "(~a …)" name)
-                     (arity-description (procedure-arity-mask v)))
-             (values (string-append name " = "
-                                    (truncate-string
-                                     (parameterize ([print-length 6]
-                                                    [print-level 3])
-                                       (format "~s" v))
-                                     70))
-                     "")))]
+      [d (values (caddr d) (cadddr d))]
+      [bound?
+       (if (procedure? v)
+           (values (format "(~a …)" name)
+                   (arity-description (procedure-arity-mask v)))
+           (values (string-append name " = "
+                                  (truncate-string
+                                   (parameterize ([print-length 6]
+                                                  [print-level 3])
+                                     (format "~s" v))
+                                   70))
+                   ""))]
       [(top-level-syntax? sym env) (values (format "(~a …)" name) "Syntax.")]
       [else (values name "")])))
 
