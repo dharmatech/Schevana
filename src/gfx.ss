@@ -438,7 +438,8 @@
 ;;; ------------------------------------------------------------------ shapes
 
 (define (rrect-path! x y w h r)
-  (let ([r (min r (/ w 2) (/ h 2))])
+  ;; corner radius 0 makes a style square: all it draws, an app's too
+  (let ([r (if (<= (theme 'corner-radius) 0) 0 (min r (/ w 2) (/ h 2)))])
     (if (<= r 0)
         (cairo-rectangle *cr* x y w h)
         (begin

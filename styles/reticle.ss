@@ -155,7 +155,9 @@
 
 ;; Scroll bars show while the pointer is over what they scroll.
 (define-style reticle "Reticle"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'drag-feedback 'outline  'draw-drag-outline 'reticle-drag-outline
   'scrollbar-show 'hover

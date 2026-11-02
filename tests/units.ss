@@ -2490,7 +2490,7 @@
                                   corner-radius 4)))
                    (nord #t mac nord 4 gradient
                          ((mac palette nord corner-radius 4)))
-                   (genera #t genera genera 9 flat
+                   (genera #t genera genera 0 flat
                            ((genera palette genera accent #x3366cc)))
                    (deleted #t mac tokyo-night 4 gradient
                             ((mac palette tokyo-night corner-radius 4)))))))
@@ -4637,6 +4637,23 @@
                          (not (memq 'title-height fixed)))))
                 '(cons curses draft fold interlisp lambda reticle slab)))
 
+;; A rounded rectangle's top-left pixel, drawn in style st: ink where the
+;; corner is square, nothing where it is round.
+(define (corner-pixel st)
+  (pixel-at (image 40 20 1
+                   (lambda ()
+                     (with-style st
+                       (lambda () (fill-round-rect 0 0 40 20 10 #x000000)))))
+            0 0))
+
+(check "a style whose corner radius is 0 draws every rounded thing square, \
+        an app's too; the rounded styles keep their round corners"
+       (and (for-all (lambda (st) (= (corner-pixel st) #xff000000))
+                     '(cons curses draft fold genera cadr interlisp lambda
+                       reticle slab))
+            (for-all (lambda (st) (zero? (corner-pixel st)))
+                     '(mac windows spine halo))))
+
 (check "the CADR's label strip lies under the content, its margin and \
         border under it; Genera's directly inside the border"
        (let ([strip-y (lambda (st)
@@ -4768,7 +4785,7 @@
            (and revert
                 (exists (lambda (t)
                           (string-contains-ci?
-                           t "Curses sets this: 9 px; your change (4 px)"))
+                           t "Curses sets this: 0 px; your change (4 px)"))
                         texts)))))
 
 (check "Genera's and the CADR's frames lie on whole device pixels at 125, \

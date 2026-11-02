@@ -105,7 +105,9 @@
 
 ;; The wheel on the tab rolls the window up into it (shades it) and down.
 (define-style lambda "Lambda"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'title-wheel 'shade
   'frame-insets 'lambda-insets

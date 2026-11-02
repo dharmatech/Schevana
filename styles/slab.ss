@@ -123,7 +123,9 @@
                   buttons)))))
 
 (define-style slab "Slab"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'frame-insets 'slab-insets
   'frame-regions 'slab-regions

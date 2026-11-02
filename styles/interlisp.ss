@@ -93,7 +93,9 @@
 
 ;; Its palette over Medley's dashed gray.
 (define-style interlisp "Interlisp"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'palette 'interlisp  'wallpaper 'shade
   'frame-insets 'interlisp-insets  'frame-regions 'interlisp-regions

@@ -124,7 +124,9 @@
   (stroke-rect x y w h (if focused? 'window-border-focus 'window-border)))
 
 (define-style cons "Cons"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'frame-regions 'cons-regions
   'frame-under 'cons-draw-under

@@ -137,6 +137,7 @@
 ;; Its palette on a plain white screen.
 (define-style genera "Genera"
   'palette 'genera  'wallpaper 'flat
+  'corner-radius 0   ; square, and so is everything drawn in it
   'genera-border 2  'genera-margin 4
   'genera-label-font 'ui-italic  'genera-label-align 'center
   'genera-label-under 'margin

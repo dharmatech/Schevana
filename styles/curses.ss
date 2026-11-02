@@ -149,7 +149,9 @@
 
 ;; A terminal's visual bell flashes the screen; menus box their entries.
 (define-style curses "Curses"
-  ;; its corners are square: every common option but the radius
+  ;; square, and so is everything drawn in it (rrect-path!); every common
+  ;; option but the radius
+  'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
   'bell 'screen  'menu-hover 'outline
   'frame-insets 'curses-insets
