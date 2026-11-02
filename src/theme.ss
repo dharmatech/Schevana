@@ -40,25 +40,43 @@
 ;; The built-in defaults, the bottom layer: Tokyo Night's colors, the
 ;; rest derived from them as every palette's are, and the metrics.
 (define base-colors
-  '(bg-0 #x13141c   bg-1 #x1a1b26   bg-2 #x1f2335   bg-3 #x292e42
-    text #xc0caf5   text-dim #x9aa5ce  text-faint #x565f89
-    accent #x7aa2f7 accent-2 #xbb9af7
-    red #xf7768e    orange #xff9e64  yellow #xe0af68  green #x9ece6a
-    cyan #x7dcfff   teal #x73daca    magenta #xc678dd
-    desktop-top #x1b1d2e  desktop-bottom #x2b2140  watermark #xffffff
+  '(bg-0 #x13141c
+    bg-1 #x1a1b26
+    bg-2 #x1f2335
+    bg-3 #x292e42
+    text #xc0caf5
+    text-dim #x9aa5ce
+    text-faint #x565f89
+    accent #x7aa2f7
+    accent-2 #xbb9af7
+    red #xf7768e
+    orange #xff9e64
+    yellow #xe0af68
+    green #x9ece6a
+    cyan #x7dcfff
+    teal #x73daca
+    magenta #xc678dd
+    desktop-top #x1b1d2e
+    desktop-bottom #x2b2140
+    watermark #xffffff
     panel #x111219))
 
 ;; (a palette may give any of these itself)
 (define derived-colors
   (let ([same (lambda (k) (theme-rule (theme k)))])
     (list 'selection (theme-rule (mix 'accent 'bg-1 0.65))
-          'panel-text (same 'text)  'panel-dim (same 'text-faint)
-          'panel-hover (same 'bg-3)  'window-bg (same 'bg-1)
+          'panel-text (same 'text)
+          'panel-dim (same 'text-faint)
+          'panel-hover (same 'bg-3)
+          'window-bg (same 'bg-1)
           'window-border (theme-rule (mix 'bg-3 'text 0.08))
           'window-border-focus (theme-rule (mix 'bg-3 'accent 0.45))
-          'title-bg (same 'bg-2)  'title-bg-focus (same 'bg-3)
-          'title-text (same 'text)  'title-text-dim (same 'text-faint)
-          'button-close (same 'red)  'button-min (same 'yellow)
+          'title-bg (same 'bg-2)
+          'title-bg-focus (same 'bg-3)
+          'title-text (same 'text)
+          'title-text-dim (same 'text-faint)
+          'button-close (same 'red)
+          'button-min (same 'yellow)
           'button-max (same 'green)
           'button-idle (theme-rule (mix 'bg-3 'text 0.15)))))
 
@@ -69,17 +87,25 @@
 
 (define default-theme
   (append base-colors derived-colors
-          '(title-height 30  corner-radius 9  topbar-height 28
+          '(title-height 30
+            corner-radius 9
+            topbar-height 28
             taskbar-height 38
             shadow 14   ; shadow
-            ui-font "sans-serif"  ui-font-size 13  mono-font "monospace"
+            ui-font "sans-serif"
+            ui-font-size 13
+            mono-font "monospace"
             mono-font-size 14
             palette tokyo-night
             ;; a wallpaper's name: gradient, flat or shade
             wallpaper gradient
             ;; the behaviors a style chooses: today's feel
-            frame-edge 5  frame-corner 14  title-double-click maximize
-            button-double-click ()  title-wheel none  drag-feedback live
+            frame-edge 5
+            frame-corner 14
+            title-double-click maximize
+            button-double-click ()
+            title-wheel none
+            drag-feedback live
             raise-on-click #t)
           *added-defaults*))
 
@@ -90,10 +116,14 @@
 ;; 'options list (none: all); one it does not list holds its own value
 ;; whatever you change. Pixels: lo hi, and the key of the text's least.
 (define common-options
-  '((palette "Palette" palette)  (accent "Accent" color)
-    (wallpaper "Wallpaper" wallpaper)  (ui-font "Typeface" typeface)
-    (ui-font-size "Text size" 9 36)  (mono-font "Code typeface" typeface)
-    (mono-font-size "Code size" 9 36)  (corner-radius "Corner radius" 0 20)
+  '((palette "Palette" palette)
+    (accent "Accent" color)
+    (wallpaper "Wallpaper" wallpaper)
+    (ui-font "Typeface" typeface)
+    (ui-font-size "Text size" 9 36)
+    (mono-font "Code typeface" typeface)
+    (mono-font-size "Code size" 9 36)
+    (corner-radius "Corner radius" 0 20)
     (title-height "Title bar" 22 44 title-height-min)
     (shadow "Window shadow" 0 32)   ; shadow
     (topbar-height "Top bar" 22 40 topbar-height-min)

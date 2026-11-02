@@ -159,7 +159,8 @@
   ;; option but the radius
   'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
-  'drag-feedback 'outline  'draw-drag-outline 'reticle-drag-outline
+  'drag-feedback 'outline
+  'draw-drag-outline 'reticle-drag-outline
   'scrollbar-show 'hover
   'frame-insets 'reticle-insets
   'frame-regions 'reticle-regions

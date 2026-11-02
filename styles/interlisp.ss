@@ -97,12 +97,20 @@
   ;; option but the radius
   'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
-  'palette 'interlisp  'wallpaper 'shade
-  'frame-insets 'interlisp-insets  'frame-regions 'interlisp-regions
-  'frame-under 'interlisp-draw-under  'frame-over 'interlisp-draw-over
+  'palette 'interlisp
+  'wallpaper 'shade
+  'frame-insets 'interlisp-insets
+  'frame-regions 'interlisp-regions
+  'frame-under 'interlisp-draw-under
+  'frame-over 'interlisp-draw-over
   'ui-draw-scrollbar 'interlisp-scrollbar
   'draw-drag-outline 'interlisp-drag-outline
   ;; the feel
-  'drag-feedback 'outline  'menu-choose 'release  'menu-hover 'outline
-  'bell 'window  'title-double-click 'none
-  'scrollbar-side 'left  'scrollbar-show 'hover  'scrollbar-width 24)
+  'drag-feedback 'outline
+  'menu-choose 'release
+  'menu-hover 'outline
+  'bell 'window
+  'title-double-click 'none
+  'scrollbar-side 'left
+  'scrollbar-show 'hover
+  'scrollbar-width 24)

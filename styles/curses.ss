@@ -153,7 +153,8 @@
   ;; option but the radius
   'corner-radius 0
   'options (remq 'corner-radius (map car common-options))
-  'bell 'screen  'menu-hover 'outline
+  'bell 'screen
+  'menu-hover 'outline
   'frame-insets 'curses-insets
   'frame-regions 'curses-regions
   'frame-under 'curses-draw-under)
