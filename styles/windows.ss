@@ -7,7 +7,7 @@
 (define (windows-radius win)
   (if (maximized? win) 0 (min 8 (theme 'corner-radius))))
 
-(define (windows-buttons win)
+(define (windows-regions win)
   (let ([w (window-w win)] [bw windows-button-width] [th (title-height)])
     (list (list 'close (- w bw) 0 bw th)
           (list 'maximize (- w bw bw) 0 bw th)
@@ -66,14 +66,14 @@
                                          (+ y (list-ref b 2))
                                          (list-ref b 3) (list-ref b 4)
                                          focused? hover pressed))
-                  (windows-buttons win))))))
+                  (windows-regions win))))))
 
 (define (windows-draw-over win x y w h focused? hover pressed)
   (stroke-round-rect x y w h (windows-radius win)
                      (if focused? 'window-border-focus 'window-border)))
 
-(define-window-style windows "Windows"
-  'radius windows-radius
-  'buttons windows-buttons
-  'draw-under windows-draw-under
-  'draw-over windows-draw-over)
+(define-style windows "Windows"
+  'frame-radius 'windows-radius
+  'frame-regions 'windows-regions
+  'frame-under 'windows-draw-under
+  'frame-over 'windows-draw-over)

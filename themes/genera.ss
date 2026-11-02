@@ -1,6 +1,6 @@
 ;;; themes/genera.ss — the Genera palette.
-;;; Symbolics Genera: ink on paper, a plain white screen, and the panels
-;;; in reverse video like its mouse documentation line.
+;;; Symbolics Genera: ink on paper, and the panels in reverse video like
+;;; its mouse documentation line.
 
 (define-theme genera "Genera"
   '(bg-0 #xffffff bg-1 #xffffff bg-2 #xf0f0f0 bg-3 #xd8d8d8
@@ -9,5 +9,4 @@
     red #x8b0000 orange #x6b4400 yellow #x5c5c00
     green #x1f5f1f cyan #x1f5566 teal #x1f5f55 magenta #x661f66
     desktop-top #xffffff desktop-bottom #xffffff watermark #x000000
-    panel #x000000 panel-text #xffffff panel-dim #xb4b4b4 panel-hover #x383838
-    wallpaper flat))
+    panel #x000000 panel-text #xffffff panel-dim #xb4b4b4 panel-hover #x383838))

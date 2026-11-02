@@ -1382,11 +1382,7 @@
          [a (tasks-avatar-size)] [m (tasks-mark-size)]
          [y1 (+ y 10)] [right (- (+ x w) 10)])
     (fill-round-rect x y w h 8 'bg-2)   ; bg-3 would hide the progress track
-    (stroke-round-rect x y w h 8
-                       (cond [(or (on? 'selected) (on? 'floating)) 'accent]
-                             [(on? 'hover) 'text-faint]
-                             [else 'window-border])
-                       (if (on? 'selected) 2 1))
+    (ui-draw-card x y w h flags)
     (tasks-draw-priority (+ x 10) (+ y1 (/ (- a m) 2)) m (task-priority t))
     (tasks-draw-kind (+ x 16 m) (+ y1 (/ (- a m) 2)) m (task-kind t))
     (let ([end (draw-text (+ x 24 m m) (+ y1 (/ (- a sh) 2)) (task-label t)

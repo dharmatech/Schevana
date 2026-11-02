@@ -472,6 +472,13 @@
            (if (and (pair? head) (symbol? (car head)))
                (def (car head) (format "~s" head))
                '())]
+          [(define-part)   ; the part, and its built-in body
+           (if (and (pair? head) (symbol? (car head)))
+               (let ([built-in (string->symbol (format "~a*" (car head)))])
+                 (append (def (car head) (format "~s" head))
+                         (def built-in
+                              (format "~s" (cons built-in (cdr head))))))
+               '())]
           [(define-syntax)
            (if (symbol? head) (def head (format "(~a …)" head)) '())]
           [else '()]))
@@ -560,7 +567,7 @@
 ;; (operator kind choices-thunk), or (operator kind thunk key) to apply only
 ;; when the form's text mentions 'key (set-theme!'s second argument).
 (define completion-quoted
-  `((set-theme! "style" ,(lambda () (map symbol->string (window-styles)))
+  `((set-theme! "style" ,(lambda () (map symbol->string (styles)))
                 window-style)
     (set-theme! "pattern" ,(lambda () (map symbol->string (wallpapers)))
                 desktop-pattern)
@@ -569,7 +576,7 @@
     (set-theme! "palette" ,(lambda () (map symbol->string (themes))) preset)
     (set-theme! "palette" ,(lambda () (map symbol->string (themes))) palette)
     (set-theme! "key" ,(lambda () (map symbol->string (theme-keys))))
-    (set-style! "style" ,(lambda () (map symbol->string (window-styles))))
+    (set-style! "style" ,(lambda () (map symbol->string (styles))))
     (override! "key" ,(lambda () (map symbol->string (theme-keys))))
     (reset-style! "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme-source "key" ,(lambda () (map symbol->string (theme-keys))))
@@ -1233,13 +1240,13 @@
                    (draw-repl-line pad top text (style-color (car e))
                                    cols 0 shown cw lh)])
                 (loop (cdr entries) top 0))))))
-    ;; scrollbar when scrolled back
+    ;; the kit's scroll bar when scrolled back
     (when (> (repl-scroll r) 0)
-      (let* ([track (- h 8)] [frac (/ rows (max rows total))]
-             [bar (max 20 (* track frac))]
-             [pos (* (- track bar)
-                     (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))])
-        (fill-round-rect (- w 7) (+ 4 pos) 4 bar 2 (alpha 'text 0.25))))
+      (let ([size (/ rows (max rows total))] [bw (ui-scrollbar-width)])
+        (ui-draw-scrollbar (- w bw) 4 bw (- h 8) '()
+                           (* (- 1 size)
+                              (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))
+                           size)))
     (let ([c (complete-of r)] [env (repl-environment r)])
       (when c
         (complete-show c caret (* cw (- (repl-point r) (complete-start c)))

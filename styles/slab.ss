@@ -37,7 +37,7 @@
 ;; Each button is a key, its slab and the gap after it. The last key's
 ;; slab is as far from the outline as the keys are from the bar's top,
 ;; and at least a gap.
-(define (slab-buttons win)
+(define (slab-regions win)
   (let* ([p (+ (slab-key) slab-line slab-gap)]
          [x0 (- (+ (window-w win) slab-gap) (slab-room win) slab-line
                 (max slab-gap (slab-margin)) (* 3 p))])
@@ -121,7 +121,7 @@
                   [focused? (- slab-lift t)]
                   [else t])]
          [bx (if max? x (+ x t))] [bw (if max? cw (- cw t t))]
-         [buttons (slab-buttons win)] [ky (+ y t (slab-margin))]
+         [buttons (slab-regions win)] [ky (+ y t (slab-margin))]
          ;; as far from the outline as the capitals are from the bar's top
          [pad (quotient (- b (quotient (* 3 (slab-font)) 5)) 2)]
          [title (fit-text (window-title win)
@@ -138,7 +138,7 @@
                                    hover pressed))
                   buttons)))))
 
-(define-window-style slab "Slab"
-  'insets slab-insets
-  'buttons slab-buttons
-  'draw-under slab-draw-under)
+(define-style slab "Slab"
+  'frame-insets 'slab-insets
+  'frame-regions 'slab-regions
+  'frame-under 'slab-draw-under)

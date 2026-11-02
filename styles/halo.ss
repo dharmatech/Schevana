@@ -20,6 +20,11 @@
 (define (halo-drop win)
   (if (maximized? win) (quotient (- (halo-top) (halo-pill-height)) 2) 0))
 
+(define (halo-insets win) (values 0 (halo-top) 0 0))
+
+;; The glow's strokes reach 5 pixels past the card (none when maximized).
+(define (halo-bleed win) (if (maximized? win) 0 5))
+
 ;; Small enough that the content's top corners stay inside the card.
 (define (halo-radius win)
   (if (maximized? win)
@@ -31,7 +36,7 @@
 ;; Three cells in a pill at the right, with 2 pixels to spare at its ends.
 ;; The cells are an odd width, so that their middles are pixels' middles,
 ;; where the glyphs' 1-pixel lines are crisp.
-(define (halo-buttons win)
+(define (halo-regions win)
   (let* ([ph (halo-pill-height)] [c (- ph 3)]
          [x0 (- (window-w win) (halo-margin win) (* 3 c) 2)])
     (map (lambda (kind i) (list kind (+ x0 (* i c)) (halo-drop win) c ph))
@@ -43,7 +48,7 @@
 ;; shows between the pills however long the title is.
 (define (halo-pills win)
   (let* ([ph (halo-pill-height)] [tx (halo-margin win)]
-         [bx (- (cadr (car (halo-buttons win))) 2)]
+         [bx (- (cadr (car (halo-regions win))) 2)]
          [buttons (list bx (- (window-w win) tx bx) #f)]
          [title (fit-text (window-title win)
                           (- (min bx (* 2/3 (window-w win))) tx ph 4) 'ui)]
@@ -140,13 +145,12 @@
             (halo-glyph win kind gx gy
                         (if close? (readable-on 'button-close) 'title-text))]
            [else (halo-glyph win kind gx gy 'text-dim)])))
-     (halo-buttons win))))
+     (halo-regions win))))
 
-;; The glow's strokes reach 5 pixels past the card (none when maximized).
-(define-window-style halo "Halo"
-  'insets (lambda (win) (values 0 (halo-top) 0 0))
-  'bleed (lambda (win) (if (maximized? win) 0 5))
-  'radius halo-radius
-  'buttons halo-buttons
-  'draw-under halo-draw-under
-  'draw-over halo-draw-over)
+(define-style halo "Halo"
+  'frame-insets 'halo-insets
+  'frame-bleed 'halo-bleed
+  'frame-radius 'halo-radius
+  'frame-regions 'halo-regions
+  'frame-under 'halo-draw-under
+  'frame-over 'halo-draw-over)

@@ -15,7 +15,7 @@
 ;;;           resize focus blur close.
 ;;;
 ;;; The frame around the content (title bar, borders, buttons) belongs to
-;;; the window style, see styles.ss. Geometry here is the outer frame;
+;;; the style, see styles.ss. Geometry here is the outer frame;
 ;;; 'size and the w h passed to handlers are always the content size.
 ;;; Every handler runs under safe-call: errors and runaway loops crash only
 ;;; that window, which then shows the error and can be retried.
@@ -112,12 +112,14 @@
     [(win x y w h) (invalidate! win)]))
 
 ;; How far past its frame a window may draw, never less than 0: its
-;; style's 'bleed. A style that strokes inside its frame needs none:
+;; style's frame-bleed. A style that strokes inside its frame needs none:
 ;; anti-aliasing stays in the device pixels the frame touches.
 (define (window-bleed win)
-  (max 0
-       (window-shadow-reach win)   ; shadow
-       ((window-style-bleed (window-style-of win)) win)))
+  (in-window-theme win
+    (lambda ()
+      (max 0
+           (window-shadow-reach win)   ; shadow
+           (frame-bleed win)))))
 
 ;; What win may cover on screen, (values x y w h): its frame and bleed;
 ;; the whole screen if the bleed raises (a mistake typed at the REPL), so
@@ -130,17 +132,17 @@
 
 (define (screen-w) *canvas-w*)
 (define (screen-h) *canvas-h*)
-;; The chrome grows with the fonts: each height is the theme's setting or
-;; the room its text needs, whichever is more. At the default fonts the
-;; text fits every setting the Settings app offers.
-(define (chrome-min-height key)
-  (exact (round (case key
-                  [(title-height) (+ (font-line-height 'title) 7)]
-                  [(topbar-height) (+ (font-line-height 'ui) 7)]
-                  [(taskbar-height) (+ (font-line-height 'ui) 13)]
-                  [else 0]))))
-(define (title-height)
-  (max (theme 'title-height) (chrome-min-height 'title-height)))
+;; A title's or a bar's height, key: the setting, grown to the room its
+;; text needs (the setting min, named key-min) unless the style fixes
+;; it, meaning its pixels; 0 is none. At the default fonts the text fits
+;; every setting the Settings app offers.
+(define (chrome-height key min)
+  (let ([v (theme key)])
+    (if (or (eqv? v 0) (memq key (theme 'fixed))) v (max v (theme min)))))
+
+(theme-default! 'title-height-min
+                (rule (exact (round (+ (font-line-height 'title) 7)))))
+(define (title-height) (chrome-height 'title-height 'title-height-min))
 
 (define (point-in? px py x y w h)
   (and (>= px x) (< px (+ x w)) (>= py y) (< py (+ y h))))
@@ -358,17 +360,34 @@
 
 (define (window-bg win) (window-ref win 'bg 'window-bg))
 
-;; The window's style: its own 'window-style property, else the theme's.
-;; A name that is not registered falls back to the first style registered,
-;; or with none to a bare frame.
-(define (window-style-of win)
-  (or (find-window-style (or (window-ref win 'window-style)
-                             (theme 'window-style)))
-      (if (pair? *window-styles*) (car *window-styles*) bare-window-style)))
+;; The theme win is drawn and hit-tested in, content included: its own
+;; style's (its 'window-style property, a style's name; the one in effect
+;; if it is that style, a preview's), else the chosen style's.
+(define (window-theme win)
+  (let ([s (window-ref win 'window-style)])
+    (cond [(and s (eq? s (theme 'window-style))) *theme*]
+          [(and s (find-style s)) (style-theme s #f)]
+          [else *main-theme*])))
+
+;; Runs thunk in win's theme. A theme change it makes (set-theme! from a
+;; handler) stays after it.
+(define (in-window-theme win thunk)
+  (let ([t (window-theme win)] [main #f])
+    (if (eq? t *theme*)
+        (thunk)
+        (dynamic-wind (lambda () (set! main *theme*) (set! *theme* t))
+                      thunk
+                      (lambda () (when (eq? *theme* t) (set! *theme* main)))))))
+
+;; Calls win's frame part key (styles.ss) in win's theme.
+(define (frame-call win key . args)
+  (in-window-theme win (lambda () (apply (part key) win args))))
 
 ;; Frame thickness around the content: (values left top right bottom).
-(define (frame-insets win)
-  ((window-style-insets (window-style-of win)) win))
+(define (frame-insets win) (frame-call win 'frame-insets))
+(define (frame-regions win) (frame-call win 'frame-regions))
+(define (frame-radius win) (frame-call win 'frame-radius))
+(define (frame-bleed win) (frame-call win 'frame-bleed))
 
 ;; Content area in screen coordinates.
 (define (content-rect win)
@@ -383,9 +402,9 @@
   (let-values ([(l t r b) (frame-insets win)])
     (values (- x (window-x win) l) (- y (window-y win) t))))
 
-;; Calls one of the window's handlers under the watchdog, with
-;; (current-window) set to win. Input invalidates the window by itself, so
-;; a handler that only changes its state is still seen.
+;; Calls one of the window's handlers under the watchdog, in its theme,
+;; with (current-window) set to win. Input invalidates the window by
+;; itself, so a handler that only changes its state is still seen.
 (define (window-call win kind . args)
   (let ([h (hashtable-ref (window-handlers win) kind #f)])
     (if (and h (not (window-error win)))
@@ -394,7 +413,8 @@
             (invalidate! win))
           (safe-call kind
                      (lambda ()
-                       (parameterize ([current-window win]) (apply h win args)))
+                       (parameterize ([current-window win])
+                         (in-window-theme win (lambda () (apply h win args)))))
                      (lambda (c) (window-crash! win kind c) #f)))
         #f)))
 
@@ -577,19 +597,12 @@
                           (window-w w) (window-h w))))
         *windows*))
 
-;; Button kinds that act on release. A style may also list a 'resize-br
-;; button (a classic size gadget), which starts a resize instead.
-(define window-button-kinds '(close minimize maximize depth))
-
-;; The style's buttons: ((kind x y w h) ...) in window coordinates.
-(define (window-buttons win)
-  ((window-style-buttons (window-style-of win)) win))
-
+;; The kind of the frame's region at (lx, ly) in window coordinates.
 (define (window-button-at win lx ly)
   (let ([b (find (lambda (b)
                    (point-in? lx ly (list-ref b 1) (list-ref b 2)
                               (list-ref b 3) (list-ref b 4)))
-                 (window-buttons win))])
+                 (frame-regions win))])
     (and b (car b))))
 
 ;; Which part of the window is at screen point (x, y)?
@@ -744,7 +757,7 @@
       [(frame) (void)]
       [(title)
        (cond
-         [(eq? button 'right) (open-window-menu! win x y)]   ; desktop/menu.ss
+         [(eq? button 'right) ((part 'open-window-menu) win x y)]
          [(and (eq? button 'left) (>= clicks 2)) (toggle-maximize! win)]
          [(eq? button 'left)
           (set! *drag* (make-drag 'move win button x y
@@ -852,7 +865,8 @@
 
 ;;; ------------------------------------------------------------------ drawing
 
-;; The style draws the frame in two passes around the content.
+;; The style draws the frame in two passes around the content, all in the
+;; window's theme.
 (define (draw-window win) (draw-window* win (eq? win *focus*)))
 
 ;; The part of win under the mouse, and the drag kind holding it, as the
@@ -865,25 +879,25 @@
   (and *drag* (eq? (drag-win *drag*) win) (drag-kind *drag*)))
 
 (define (draw-window* win focused?)
-  (let* ([style (window-style-of win)]
-         [x (window-x win)] [y (window-y win)]
-         [w (window-w win)] [h (window-h win)]
-         [hover (window-hover win)]
-         [pressed (window-pressed win)]
-         [r ((window-style-radius style) win)])
-    ((window-style-draw-under style) win x y w h focused? hover pressed)
-    (let-values ([(cx cy cw ch) (content-rect win)])
-      (call-with-round-clip x y w h r
-        (lambda ()
-          (call-with-clip cx cy cw ch
+  (in-window-theme win
+    (lambda ()
+      (let ([x (window-x win)] [y (window-y win)]
+            [w (window-w win)] [h (window-h win)]
+            [hover (window-hover win)]
+            [pressed (window-pressed win)])
+        ((part 'frame-under) win x y w h focused? hover pressed)
+        (let-values ([(cx cy cw ch) (content-rect win)])
+          (call-with-round-clip x y w h (frame-radius win)
             (lambda ()
-              (call-with-translation cx cy
+              (call-with-clip cx cy cw ch
                 (lambda ()
-                  (fill-rect 0 0 cw ch (window-bg win))
-                  (if (window-error win)
-                      (draw-crash-panel win cw ch)   ; desktop/crash.ss
-                      (window-call win 'draw cw ch)))))))))
-    ((window-style-draw-over style) win x y w h focused? hover pressed)))
+                  (call-with-translation cx cy
+                    (lambda ()
+                      (fill-rect 0 0 cw ch (window-bg win))
+                      (if (window-error win)
+                          ((part 'draw-crash-panel) win cw ch)
+                          (window-call win 'draw cw ch)))))))))
+        ((part 'frame-over) win x y w h focused? hover pressed)))))
 
 ;; the last frame's time: drawing it, comparing its rows
 (defvar *frame-ms* 0.0)

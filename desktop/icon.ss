@@ -2,7 +2,7 @@
 ;;; the wallpaper's λ on the desktop gradient, in the current theme.
 ;;; Redefine draw-app-icon and call (update-host-icon!) to change it.
 
-(define (draw-app-icon size)
+(define-part (draw-app-icon size)
   (let* ([m (* size 0.06)] [s (- size m m)] [r (* s 0.22)])
     (call-with-round-clip m m s s r
       (lambda ()

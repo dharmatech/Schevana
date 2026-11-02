@@ -28,7 +28,7 @@
 ;; Where the title block's left rule is, in the window.
 (define (draft-block-x win) (- (window-w win) 1 (* 3 (draft-cell))))
 
-(define (draft-buttons win)
+(define (draft-regions win)
   (let ([bx (draft-block-x win)] [c (draft-cell)] [b (draft-band)])
     (map (lambda (kind i) (list kind (+ bx (* i c)) 0 c b))
          '(minimize maximize close) '(0 1 2))))
@@ -98,7 +98,7 @@
                       (cond [red? (readable-on 'button-close)]
                             [hot? 'accent]
                             [else ink]))))
-     (draft-buttons win))))
+     (draft-regions win))))
 
 (define (draft-draw-under win x y w h focused? hover pressed)
   ;; Unfocused lines fade toward the sheet, as faint ink alone is too
@@ -134,7 +134,7 @@
                    (if focused? ink 'title-text-dim) 'ui)
         (draft-block win x y hover pressed ink)))))
 
-(define-window-style draft "Draft"
-  'insets draft-insets
-  'buttons draft-buttons
-  'draw-under draft-draw-under)
+(define-style draft "Draft"
+  'frame-insets 'draft-insets
+  'frame-regions 'draft-regions
+  'frame-under 'draft-draw-under)

@@ -1,8 +1,8 @@
 ;;; crash.ss — what a crashed window shows in place of its content: the
 ;;; handler that raised, the condition, and how to go on. The window
-;;; manager calls draw-crash-panel inside the window's content.
+;;; manager calls the part draw-crash-panel inside the window's content.
 
-(define (draw-crash-panel win w h)
+(define-part (draw-crash-panel win w h)
   (let ([err (window-error win)])
     (fill-rect 0 0 w h (mix 'bg-1 'red 0.10))
     (let* ([y1 (round (+ 14 (font-line-height 'ui-bold) 5))]

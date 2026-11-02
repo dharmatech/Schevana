@@ -37,7 +37,7 @@
 
 ;; Cells around the glyphs. The last glyph ends as far from the card's
 ;; right edge as the title starts from its left.
-(define (reticle-buttons win)
+(define (reticle-regions win)
   (let* ([g (reticle-glyph 1)] [c (max 18 (+ g 10))]
          [x (- (window-w win) reticle-margin 1 reticle-pad
                (quotient (+ c g) 2))])
@@ -121,7 +121,7 @@
   ;; top, maximized) down to the content.
   (let*-values ([(m) reticle-margin] [(th) (title-height)]
                 [(top) (if (maximized? win) 0 (+ m 1))]
-                [(g) (reticle-glyph (reticle-k))] [(bs) (reticle-buttons win)]
+                [(g) (reticle-glyph (reticle-k))] [(bs) (reticle-regions win)]
                 [(cx cy cw ch) (values (+ x m) (+ y m) (- w m m) (- h m m))]
                 [(base mid) (reticle-caps (+ y (/ (+ top th) 2)))]
                 [(gy) (reticle-snap (- mid (/ g 2)))]
@@ -151,7 +151,7 @@
                      gy g d focused? hover pressed))
                   bs)))))
 
-(define-window-style reticle "Reticle"
-  'insets reticle-insets
-  'buttons reticle-buttons
-  'draw-under reticle-draw-under)
+(define-style reticle "Reticle"
+  'frame-insets 'reticle-insets
+  'frame-regions 'reticle-regions
+  'frame-under 'reticle-draw-under)

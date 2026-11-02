@@ -38,7 +38,7 @@
          [x (+ (cons-left) (cons-car-width win) c a)])
     (list (cons-left) x (+ x c c a))))
 
-(define (cons-buttons win)
+(define (cons-regions win)
   (let ([c (cons-cell)] [th (title-height)] [xs (cons-pairs win)])
     (list (list 'minimize (cadr xs) 0 c th)
           (list 'maximize (caddr xs) 0 c th)
@@ -124,7 +124,7 @@
 (define (cons-draw-over win x y w h focused? hover pressed)
   (stroke-rect x y w h (if focused? 'window-border-focus 'window-border)))
 
-(define-window-style cons "Cons"
-  'buttons cons-buttons
-  'draw-under cons-draw-under
-  'draw-over cons-draw-over)
+(define-style cons "Cons"
+  'frame-regions 'cons-regions
+  'frame-under 'cons-draw-under
+  'frame-over 'cons-draw-over)

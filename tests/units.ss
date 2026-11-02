@@ -1,8 +1,8 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
 ;;; context, pixmaps, Life's generations and grid, and invalidation; the
 ;;; edit kit (editing, rows and their lazy layout), the widget kit's dates
-;;; and layout, Tasks' own procedures, and the window manager's surfaces
-;;; and strips.
+;;; and layout, Tasks' own procedures, the window manager's surfaces
+;;; and strips, and styles: derived ones, parts by name, a window's own.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -194,7 +194,7 @@
 ;; first measured inside (measure-in measure), on a fresh context scaled
 ;; like the canvas.
 (define (first-measured-in measure-in)
-  (install-default-fonts!)
+  (fonts-rescaled!)
   (let* ([img (cairo-image-surface-create CAIRO_FORMAT_ARGB32 400 300)]
          [cr (cairo-create img)])
     (cairo-scale cr *scale* *scale*)
@@ -218,13 +218,13 @@
                            [preview (first-measured-in
                                      (lambda (measure)
                                        ;; its label is in 'ui-italic
-                                       (draw-window-style-preview
+                                       (draw-style-preview
                                         'genera 0 0 200 150 0.5)
                                        (call-with-scale 0.5 measure)))])
                        (list s normal preview)))
                    '(1 1.25 1.5 2))])
          (canvas-create! 1280 800 *host-scale*)
-         (install-default-fonts!)
+         (fonts-rescaled!)
          (printf "  ~s\n" results)
          (for-all (lambda (r) (equal? (cadr r) (caddr r))) results)))
 (steps 1)
@@ -874,19 +874,19 @@
                         '(10 5 110 60))
                 (eq? (asked (lambda () (request-frame!) (invalidate! w)))
                      #t))))
-  (let ([plain *window-styles*]
+  (let ([plain *styles*]
         [bleed-of (lambda (w)   ; how far w's extent reaches past its frame
                     (let-values ([(x y ew eh) (window-extent w)])
                       (- (window-x w) x)))])
     (define-window-style wide "Wide" 'bleed (lambda (win) 5))
-    (set-theme! 'shadow 0)   ; shadow
+    (override! 'shadow 0)   ; shadow
     (window-set! w 'window-style 'wide)
     (let ([wide (bleed-of w)])
       (window-set! w 'window-style 'mac)
-      (set-theme! 'shadow -6)   ; shadow
+      (override! 'shadow -6)   ; shadow
       (let ([narrow (bleed-of w)])
-        (set-theme! 'shadow (theme-default 'shadow))   ; shadow
-        (set! *window-styles* plain)
+        (override! 'shadow)   ; shadow
+        (set! *styles* plain)
         (check (format "a style's 'bleed widens its windows' extent (~a); \
                         nothing makes it smaller than the frame (~a)"
                        wide narrow)
@@ -2324,19 +2324,19 @@
 ;;; ------------------------------------------------------------------
 ;;; settings in layers
 
-;; thunk run with mac a style of these settings (its own options, say),
-;; as a style that gives settings is; your changes and Overrides cleared
-;; before and after.
+;; thunk run with mac given these settings too (its own options, say);
+;; your changes and Overrides cleared before and after.
 (define (with-mac-settings settings thunk)
-  (let ([chain style-chain])
+  (let ([plain *styles*])
     (dynamic-wind
       (lambda ()
-        (set! style-chain (lambda (name) (list (cons name settings))))
+        (register-style! 'mac "Mac"
+                         (append settings (style-settings (find-style 'mac))))
         (set-style! 'mac)
         (reset-theme!))
       thunk
       (lambda ()
-        (set! style-chain chain)
+        (set! *styles* plain)
         (reset-theme!)))))
 
 ;; The accent and where it comes from, after each layer gives one.
@@ -2452,6 +2452,10 @@
 (define (write-theme-file! data)
   (call-with-output-file *theme-file* (lambda (p) (write data p)) 'replace))
 
+;; The colors a palette gives or derives (not those kits and styles add).
+(define palette-keys
+  (append (plist-keys base-colors) (plist-keys derived-colors)))
+
 (let* ([fresh (let ([t (resolve-theme 'mac '() '())])
                 (compute-rules! t)
                 t)]
@@ -2467,7 +2471,7 @@
                                             (if p
                                                 (cdr p)
                                                 (hashtable-ref fresh k #f)))))
-                                color-keys)
+                                palette-keys)
                        (theme 'window-style) (theme 'palette)
                        (theme 'corner-radius) (theme 'wallpaper)
                        *changes*)))
@@ -2546,8 +2550,505 @@
                     (for-all (lambda (k)
                                (equal? (plist-ref now k #f)
                                        (plist-ref today k #f)))
-                             color-keys)))
+                             palette-keys)))
                 (themes)))
+
+;;; ------------------------------------------------------------------
+;;; styles and parts
+
+(reset-theme!)
+(set-style! 'mac)
+
+;; thunk's result, with the styles registered meanwhile gone after it.
+(define (with-test-styles thunk)
+  (let ([plain *styles*])
+    (dynamic-wind void thunk
+                  (lambda () (set! *styles* plain) (set-style! 'mac)))))
+
+(define (insets-of w) (call-with-values (lambda () (frame-insets w)) list))
+(define (test-insets win) (values 3 17 3 3))
+
+(check "a derived style is its parent with one setting changed, and its \
+        parent defined again shows in it"
+       (with-test-styles
+        (lambda ()
+          (define-style test-base "Test base"
+            'frame-insets 'test-insets 'corner-radius 5)
+          (define-style test-flat "Test flat"
+            'parent 'test-base 'corner-radius 0)
+          (set-style! 'test-flat)
+          (let* ([w (open-window "Derived" 'size '(100 . 50))]
+                 [got (list (map style-name (style-chain 'test-flat))
+                            (insets-of w) (theme 'corner-radius)
+                            (theme-source 'corner-radius)
+                            (theme-source 'frame-insets))])
+            (define-style test-base "Test base" 'corner-radius 5)
+            (let ([again (insets-of w)])
+              (close-window! w)
+              (equal? (list got again)
+                      (list (list '(test-flat test-base) '(3 17 3 3) 0
+                                  '(style test-flat 0)
+                                  '(style test-base test-insets))
+                            (list 0 (title-height) 0 0))))))))
+
+;; A part a style names is looked up at each call: redefined at the REPL,
+;; the next frame draws the new definition.
+(define test-drawn #f)
+(define (test-under win x y w h focused? hover pressed)
+  (set! test-drawn 'first))
+(check "a part given by name shows its redefinition at the next frame"
+       (with-test-styles
+        (lambda ()
+          (define-style test-part "Test part" 'frame-under 'test-under)
+          (set-style! 'test-part)
+          (let ([w (open-window "Part" 'size '(100 . 50))])
+            (steps 1)
+            (let ([first test-drawn])
+              (set! test-under (lambda args (set! test-drawn 'second)))
+              (invalidate!)
+              (steps 1)
+              (close-window! w)
+              (equal? (list first test-drawn) '(first second)))))))
+
+(define-part (test-meter n) (* n 2))
+(check "define-part: the built-in is name*, and name calls the style's part"
+       (with-test-styles
+        (lambda ()
+          (let ([plain (test-meter 3)])
+            (define-style test-tenfold "Test" 'test-meter (lambda (n) (* n 10)))
+            (set-style! 'test-tenfold)
+            (equal? (list plain (test-meter 3) (test-meter* 3)
+                          (theme-default 'test-meter))
+                    '(6 30 6 test-meter*))))))
+
+(check "a title's right click opens the style's window menu, a part"
+       (with-test-styles
+        (lambda ()
+          (let ([opened #f])
+            (define-style test-menu "Test"
+              'open-window-menu (lambda (win x y) (set! opened win)))
+            (set-style! 'test-menu)
+            (let ([w (open-window "Menu" 'size '(200 . 100) 'pos '(300 . 200))])
+              (inject! '(mouse-move 400 205) '(mouse-down 400 205 right 1)
+                       '(mouse-up 400 205 right))
+              (steps 1)
+              (close-window! w)
+              (eq? opened w))))))
+
+(check "a window of another style is drawn and hit-tested in that style's \
+        theme, its content included"
+       (let* ([seen #f]
+              [w (open-window "Genera here" 'size '(200 . 100)
+                              'pos '(300 . 200) 'window-style 'genera
+                              'draw (lambda (win cw ch)
+                                      (set! seen (list (theme 'palette)
+                                                       (theme 'wallpaper)))))])
+         (invalidate!)
+         (steps 1)
+         ;; Genera's label, at the bottom, is its title
+         (let ([insets (insets-of w)]
+               [hit (window-region w 400 (+ 200 (window-h w) -10))])
+           (close-window! w)
+           (printf "  ~s\n" (list seen insets hit))
+           (and (equal? seen '(genera flat)) (eq? (theme 'palette) 'tokyo-night)
+                (equal? insets '(6 6 6 23)) (eq? hit 'title)))))
+
+(check "choosing Genera brings its palette and wallpaper; a palette chosen \
+        for it stays with it"
+       (begin
+         (set-style! 'genera)
+         (let ([own (list (theme 'palette) (theme 'wallpaper))])
+           (set-theme! 'palette 'nord)
+           (set-style! 'mac)
+           (let ([mac (list (theme 'palette) (theme 'wallpaper))])
+             (set-style! 'genera)
+             (let ([back (theme 'palette)])
+               (reset-theme!)
+               (set-style! 'mac)
+               (equal? (list own mac back)
+                       '((genera flat) (tokyo-night gradient) nord)))))))
+
+(check "with-style: another style's theme, or this one's with a setting"
+       (equal? (list (with-style 'interlisp
+                       (lambda () (list (theme 'palette) (theme 'wallpaper))))
+                     (with-style 'mac (lambda () (theme 'palette))
+                                 'palette 'nord)
+                     (theme 'palette))
+               '((interlisp shade) nord tokyo-night)))
+
+;;; ------------------------------------------------------------------
+;;; fonts and sizes as settings
+
+(check "a font is a setting: two themes asking for one font share its \
+        record, and a font changed and back is the very one"
+       (let ([ui (theme 'ui)]
+             [other (with-style 'windows (lambda () (theme 'ui)))])
+         (set-theme! 'ui-font-size 15)
+         (let ([bigger (theme 'ui)])
+           (reset-style! 'ui-font-size)
+           (and (eq? ui other) (eq? ui (theme 'ui))
+                (= 15 (font-size bigger)) (eq? (theme 'title) (theme 'ui-bold))
+                (eq? (get-font 'ui) ui)))))
+
+(check "a text's layout stays across a color change, and goes with a font \
+        change"
+       (let* ([ui (make-ui)]
+              [lay (lambda ()
+                     (ui-text-layout ui 'probe "some words to wrap here" 120
+                                     'ui #t))]
+              [a (lay)])
+         (set-theme! 'accent #x123456)
+         (let ([b (lay)])
+           (set-theme! 'ui-font-size 15)
+           (let ([c (lay)])
+             (reset-style! 'accent 'ui-font-size)
+             (and (eq? a b) (not (eq? b c)))))))
+
+(check "a title's or bar's height: the setting grown to its text's need, 0 \
+        none, and a style's own pixels where it fixes it"
+       (with-test-styles
+        (lambda ()
+          (set-theme! 'title-height 10)
+          (set-theme! 'taskbar-height 0)
+          (let ([mac (list (title-height) (taskbar-height)
+                           (theme 'title-height-min))])
+            (reset-style! 'title-height 'taskbar-height)
+            (define-style test-fixed "Test" 'options '(palette)
+              'title-height 12)
+            (set-style! 'test-fixed)
+            (override! 'title-height 40)
+            (let ([fixed (list (title-height) (theme 'fixed))])
+              (override! 'title-height)
+              (and (equal? (cdr mac) (list 0 (car mac))) (> (car mac) 10)
+                   (= (car fixed) 12) (memq 'title-height (cadr fixed))
+                   #t))))))
+
+;;; ------------------------------------------------------------------
+;;; the kit, the bars and the menus through parts; places
+
+(for-each close-window! (windows))
+(reset-theme!)
+(set-style! 'mac)
+(steps 1)
+
+;; A window holding a text field, a label under it: (values win ui).
+(define (field-window text)
+  (let ([ui (make-ui)])
+    (values (apply open-window "Field" 'size '(400 . 120) 'pos '(200 . 200)
+                   'ui ui
+                   'draw (lambda (win w h)
+                           (ui-begin! ui)
+                           (ui-text-field ui 'f 20 20 300 30 text void)
+                           (ui-draw-label 20 70 300 20 '() "a label")
+                           (ui-end! ui w h))
+                   (ui-handlers ui))
+            ui)))
+
+;; The leftmost column inside the field (content x 30 to 300) where its
+;; text's ink is, in logical pixels.
+(define (ink-left win)
+  (let-values ([(cx cy cw ch) (content-rect win)])
+    (let ([bg (canvas-pixel (+ cx 24) (+ cy 35))])
+      (let loop ([x 24])
+        (cond [(> x 300) #f]
+              [(exists (lambda (dy) (not (= (canvas-pixel (+ cx x) (+ cy dy))
+                                            bg)))
+                       '(28 31 34 37 40))
+               x]
+              [else (loop (+ x 1))])))))
+
+;; The caret's index after a click at content x 60.
+(define (index-clicked win ui)
+  (let-values ([(cx cy cw ch) (content-rect win)])
+    (inject! `(mouse-move ,(+ cx 60) ,(+ cy 35))
+             `(mouse-down ,(+ cx 60) ,(+ cy 35) left 1)
+             `(mouse-up ,(+ cx 60) ,(+ cy 35) left))
+    (steps 2)
+    (edit-caret (ui-state-edit ui))))
+
+(define (test-text-areas x y w h flags)
+  (let ([a (ui-text-box-areas* x y w h flags)])
+    (cons (cons* 'edit (+ (cadr (car a)) 40) (cddr (car a))) (cdr a))))
+
+(check "a style that moves only ui-text-box-areas moves the text and where \
+        a click puts the caret"
+       (with-test-styles
+        (lambda ()
+          (let-values ([(win ui) (field-window "MMMMMMMMMMMM")])
+            (steps 2)
+            (let ([plain (list (ink-left win) (index-clicked win ui))])
+              (define-style test-areas "Test"
+                'ui-text-box-areas 'test-text-areas)
+              (set-style! 'test-areas)
+              (steps 2)
+              (let ([moved (list (ink-left win) (index-clicked win ui))])
+                (close-window! win)
+                (printf "  ~s\n" (list plain moved))
+                (and (car plain) (car moved)
+                     (<= 39 (- (car moved) (car plain)) 41)
+                     (< (cadr moved) (cadr plain)))))))))
+
+(check "a style mapping the field place colors a text box's text, and only \
+        inside it"
+       (with-test-styles
+        (lambda ()
+          (let ([seen '()])
+            (define-style test-place "Test"
+              'places (list (list 'field 'text #xff0000))
+              'ui-draw-text-box
+              (lambda args
+                (set! seen (cons (cons 'box (theme 'text)) seen))
+                (apply ui-draw-text-box* args))
+              'ui-draw-label
+              (lambda args
+                (set! seen (cons (cons 'label (theme 'text)) seen))
+                (apply ui-draw-label* args)))
+            (set-style! 'test-place)
+            (let-values ([(win ui) (field-window "x")])
+              (steps 2)
+              (close-window! win)
+              (and (equal? (assq 'box seen) '(box . #xff0000))
+                   (equal? (assq 'label seen) (cons 'label (theme 'text)))
+                   (not (= (theme 'text) #xff0000))))))))
+
+(define (test-topbar-areas)
+  (let ([h (topbar-height)])
+    (list (list 'launcher 300 0 120 h) (list 'title 0 0 300 h))))
+
+(check "a style that moves the launcher in the top bar's areas moves its \
+        click"
+       (with-test-styles
+        (lambda ()
+          (define (opened-at x)
+            (inject! `(mouse-move ,x 10) `(mouse-down ,x 10 left 1)
+                     `(mouse-up ,x 10 left))
+            (steps 1)
+            (let ([open? (launcher-open?)])
+              (when (menu-open?) (close-menu!))
+              (steps 1)
+              open?))
+          (let ([plain (list (opened-at 40) (opened-at 340))])
+            (define-style test-launcher "Test"
+              'topbar-areas 'test-topbar-areas)
+            (set-style! 'test-launcher)
+            (equal? (list plain (list (opened-at 40) (opened-at 340)))
+                    '((#t #f) (#f #t)))))))
+
+(check "the menu's entries are where menu-areas puts them: a taller entry \
+        moves the click"
+       (with-test-styles
+        (lambda ()
+          (define (entry-at-row row)
+            (open-menu! 100 100 '(("One" . void) ("Two" . void)
+                                  ("Three" . void)))
+            (let-values ([(x y w h) (menu-geometry *menu*)])
+              (let ([i (menu-entry-at (+ x 20)
+                                      (+ y (theme 'menu-pad) row))])
+                (close-menu!)
+                i)))
+          (let ([plain (entry-at-row 60)])
+            (define-style test-menu "Test" 'menu-item-height 40)
+            (set-style! 'test-menu)
+            (equal? (list plain (entry-at-row 60)) '(2 1))))))
+
+(check "the dialog place reaches the kit's dialog, drawn at ui-end!"
+       (with-test-styles
+        (lambda ()
+          (let ([seen #f] [ui (make-ui)])
+            (define-style test-dialog "Test"
+              'places (list (list 'dialog 'bg-2 #xffff00))
+              'ui-draw-dialog (lambda args
+                                (set! seen (theme 'bg-2))
+                                (apply ui-draw-dialog* args)))
+            (set-style! 'test-dialog)
+            (let ([w (apply open-window "Dialog" 'size '(420 . 260)
+                            'ui ui
+                            'draw (lambda (win w h)
+                                    (ui-begin! ui)
+                                    (ui-dialog ui 'd "A dialog" "Its message."
+                                               (list (list "OK" void)) void)
+                                    (ui-end! ui w h))
+                            (ui-handlers ui))])
+              (steps 2)
+              (close-window! w)
+              (eqv? seen #xffff00))))))
+
+(check "a preview's extra settings lie over the Overrides, and over what \
+        a style honors"
+       (with-test-styles
+        (lambda ()
+          (define-style test-fixed-palette "Test" 'parent 'mac
+            'options '(accent))
+          (override! 'palette 'gruvbox)
+          (let ([seen (list (with-style 'mac (lambda () (theme 'palette))
+                                        'palette 'nord)
+                            (with-style 'test-fixed-palette
+                                        (lambda () (theme 'palette))
+                                        'palette 'nord))])
+            (override! 'palette)
+            (equal? seen '(nord nord))))))
+
+(check "a window of another style hears its input in that style's theme, \
+        and a theme change its handler makes stays"
+       (let* ([seen #f]
+              [w (open-window "Genera input" 'size '(200 . 100)
+                              'pos '(300 . 200) 'window-style 'genera
+                              'mouse-down
+                              (lambda (win x y button clicks)
+                                (set! seen (theme 'palette))
+                                (set-theme! 'accent #x123456)))])
+         (steps 1)
+         (let-values ([(cx cy cw ch) (content-rect w)])
+           (inject! `(mouse-down ,(+ cx 20) ,(+ cy 20) left 1)
+                    `(mouse-up ,(+ cx 20) ,(+ cy 20) left))
+           (steps 1))
+         (close-window! w)
+         (let ([accent (theme 'accent)])
+           (reset-style! 'accent)
+           (and (eq? seen 'genera) (= accent #x123456)))))
+
+(check "a menu whose place makes its entries taller takes a click where \
+        it draws the entry"
+       (with-test-styles
+        (lambda ()
+          (define-style test-tall-menu "Test"
+            'places (list (list 'menu 'menu-item-height 50)))
+          (set-style! 'test-tall-menu)
+          (open-menu! 300 150 '(("One" . void) ("Two" . void)
+                                ("Three" . void)))
+          (let* ([two (assv 1 (with-place 'menu
+                                (lambda () (menu-areas *menu*))))]
+                 [hit (menu-entry-at (+ (cadr two) 20) (+ (caddr two) 25))])
+            (close-menu!)
+            (and (= (list-ref two 4) 50) (eqv? hit 1))))))
+
+(check "an accent change is a change of colors only: the chrome stays"
+       (let* ([n 0] [plain wm-chrome-changed!])
+         (set! wm-chrome-changed! (lambda () (set! n (+ n 1)) (plain)))
+         (set-theme! 'accent #xff9e64)
+         (reset-style! 'accent)
+         (set! wm-chrome-changed! plain)
+         (= n 0)))
+
+(check "a window of no style, focused or opened from another style's \
+        handler, is in the chosen style's theme"
+       (let* ([seen '()]
+              [note (lambda (what)
+                      (set! seen (cons (cons what (theme 'palette)) seen)))]
+              [b (open-window "Plain" 'size '(100 . 60) 'pos '(600 . 400)
+                              'focus (lambda (win) (note 'focus)))]
+              [c #f]
+              [g (open-window "Genera" 'size '(200 . 100) 'pos '(300 . 200)
+                              'window-style 'genera
+                              'mouse-down
+                              (lambda (win x y button clicks)
+                                (focus-window! b)
+                                (set! c (open-window
+                                         "Opened" 'size '(100 . 60)
+                                         'open (lambda (win)
+                                                 (note 'open))))))])
+         (set! seen '())
+         (steps 1)
+         (let-values ([(cx cy cw ch) (content-rect g)])
+           (inject! `(mouse-down ,(+ cx 20) ,(+ cy 20) left 1)
+                    `(mouse-up ,(+ cx 20) ,(+ cy 20) left))
+           (steps 1))
+         (for-each close-window! (list b c g))
+         (and (equal? (assq 'focus seen) '(focus . tokyo-night))
+              (equal? (assq 'open seen) '(open . tokyo-night)))))
+
+(check "a theme change of colors from another style's handler changes no \
+        chrome"
+       (let* ([n 0] [plain wm-chrome-changed!]
+              [g (open-window "Genera" 'size '(200 . 100) 'pos '(300 . 200)
+                              'window-style 'genera
+                              'mouse-down
+                              (lambda (win x y button clicks)
+                                (set! n 0)
+                                (set-theme! 'accent #x123456)))])
+         (steps 1)
+         (set! wm-chrome-changed! (lambda () (set! n (+ n 1)) (plain)))
+         (let-values ([(cx cy cw ch) (content-rect g)])
+           (inject! `(mouse-down ,(+ cx 20) ,(+ cy 20) left 1)
+                    `(mouse-up ,(+ cx 20) ,(+ cy 20) left))
+           (steps 1))
+         (set! wm-chrome-changed! plain)
+         (close-window! g)
+         (reset-style! 'accent)
+         (= n 0)))
+
+(check "a text box whose place sets its text size takes a click where it \
+        draws its text, as with the size set for the whole style"
+       (with-test-styles
+        (lambda ()
+          (define (caret-at style)
+            (set-style! style)
+            (let-values ([(win ui) (field-window "MMMMMMMMMMMM")])
+              (steps 2)
+              (let ([i (index-clicked win ui)])
+                (close-window! win)
+                i)))
+          (define-style test-big "Test" 'ui-font-size 26)
+          (define-style test-big-field "Test"
+            'places (list (list 'field 'ui-font-size 26)))
+          (let* ([whole (caret-at 'test-big)]
+                 [placed (caret-at 'test-big-field)])
+            (printf "  ~s\n" (list whole placed))
+            (= whole placed)))))
+
+(check "the bars' place sizes their strips and places their clicks"
+       (with-test-styles
+        (lambda ()
+          (define (launcher-at x)
+            (inject! `(mouse-move ,x 10) `(mouse-down ,x 10 left 1)
+                     `(mouse-up ,x 10 left))
+            (steps 1)
+            (let ([open? (launcher-open?)])
+              (when (menu-open?) (close-menu!))
+              (steps 1)
+              open?))
+          (define-style test-big-bars "Test"
+            'places (list (list 'bar 'ui-font-size 26)))
+          (let ([plain (launcher-at 150)])
+            (set-style! 'test-big-bars)
+            (let-values ([(dx dy dw dh) (desktop-rect)])
+              (and (not plain) (launcher-at 150)
+                   (= dy (topbar-height))
+                   (> dy (theme 'topbar-height))))))))
+
+(check "a tooltip is measured in its place, where it is drawn"
+       (with-test-styles
+        (lambda ()
+          (let* ([seen #f] [ui (make-ui)] [fake (now-ms)] [real now-ms])
+            (define-style test-big-tips "Test"
+              'places (list (list 'tooltip 'ui-font-size 26))
+              'ui-draw-tooltip
+              (lambda (x y w h flags text)
+                (set! seen (list (list w h)
+                                 (call-with-values
+                                   (lambda () (ui-tooltip-size text))
+                                   list)))
+                (ui-draw-tooltip* x y w h flags text)))
+            (set-style! 'test-big-tips)
+            (set! now-ms (lambda () fake))
+            (let ([w (apply open-window "Tips" 'size '(400 . 200)
+                            'pos '(200 . 200) 'ui ui
+                            'draw (lambda (win w h)
+                                    (ui-begin! ui)
+                                    (ui-button ui 'b 20 20 100 30 "Button"
+                                               void 'tip "A tip")
+                                    (ui-end! ui w h))
+                            (ui-handlers ui))])
+              (steps 2)
+              (let-values ([(cx cy cw ch) (content-rect w)])
+                (inject! `(mouse-move ,(+ cx 50) ,(+ cy 30)))
+                (steps 2)
+                (set! fake (+ fake 2000))
+                (invalidate! w)
+                (steps 2))
+              (set! now-ms real)
+              (close-window! w)
+              (and seen (equal? (car seen) (cadr seen))))))))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)

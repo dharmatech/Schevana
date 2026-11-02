@@ -18,8 +18,13 @@
 ;;; focused, selected, ...) and its data. Only those decide colors, fonts,
 ;;; radii and paddings, and they read nothing else, so any state can be
 ;;; drawn from made-up flags. A widget's size comes from its ui-KIND-size
-;;; procedure, which layout asks. Behavior (events, focus, editing) never
-;;; draws. tests/sources.ss checks the seam.
+;;; procedure, which layout asks, and where its pieces are from its
+;;; ui-KIND-areas, which its drawing and its clicks both read. Behavior
+;;; (events, focus, editing) never draws. Each of those is a part (theme.ss,
+;;; define-part): a style replaces it by its key, and the shared numbers
+;;; are settings. A container draws its inside in its place (with-place):
+;;; a text box in 'field, a table or tree in 'list, a dialog or calendar
+;;; in 'dialog, a tooltip in 'tooltip. tests/sources.ss checks the seam.
 ;;;
 ;;; Keyboard focus: one focused widget per ui. A click focuses what takes
 ;;; typing; Tab and Shift+Tab go through every widget in draw order; Escape
@@ -481,11 +486,13 @@
           [(not tip) (void)]
           [(< (now-ms) at) (ui-due! ui at)]
           [else
-           (let*-values ([(px py) (values (cadr rest) (caddr rest))]
-                         [(tw th) (ui-tooltip-size tip)]
-                         [(tx ty) (ui-popup-place (+ px 12) (+ py 20) (- py 8)
-                                                  tw th w h)])
-             (ui-draw-tooltip tx ty tw th '() tip))])))))
+           (with-place 'tooltip
+             (lambda ()
+               (let*-values ([(px py) (values (cadr rest) (caddr rest))]
+                             [(tw th) (ui-tooltip-size tip)]
+                             [(tx ty) (ui-popup-place (+ px 12) (+ py 20)
+                                                      (- py 8) tw th w h)])
+                 (ui-draw-tooltip tx ty tw th '() tip))))])))))
 
 ;;; ------------------------------------------------------------------ menus
 
@@ -516,14 +523,22 @@
 ;;; ------------------------------------------------------------------
 ;;; sizes and layout
 
-(define (ui-control-height)
-  (max 28 (round (+ (font-line-height 'ui) 13))))
-;; A glyph's side beside 'ui text (a button's plus, a dropdown's chevron),
-;; and beside 'ui-small text (a chip's ×, a sort arrow).
-(define (ui-glyph-size) (round (* 4/5 (font-line-height 'ui))))
-(define (ui-small-glyph-size) (round (* 4/5 (font-line-height 'ui-small))))
-(define (ui-gap) (max 8 (round (/ (font-line-height 'ui) 2))))
-(define (ui-pad) (max 12 (round (* (font-line-height 'ui) 4/5))))
+;; The shared sizes are settings, rules from the fonts: a style may give
+;; its own pixels. A glyph's side beside 'ui text (a button's plus, a
+;; dropdown's chevron), and beside 'ui-small text (a chip's ×, a sort
+;; arrow).
+(for-each theme-default!
+  '(control-height glyph-size small-glyph-size gap pad)
+  (list (rule (max 28 (round (+ (font-line-height 'ui) 13))))
+        (rule (round (* 4/5 (font-line-height 'ui))))
+        (rule (round (* 4/5 (font-line-height 'ui-small))))
+        (rule (max 8 (round (/ (font-line-height 'ui) 2))))
+        (rule (max 12 (round (* (font-line-height 'ui) 4/5))))))
+(define (ui-control-height) (theme 'control-height))
+(define (ui-glyph-size) (theme 'glyph-size))
+(define (ui-small-glyph-size) (theme 'small-glyph-size))
+(define (ui-gap) (theme 'gap))
+(define (ui-pad) (theme 'pad))
 
 ;; Where a popup w × h goes in a window ww × wh: at x, its top at below,
 ;; or its bottom at above when there is no room below; inside the window.
@@ -614,13 +629,13 @@
 ;;; shared drawing
 
 ;; The ring of a widget that has the keyboard from Tab.
-(define (ui-draw-focus x y w h flags r)
+(define-part (ui-draw-focus x y w h flags r)
   (stroke-round-rect (- x 3) (- y 3) (+ w 6) (+ h 6) (+ r 3)
                      (alpha 'accent 0.7) 2))
 
 ;; The box of what takes typing (a text box, a chip input): an accent
 ;; border while it has the keyboard.
-(define (ui-draw-field x y w h flags)
+(define-part (ui-draw-field x y w h flags)
   (fill-round-rect x y w h 6 'bg-0)
   (if (memq 'focused flags)
       (stroke-round-rect x y w h 6 'accent 1.5)
@@ -629,7 +644,7 @@
 
 ;; Vector glyphs, no font: check cross plus chevron-down chevron-left
 ;; chevron-right sort-up sort-down search expand, centered in the box.
-(define (ui-draw-glyph x y w h flags name)
+(define-part (ui-draw-glyph x y w h flags name)
   (let* ([s (min w h)] [ox (+ x (/ (- w s) 2))] [oy (+ y (/ (- h s) 2))]
          [p (lambda (fx fy) (cons (+ ox (* fx s)) (+ oy (* fy s))))]
          [ink (cond [(memq 'primary flags) (readable-on 'accent)]
@@ -670,8 +685,12 @@
                                               disabled)))
                   label (plist-ref opts 'glyph #f)))
 
+;; A primary button's fill while pressed, and under the pointer.
+(color-default! 'primary-pressed (rule (mix 'accent 'bg-0 0.15)))
+(color-default! 'primary-hover (rule (mix 'accent 'text 0.15)))
+
 ;; With hover and selected only it is the look Settings was built with.
-(define (ui-draw-button x y w h flags label glyph)
+(define-part (ui-draw-button x y w h flags label glyph)
   (let* ([flags (if (memq 'disabled flags)   ; the pointer does nothing
                     (remp (lambda (f) (memq f '(hover pressed))) flags)
                     flags)]
@@ -679,8 +698,8 @@
          [ink (lambda (c) (if (on? 'disabled) (alpha c 0.5) c))]
          [hot? (or (on? 'hover) (on? 'pressed))]
          [fill (cond [(on? 'primary)
-                      (cond [(on? 'pressed) (mix 'accent 'bg-0 0.15)]
-                            [(on? 'hover) (mix 'accent 'text 0.15)]
+                      (cond [(on? 'pressed) 'primary-pressed]
+                            [(on? 'hover) 'primary-hover]
                             [else 'accent])]
                      [(on? 'selected) (alpha 'accent 0.25)]
                      [(on? 'pressed) (mix 'bg-3 'text 0.08)]
@@ -709,7 +728,7 @@
     (when (on? 'focused) (ui-draw-focus x y w h flags 6))))
 
 ;; A glyph alone is a square button.
-(define (ui-button-size label glyph)
+(define-part (ui-button-size label glyph)
   (let ([h (ui-control-height)])
     (values (if label
                 (+ 24 (text-width label 'ui)
@@ -743,9 +762,10 @@
        (ui-draw-slider x y w h (ui-flags ui id)
                        (clamp (/ (- value lo) (- hi lo)) 0 1) paint-track))]))
 
-(define (ui-slider-height) 24)
+(theme-default! 'slider-height 24)
+(define (ui-slider-height) (theme 'slider-height))
 
-(define (ui-draw-slider x y w h flags frac paint)
+(define-part (ui-draw-slider x y w h flags frac paint)
   (let* ([cy (+ y (/ h 2))] [kx (+ x (* frac w))]
          [r (if (or (memq 'hover flags) (memq 'pressed flags)) 8 7)])
     (if paint
@@ -779,7 +799,7 @@
 
 (define (ui-checkbox-box) (round (+ (font-line-height 'ui) 1)))
 
-(define (ui-draw-checkbox x y w h flags label)
+(define-part (ui-draw-checkbox x y w h flags label)
   (let* ([b (ui-checkbox-box)] [by (+ y (floor (/ (- h b) 2)))]
          [lh (font-line-height 'ui)] [checked? (memq 'checked flags)])
     (if checked?
@@ -795,14 +815,14 @@
                  (if checked? 'text-dim 'text) 'ui))
     (when (memq 'focused flags) (ui-draw-focus x by b b flags 4))))
 
-(define (ui-checkbox-size label)
+(define-part (ui-checkbox-size label)
   (values (+ (ui-checkbox-box) 8 (text-width label 'ui)) (ui-control-height)))
 
 ;; A toggle's track, the pill its knob slides in: (values w h).
 (define (ui-toggle-track)
   (let ([th (+ (ui-glyph-size) 6)]) (values (- (* 2 th) 4) th)))
 
-(define (ui-draw-toggle x y w h flags label)
+(define-part (ui-draw-toggle x y w h flags label)
   (let*-values ([(tw th) (ui-toggle-track)]
                 [(ty) (+ y (floor (/ (- h th) 2)))]
                 [(on? r) (values (memq 'checked flags) (- (/ th 2) 2))]
@@ -819,7 +839,7 @@
                  (if (memq 'hover flags) 'text 'text-dim) 'ui))
     (when (memq 'focused flags) (ui-draw-focus x ty tw th flags (/ th 2)))))
 
-(define (ui-toggle-size label)
+(define-part (ui-toggle-size label)
   (let-values ([(tw th) (ui-toggle-track)])
     (values (+ tw 8 (text-width label 'ui)) (ui-control-height))))
 
@@ -840,7 +860,7 @@
                          label)
             (loop (cdr cs) (+ tx tw)))))))
 
-(define (ui-draw-tab x y w h flags label)
+(define-part (ui-draw-tab x y w h flags label)
   (let ([selected? (memq 'selected flags)] [lh (font-line-height 'ui-bold)])
     (draw-text-centered x y w h label
                         (if (or selected? (memq 'hover flags)) 'text 'text-dim)
@@ -850,7 +870,7 @@
     (when (memq 'focused flags) (ui-draw-focus x y w h flags 6))))
 
 ;; Each tab is its label in 'ui-bold plus 24.
-(define (ui-tabs-size labels)
+(define-part (ui-tabs-size labels)
   (values (fold-left (lambda (acc l) (+ acc 24 (text-width l 'ui-bold))) 0
                      labels)
           (round (+ (font-line-height 'ui) 15))))
@@ -868,7 +888,7 @@
 ;; flags: a role (heading body dim hint section mono), wrap, center
 ;; or right. Without wrap the text is cut to w and centered in h; with it,
 ;; a paragraph from y. Returns the y below it.
-(define (ui-draw-label x y w h flags text)
+(define-part (ui-draw-label x y w h flags text)
   (let* ([font (ui-label-font flags)]
          [color (cond [(memq 'dim flags) 'text-dim]
                       [(or (memq 'hint flags) (memq 'section flags)
@@ -891,7 +911,7 @@
           (+ y (max h lh))))))
 
 ;; (values w h); w matters only with wrap.
-(define (ui-label-size flags text w)
+(define-part (ui-label-size flags text w)
   (let* ([font (ui-label-font flags)] [lh (font-line-height font)]
          [text (if (memq 'section flags) (string-upcase text) text)])
     (if (memq 'wrap flags)
@@ -933,7 +953,7 @@
               cut?))))
 
 ;; flags: page, toolbar (a line below), side (a line at the left), well.
-(define (ui-draw-surface x y w h flags)
+(define-part (ui-draw-surface x y w h flags)
   (cond
     [(memq 'well flags) (fill-round-rect x y w h 8 'bg-0)]
     [else
@@ -948,7 +968,7 @@
 ;; The box's inner rect and font, and where an area's scroll bar goes:
 ;; over its right padding, its thumb a pixel clear of a full row's end.
 ;; ((edit tx ty tw th font) (bar x y w h))
-(define (ui-text-box-areas x y w h flags)
+(define-part (ui-text-box-areas x y w h flags)
   (let ([left (if (memq 'search flags) (+ (ui-glyph-size) 14) 8)]
         [bw (ui-scrollbar-width)])
     (list (list 'edit (+ x left) (+ y 6) (max 0 (- w left 8)) (max 0 (- h 12))
@@ -957,27 +977,33 @@
 
 ;; How far in from the box's left edge its text starts: a bare box set that
 ;; much to the left lines its text up with what is above and below it.
+;; A box's sizes, areas and drawing are all its place's, field.
 (define (ui-text-box-inset flags)
-  (cadr (car (ui-text-box-areas 0 0 0 0 flags))))
+  (with-place 'field
+    (lambda () (cadr (car (ui-text-box-areas 0 0 0 0 flags))))))
 
 ;; (values w h) for rows of text.
-(define (ui-text-box-size flags w rows)
-  (let ([large? (memq 'large flags)])
-    (values w
-            (if (and (= rows 1) (not large?))
-                (ui-control-height)
-                (round (+ 12 (* rows (font-line-height
-                                      (if large? 'heading 'ui)))))))))
+(define-part (ui-text-box-size flags w rows)
+  (with-place 'field
+    (lambda ()
+      (let ([large? (memq 'large flags)])
+        (values w
+                (if (and (= rows 1) (not large?))
+                    (ui-control-height)
+                    (round (+ 12 (* rows (font-line-height
+                                          (if large? 'heading 'ui)))))))))))
 
 ;; The rows of box id's text, tw wide in font (a field's: unwrapped). The
 ;; kit keeps them, so the layout pass and the frame share them, and a draw
 ;; computes only the rows it shows. The text the focused box's edit made
 ;; says where it changed, so that the rows need not compare the texts.
+;; They measure in the font they were laid out in (a click comes outside
+;; the box's place).
 (define (ui-text-layout ui id text tw font area?)
-  (let* ([e (ui-edit ui)]
+  (let* ([e (ui-edit ui)] [f (get-font font)]
          [lay (edit-layout-of (ui-memo ui (list id 'rows) #f) text
-                              (and area? tw) (cons (get-font font) *scale*)
-                              (lambda (s) (text-width s font))
+                              (and area? tw) (cons f *scale*)
+                              (lambda (s) (text-width s f))
                               (and e (equal? (ui-state-focus ui) id)
                                    (eq? (edit-text e) text)
                                    (edit-change e)))])
@@ -986,18 +1012,24 @@
 
 ;; The text area id as tall as text wrapped at w needs, within the row
 ;; counts: only rows up to max-rows are computed, which the box draws.
-(define (ui-text-area-size ui id flags w text min-rows max-rows)
-  (let* ([a (car (ui-text-box-areas 0 0 w 0 flags))]
-         [lay (ui-text-layout ui id text (list-ref a 3) (list-ref a 5) #t)])
-    (edit-layout-extend! lay (- max-rows 1))
-    (ui-text-box-size flags w
-                      (clamp (edit-layout-count lay) min-rows max-rows))))
+(define-part (ui-text-area-size ui id flags w text min-rows max-rows)
+  (with-place 'field
+    (lambda ()
+      (let* ([a (car (ui-text-box-areas 0 0 w 0 flags))]
+             [lay (ui-text-layout ui id text (list-ref a 3) (list-ref a 5)
+                                  #t)])
+        (edit-layout-extend! lay (- max-rows 1))
+        (ui-text-box-size flags w
+                          (clamp (edit-layout-count lay) min-rows
+                                 max-rows))))))
 
 (define (ui-text-field ui id x y w h text on-change . opts)
-  (ui-text-box ui id x y w h text on-change #f opts))
+  (with-place 'field
+    (lambda () (ui-text-box ui id x y w h text on-change #f opts))))
 
 (define (ui-text-area ui id x y w h text on-change . opts)
-  (ui-text-box ui id x y w h text on-change #t opts))
+  (with-place 'field
+    (lambda () (ui-text-box ui id x y w h text on-change #t opts))))
 
 ;; The focused text's edit, of text: kept, or clamped to text when it
 ;; changed elsewhere. A new focus puts the caret at the end, or where
@@ -1171,7 +1203,7 @@
 
 ;; lay: the text's rows (an edit-layout), those in view computed; [lo, hi)
 ;; the selection; dx and dy how far the text is scrolled.
-(define (ui-draw-text-box x y w h flags lay lo hi caret dx dy placeholder)
+(define-part (ui-draw-text-box x y w h flags lay lo hi caret dx dy placeholder)
   (let* ([a (car (ui-text-box-areas x y w h flags))]
          [tx (list-ref a 1)] [ty (list-ref a 2)] [tw (list-ref a 3)]
          [th (list-ref a 4)] [font (list-ref a 5)]
@@ -1315,19 +1347,20 @@
       (ui-memo! ui id (cons new (cdr m)))
       (invalidate! (current-window)))))
 
-(define (ui-scrollbar-width) 10)
+(theme-default! 'scrollbar-width 10)
+(define (ui-scrollbar-width) (theme 'scrollbar-width))
 
 ;; How far one wheel step scrolls: three lines.
 (define (ui-scroll-step) (* 3 (font-line-height 'ui)))
 
 ;; start and size: the view's top and height as fractions of the content.
-(define (ui-scrollbar-areas x y w h start size)
+(define-part (ui-scrollbar-areas x y w h start size)
   (let ([th (min h (max (* 2 (font-line-height 'ui)) (* size h)))])
     (list (list 'thumb x
                 (+ y (if (< size 1) (* (- h th) (/ start (- 1 size))) 0))
                 w th))))
 
-(define (ui-draw-scrollbar x y w h flags start size)
+(define-part (ui-draw-scrollbar x y w h flags start size)
   (let ([t (cdr (assq 'thumb (ui-scrollbar-areas x y w h start size)))])
     (fill-round-rect (+ x 2) (+ (cadr t) 2) (- w 5) (- (cadddr t) 4) 2.5
                      (alpha 'text (if (or (memq 'hover flags)
@@ -1343,51 +1376,53 @@
 ;; y) on a right press, 'tip (row): a row's tooltip, or #f, and 'reveal:
 ;; true scrolls the selected row into view.
 (define (ui-table ui id x y w h columns rows selected on-select cell . opts)
-  (let* ([hh (ui-table-header-height)] [rh (ui-table-row-height)]
-         [sort (plist-ref opts 'sort #f)]
-         [tip (plist-ref opts 'tip (lambda (r) #f))]
-         [on-sort (plist-ref opts 'on-sort (lambda (k) #f))]
-         [on-open (plist-ref opts 'on-open (lambda (r) #f))]
-         [on-menu (plist-ref opts 'on-menu (lambda (r x y) #f))]
-         [body (list id 'body)] [view-h (max 0 (- h hh))]
-         [i (and (plist-ref opts 'reveal #f)
-                 (list-index (lambda (r) (eq? r selected)) rows))]
-         [rows (list->vector rows)] [n (vector-length rows)])
-    (let loop ([cs columns] [cx x])
-      (unless (null? cs)
-        (let* ([key (caar cs)] [cw (caddr (car cs))]
-               [hid (list id 'header key)])
-          (ui-pressable! ui hid cx y cw hh (lambda () (on-sort key)) '()
-                         '(focus keep))
-          (ui-draw-table-header cx y cw hh (ui-flags ui hid) (cadar cs)
-                                (and sort (eq? (car sort) key) (cdr sort)))
-          (loop (cdr cs) (+ cx cw)))))
-    (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))
-    (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
-    (ui-scroll ui body x (+ y hh) w view-h
-      (lambda (top)
-        (let ([vy (+ y hh)])
-          (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
-              ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
-            (let* ([row (vector-ref rows i)] [ry (+ top (* i rh))]
-                   [rid (list id 'row i)])
-              (ui-region! ui rid x ry w rh 'tip (tip row) 'on
-                (lambda (ev)
-                  (and (eq? (car ev) 'press)
-                       (case (list-ref ev 3)
-                         [(left) (on-select row)
-                                 (when (>= (list-ref ev 4) 2) (on-open row))
-                                 #t]
-                         [(right) (on-menu row (cadr ev) (caddr ev)) #t]
-                         [else #f]))))
-              (let ([flags (apply ui-flags ui rid
-                                  (if (eq? row selected) '(selected) '()))])
-                (ui-draw-table-row x ry w rh flags)
-                (let cells ([cs columns] [cx x])
-                  (unless (null? cs)
-                    (cell row (caar cs) cx ry (caddr (car cs)) rh flags)
-                    (cells (cdr cs) (+ cx (caddr (car cs))))))))))
-        (+ top (* n rh))))))
+  (with-place 'list
+    (lambda ()
+      (let* ([hh (ui-table-header-height)] [rh (ui-table-row-height)]
+             [sort (plist-ref opts 'sort #f)]
+             [tip (plist-ref opts 'tip (lambda (r) #f))]
+             [on-sort (plist-ref opts 'on-sort (lambda (k) #f))]
+             [on-open (plist-ref opts 'on-open (lambda (r) #f))]
+             [on-menu (plist-ref opts 'on-menu (lambda (r x y) #f))]
+             [body (list id 'body)] [view-h (max 0 (- h hh))]
+             [i (and (plist-ref opts 'reveal #f)
+                     (list-index (lambda (r) (eq? r selected)) rows))]
+             [rows (list->vector rows)] [n (vector-length rows)])
+        (let loop ([cs columns] [cx x])
+          (unless (null? cs)
+            (let* ([key (caar cs)] [cw (caddr (car cs))]
+                   [hid (list id 'header key)])
+              (ui-pressable! ui hid cx y cw hh (lambda () (on-sort key)) '()
+                             '(focus keep))
+              (ui-draw-table-header cx y cw hh (ui-flags ui hid) (cadar cs)
+                                    (and sort (eq? (car sort) key) (cdr sort)))
+              (loop (cdr cs) (+ cx cw)))))
+        (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))
+        (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
+        (ui-scroll ui body x (+ y hh) w view-h
+          (lambda (top)
+            (let ([vy (+ y hh)])
+              (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
+                  ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
+                (let* ([row (vector-ref rows i)] [ry (+ top (* i rh))]
+                       [rid (list id 'row i)])
+                  (ui-region! ui rid x ry w rh 'tip (tip row) 'on
+                    (lambda (ev)
+                      (and (eq? (car ev) 'press)
+                           (case (list-ref ev 3)
+                             [(left) (on-select row)
+                                     (when (>= (list-ref ev 4) 2) (on-open row))
+                                     #t]
+                             [(right) (on-menu row (cadr ev) (caddr ev)) #t]
+                             [else #f]))))
+                  (let ([flags (apply ui-flags ui rid
+                                      (if (eq? row selected) '(selected) '()))])
+                    (ui-draw-table-row x ry w rh flags)
+                    (let cells ([cs columns] [cx x])
+                      (unless (null? cs)
+                        (cell row (caar cs) cx ry (caddr (car cs)) rh flags)
+                        (cells (cdr cs) (+ cx (caddr (car cs))))))))))
+            (+ top (* n rh))))))))
 
 ;; The new row index for a key, #f for any other: Up/Down ±1,
 ;; PageUp/PageDown ±page, Home 0, End n−1; from i #f, Down, PageDown and
@@ -1406,12 +1441,14 @@
 ;; Rows per page of table id at its last draw.
 (define (ui-table-page ui id) (ui-memo ui (list id 'page) 1))
 
-(define (ui-table-header-height)
-  (round (+ (font-line-height 'ui-small) 13)))
-(define (ui-table-row-height) (round (+ (font-line-height 'ui) 13)))
+(theme-default! 'table-header-height
+                (rule (round (+ (font-line-height 'ui-small) 13))))
+(theme-default! 'table-row-height (rule (round (+ (font-line-height 'ui) 13))))
+(define (ui-table-header-height) (theme 'table-header-height))
+(define (ui-table-row-height) (theme 'table-row-height))
 
 ;; dir: up, down or #f (not sorted by it).
-(define (ui-draw-table-header x y w h flags label dir)
+(define-part (ui-draw-table-header x y w h flags label dir)
   (let ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)])
     (fill-rect x (- (+ y h) 1) w 1 'window-border)
     (let ([end (draw-text (+ x 10) (+ y (/ (- h sh) 2))
@@ -1422,7 +1459,7 @@
         (ui-draw-glyph (+ end 4) (+ y (/ (- h g) 2)) g g '(hover)
                        (if (eq? dir 'up) 'sort-up 'sort-down))))))
 
-(define (ui-draw-table-row x y w h flags)
+(define-part (ui-draw-table-row x y w h flags)
   (cond [(memq 'selected flags) (fill-rect x y w h 'selection)]
         [(memq 'hover flags) (fill-rect x y w h 'bg-2)])
   (fill-rect x (- (+ y h) 1) w 1 (alpha 'window-border 0.6)))
@@ -1549,83 +1586,90 @@
 ;; (without it, they are made at every draw).
 (define (ui-tree ui id x y w h columns roots children selected on-select cell
                  . opts)
-  (let* ([hh (ui-table-header-height)] [rh (ui-tree-row-height)]
-         [tip (plist-ref opts 'tip (lambda (node w) #f))]
-         [on-open (plist-ref opts 'on-open (lambda (node) #f))]
-         [on-menu (plist-ref opts 'on-menu (lambda (node x y) #f))]
-         [on-hide (plist-ref opts 'on-hide on-select)]
-         [dim? (plist-ref opts 'dim (lambda (node) #f))]
-         [start (plist-ref opts 'expanded #f)]
-         [generation (plist-ref opts 'generation #f)]
-         [states (ui-tree-states ui id)]
-         [rows (if (and generation
-                        (eqv? generation (ui-memo ui (list id 'generation) #f)))
-                   (ui-memo ui (list id 'rows) #f)
-                   (ui-tree-rows roots children
-                                 (lambda (node)
-                                   (hashtable-ref states node start))))]
-         [n (vector-length rows)] [body (list id 'body)]
-         [view-h (max 0 (- h hh))] [w0 (caddr (car columns))]
-         [c0 (cdr (assq 'cell (ui-tree-areas x y w0 rh 0)))])
-    (ui-memo! ui (list id 'rows) rows)
-    (ui-memo! ui (list id 'generation) generation)
-    ;; the first title over a root's cell
-    (ui-draw-table-header x y (- (car c0) x) hh '() "" #f)
-    (let loop ([cs columns] [cx (car c0)] [cw (- w0 (- (car c0) x))])
-      (unless (null? cs)
-        (ui-draw-table-header cx y cw hh '() (cadar cs) #f)
-        (unless (null? (cdr cs))
-          (loop (cdr cs) (+ cx cw) (caddr (cadr cs))))))
-    (when (plist-ref opts 'reveal #f)
-      (let ([i (ui-tree-index rows selected)])
-        (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))))
-    (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
-    (ui-scroll ui body x (+ y hh) w view-h
-      (lambda (top)
-        (let ([vy (+ y hh)])
-          (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
-              ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
-            (let* ([r (vector-ref rows i)] [node (ui-tree-row-node r)]
-                   [ry (+ top (* i rh))] [rid (list id 'row i)]
-                   [areas (ui-tree-areas x ry w0 rh (ui-tree-row-depth r))]
-                   [twisty (cdr (assq 'twisty areas))]
-                   [c (cdr (assq 'cell areas))])
-              (ui-region! ui rid x ry w rh 'tip (tip node (caddr c)) 'on
-                (lambda (ev)
-                  (and (eq? (car ev) 'press)
-                       (case (list-ref ev 3)
-                         [(left)
-                          (if (and (ui-tree-row-kids? r)
-                                   (apply point-in? (cadr ev) (caddr ev)
-                                          twisty))
-                              (let ([open? (ui-tree-row-expanded? r)])
-                                (ui-tree-expand! ui id node (not open?))
-                                (when (and open?
-                                           (ui-tree-under?
-                                            rows (ui-tree-index rows selected)
-                                            i))
-                                  (on-hide node)))
-                              (begin
-                                (on-select node)
-                                (when (>= (list-ref ev 4) 2) (on-open node))))
-                          #t]
-                         [(right) (on-menu node (cadr ev) (caddr ev)) #t]
-                         [else #f]))))
-              (let ([flags (apply ui-flags ui rid
-                                  (append
-                                   (if (equal? node selected) '(selected) '())
-                                   (if (dim? node) '(dim) '())
-                                   (if (ui-tree-row-kids? r) '(kids) '())
-                                   (if (ui-tree-row-expanded? r)
-                                       '(expanded)
-                                       '())))])
-                (ui-draw-tree-row x ry w rh flags w0 (ui-tree-row-depth r))
-                (cell node (caar columns) (car c) ry (caddr c) rh flags)
-                (let cells ([cs (cdr columns)] [cx (+ x w0)])
-                  (unless (null? cs)
-                    (cell node (caar cs) cx ry (caddr (car cs)) rh flags)
-                    (cells (cdr cs) (+ cx (caddr (car cs)))))))))
-          (+ top (* n rh)))))))
+  (with-place 'list
+    (lambda ()
+      (let* ([hh (ui-table-header-height)] [rh (ui-tree-row-height)]
+             [tip (plist-ref opts 'tip (lambda (node w) #f))]
+             [on-open (plist-ref opts 'on-open (lambda (node) #f))]
+             [on-menu (plist-ref opts 'on-menu (lambda (node x y) #f))]
+             [on-hide (plist-ref opts 'on-hide on-select)]
+             [dim? (plist-ref opts 'dim (lambda (node) #f))]
+             [start (plist-ref opts 'expanded #f)]
+             [generation (plist-ref opts 'generation #f)]
+             [states (ui-tree-states ui id)]
+             [rows (if (and generation
+                            (eqv? generation
+                                  (ui-memo ui (list id 'generation) #f)))
+                       (ui-memo ui (list id 'rows) #f)
+                       (ui-tree-rows roots children
+                                     (lambda (node)
+                                       (hashtable-ref states node start))))]
+             [n (vector-length rows)] [body (list id 'body)]
+             [view-h (max 0 (- h hh))] [w0 (caddr (car columns))]
+             [c0 (cdr (assq 'cell (ui-tree-areas x y w0 rh 0)))])
+        (ui-memo! ui (list id 'rows) rows)
+        (ui-memo! ui (list id 'generation) generation)
+        ;; the first title over a root's cell
+        (ui-draw-table-header x y (- (car c0) x) hh '() "" #f)
+        (let loop ([cs columns] [cx (car c0)] [cw (- w0 (- (car c0) x))])
+          (unless (null? cs)
+            (ui-draw-table-header cx y cw hh '() (cadar cs) #f)
+            (unless (null? (cdr cs))
+              (loop (cdr cs) (+ cx cw) (caddr (cadr cs))))))
+        (when (plist-ref opts 'reveal #f)
+          (let ([i (ui-tree-index rows selected)])
+            (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))))
+        (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
+        (ui-scroll ui body x (+ y hh) w view-h
+          (lambda (top)
+            (let ([vy (+ y hh)])
+              (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
+                  ((or (>= i n) (>= (+ top (* i rh)) (+ vy view-h))))
+                (let* ([r (vector-ref rows i)] [node (ui-tree-row-node r)]
+                       [ry (+ top (* i rh))] [rid (list id 'row i)]
+                       [areas (ui-tree-areas x ry w0 rh (ui-tree-row-depth r))]
+                       [twisty (cdr (assq 'twisty areas))]
+                       [c (cdr (assq 'cell areas))])
+                  (ui-region! ui rid x ry w rh 'tip (tip node (caddr c)) 'on
+                    (lambda (ev)
+                      (and (eq? (car ev) 'press)
+                           (case (list-ref ev 3)
+                             [(left)
+                              (if (and (ui-tree-row-kids? r)
+                                       (apply point-in? (cadr ev) (caddr ev)
+                                              twisty))
+                                  (let ([open? (ui-tree-row-expanded? r)])
+                                    (ui-tree-expand! ui id node (not open?))
+                                    (when (and open?
+                                               (ui-tree-under?
+                                                rows
+                                                (ui-tree-index rows selected)
+                                                i))
+                                      (on-hide node)))
+                                  (begin
+                                    (on-select node)
+                                    (when (>= (list-ref ev 4) 2)
+                                      (on-open node))))
+                              #t]
+                             [(right) (on-menu node (cadr ev) (caddr ev)) #t]
+                             [else #f]))))
+                  (let ([flags (apply ui-flags ui rid
+                                      (append
+                                       (if (equal? node selected)
+                                           '(selected)
+                                           '())
+                                       (if (dim? node) '(dim) '())
+                                       (if (ui-tree-row-kids? r) '(kids) '())
+                                       (if (ui-tree-row-expanded? r)
+                                           '(expanded)
+                                           '())))])
+                    (ui-draw-tree-row x ry w rh flags w0 (ui-tree-row-depth r))
+                    (cell node (caar columns) (car c) ry (caddr c) rh flags)
+                    (let cells ([cs (cdr columns)] [cx (+ x w0)])
+                      (unless (null? cs)
+                        (cell node (caar cs) cx ry (caddr (car cs)) rh flags)
+                        (cells (cdr cs) (+ cx (caddr (car cs)))))))))
+              (+ top (* n rh)))))))))
 
 ;; A tree's rows are a table's height.
 (define (ui-tree-row-height) (ui-table-row-height))
@@ -1634,7 +1678,7 @@
 ;; column x y w h: indented a twisty's width a level, but by at most half
 ;; the column, so that a deep row keeps room for its cell.
 ;; ((twisty x y w h) (cell x y w h))
-(define (ui-tree-areas x y w h depth)
+(define-part (ui-tree-areas x y w h depth)
   (let* ([s (+ (ui-glyph-size) 8)]
          [in (min (* depth s) (max 0 (floor (/ (- w s) 2))))])
     (list (list 'twisty (+ x 4 in) y s h)
@@ -1643,7 +1687,7 @@
 ;; A row's look: a table row's, and the twisty of a node with children
 ;; (flags kids, expanded) at its depth in its first column, w0 wide; dim,
 ;; all of it left of its first cell, as the cells dim themselves.
-(define (ui-draw-tree-row x y w h flags w0 depth)
+(define-part (ui-draw-tree-row x y w h flags w0 depth)
   (let ([areas (ui-tree-areas x y w0 h depth)] [g (ui-glyph-size)])
     (ui-draw-table-row x y w h flags)
     (when (memq 'kids flags)
@@ -1657,7 +1701,7 @@
 
 ;; A row a view shows but leaves out (flags: dim; the app's search, say),
 ;; or a part of it, x y w h: shaded, unless it is selected.
-(define (ui-draw-dim x y w h flags)
+(define-part (ui-draw-dim x y w h flags)
   (when (and (memq 'dim flags) (not (memq 'selected flags)))
     (fill-rect x y w h (alpha 'bg-0 0.6))))
 
@@ -1665,7 +1709,7 @@
 
 ;; A tag: a pill whose hue comes from its label, so a tag keeps its color
 ;; everywhere; removable adds a ×, which hover turns red.
-(define (ui-draw-chip x y w h flags label)
+(define-part (ui-draw-chip x y w h flags label)
   (let* ([sh (font-line-height 'ui-small)] [r (/ h 2)]
          [g (ui-small-glyph-size)] [removable? (memq 'removable flags)]
          [hue (app-color (string->symbol label))])
@@ -1681,12 +1725,12 @@
                        'cross)))))
 
 ;; The text 8 in from either end; removable, a × after it.
-(define (ui-chip-size label removable?)
+(define-part (ui-chip-size label removable?)
   (values (+ 16 (text-width label 'ui-small)
              (if removable? (+ (ui-small-glyph-size) 4) 0))
           (round (+ (font-line-height 'ui-small) 8))))
 
-(define (ui-chip-areas x y w h)
+(define-part (ui-chip-areas x y w h)
   (let ([g (ui-small-glyph-size)])
     (list (list 'remove (- (+ x w) g 10) y (+ g 6) h))))
 
@@ -1696,49 +1740,52 @@
 ;; paste's comma-separated parts all at once. Returns the box's bottom.
 (define (ui-chip-input ui id x y w chips draft on-draft on-add on-remove
                        . opts)
-  (let* ([areas (ui-chip-input-areas x y w chips)]
-         [field (cdr (assq 'field areas))]
-         [bottom (+ (cadr field) (cadddr field))]
-         [fid (list id 'field)])
-    (ui-draw-field x y w (- bottom y) (ui-flags ui fid))
-    (for-each
-     (lambda (chip a i)
-       (let ([rid (list id 'remove i)]
-             [r (cdr (assq 'remove (apply ui-chip-areas a)))])
-         (ui-pressable! ui rid (car r) (cadr r) (caddr r) (cadddr r)
-                        (lambda () (on-remove i)) '()
-                        '(focus keep tip "Remove"))
-         (apply ui-draw-chip (append a (list (apply ui-flags ui rid
-                                                    '(removable))
-                                             chip)))))
-     chips (map cdr (filter (lambda (a) (eq? (car a) 'chip)) areas))
-     (iota (length chips)))
-    (apply ui-text-field ui fid
-           (append field
-                   (list draft
-                         (lambda (s)
-                           (let ([parts (string-split s #\,)])
-                             (when (pair? (cdr parts))
-                               (on-add (list-head parts
-                                                  (- (length parts) 1))))
-                             (on-draft (car (last-pair parts)))))
-                         'inner #t 'placeholder (plist-ref opts 'placeholder #f)
-                         'on-key
-                         (lambda (key mods text)
-                           (cond
-                             [(and (eq? key 'return) (null? mods))
-                              (on-add (list text)) (on-draft "") #t]
-                             [(and (eq? key 'backspace) (string=? text "")
-                                   (pair? chips))
-                              (on-remove (- (length chips) 1)) #t]
-                             [else #f])))))
-    bottom))
+  (with-place 'field
+    (lambda ()
+      (let* ([areas (ui-chip-input-areas x y w chips)]
+             [field (cdr (assq 'field areas))]
+             [bottom (+ (cadr field) (cadddr field))]
+             [fid (list id 'field)])
+        (ui-draw-field x y w (- bottom y) (ui-flags ui fid))
+        (for-each
+         (lambda (chip a i)
+           (let ([rid (list id 'remove i)]
+                 [r (cdr (assq 'remove (apply ui-chip-areas a)))])
+             (ui-pressable! ui rid (car r) (cadr r) (caddr r) (cadddr r)
+                            (lambda () (on-remove i)) '()
+                            '(focus keep tip "Remove"))
+             (apply ui-draw-chip (append a (list (apply ui-flags ui rid
+                                                        '(removable))
+                                                 chip)))))
+         chips (map cdr (filter (lambda (a) (eq? (car a) 'chip)) areas))
+         (iota (length chips)))
+        (apply ui-text-field ui fid
+               (append field
+                       (list draft
+                             (lambda (s)
+                               (let ([parts (string-split s #\,)])
+                                 (when (pair? (cdr parts))
+                                   (on-add (list-head parts
+                                                      (- (length parts) 1))))
+                                 (on-draft (car (last-pair parts)))))
+                             'inner #t
+                             'placeholder (plist-ref opts 'placeholder #f)
+                             'on-key
+                             (lambda (key mods text)
+                               (cond
+                                 [(and (eq? key 'return) (null? mods))
+                                  (on-add (list text)) (on-draft "") #t]
+                                 [(and (eq? key 'backspace) (string=? text "")
+                                       (pair? chips))
+                                  (on-remove (- (length chips) 1)) #t]
+                                 [else #f])))))
+        bottom))))
 
 ;; Where a chip input at (x, y), w wide, puts its chips and its field:
 ;; ((chip x y w h) ... (field x y w h)), flowed in rows of a control's
 ;; height, 4 apart and 4 in from the sides; the field takes the rest of
 ;; the last row, or a row of its own when less than 8 lines wide is left.
-(define (ui-chip-input-areas x y w chips)
+(define-part (ui-chip-input-areas x y w chips)
   (let*-values ([(pad ch) (values 4 (ui-control-height))]
                 [(sizes) (map (lambda (c)
                                 (call-with-values
@@ -1761,32 +1808,71 @@
                           ch))))))
 
 ;; The box's height for chips at width w.
-(define (ui-chip-input-size w chips)
+(define-part (ui-chip-input-size w chips)
   (let ([f (cdr (assq 'field (ui-chip-input-areas 0 0 w chips)))])
     (+ (cadr f) (cadddr f))))
 
 ;;; ------------------------------------------------------------------
 ;;; progress, tooltip
 
-(define (ui-draw-progress x y w h flags frac)
+(define-part (ui-draw-progress x y w h flags frac)
   (fill-round-rect x y w h (/ h 2) 'bg-3)
   (when (> frac 0)
     (fill-round-rect x y (max h (* w (min 1 frac))) h (/ h 2)
                      (if (>= frac 1) 'green 'accent))))
 
-(define (ui-progress-height) (max 4 (round (* (font-line-height 'ui) 0.4))))
+(theme-default! 'progress-height
+                (rule (max 4 (round (* (font-line-height 'ui) 0.4)))))
+(define (ui-progress-height) (theme 'progress-height))
+
+;;; ------------------------------------------------------------------
+;;; popups: what menus, toasts, dialogs, calendars, tooltips and the
+;;; completion list share, so that a style restyles them all at once
+
+;; A popup's box. Flags: menu (the desktop's menus and the completion
+;; list: a soft edge), toast (a plain border, a smaller soft edge),
+;; dialog (rounder), tooltip (the panels' color, no border); none: flat,
+;; as the calendar.
+(define-part (ui-draw-panel x y w h flags)
+  (let* ([on? (lambda (f) (memq f flags))]
+         [r (cond [(on? 'dialog) 10] [(on? 'tooltip) 5] [else 8])]
+         [edge (cond [(on? 'menu) 12] [(on? 'toast) 10] [else 0])])
+    (draw-shadow x y w h r edge)   ; shadow
+    (fill-round-rect x y w h r (if (on? 'tooltip) (alpha 'panel 0.96) 'bg-2))
+    (unless (on? 'tooltip)
+      (stroke-round-rect x y w h r (if (on? 'toast)
+                                       'window-border
+                                       'window-border-focus)))))
+
+;; The entry chosen in a menu or a list.
+(define-part (ui-draw-highlight x y w h flags)
+  (fill-round-rect x y w h 5 (alpha 'accent 0.22)))
+
+;; A line across the middle of the box, between a menu's groups.
+(define-part (ui-draw-separator x y w h flags)
+  (let ([my (+ y (/ h 2))]) (draw-line x my (+ x w) my 'window-border)))
+
+;; A card's outline (a task, a style): flags selected (or floating, while
+;; dragged), hover.
+(define-part (ui-draw-card x y w h flags)
+  (let ([selected? (memq 'selected flags)])
+    (stroke-round-rect x y w h 8
+                       (cond [(or selected? (memq 'floating flags)) 'accent]
+                             [(memq 'hover flags) 'text-faint]
+                             [else 'window-border])
+                       (if selected? 2 1))))
 
 ;; A tooltip's lines: wrapped at 280, at most 6.
 (define (ui-tooltip-lines text)
   (let-values ([(lines cut?) (ui-wrap-lines text 280 'ui-small 6)]) lines))
 
-(define (ui-tooltip-size text)
+(define-part (ui-tooltip-size text)
   (let ([lines (ui-tooltip-lines text)])
     (values (+ 16 (min 280 (widest-text lines 'ui-small)))
             (+ 10 (* (length lines) (font-line-height 'ui-small))))))
 
-(define (ui-draw-tooltip x y w h flags text)
-  (fill-round-rect x y w h 5 (alpha 'panel 0.96))
+(define-part (ui-draw-tooltip x y w h flags text)
+  (ui-draw-panel x y w h '(tooltip))
   (fold-left (lambda (ty line) (draw-text (+ x 8) ty line 'panel-text 'ui-small)
                (+ ty (font-line-height 'ui-small)))
              (+ y 5) (ui-tooltip-lines text)))
@@ -1819,7 +1905,7 @@
                           (if i (car (list-ref choices i)) "")))))
 
 ;; flags: open, set (accent border and text), placeholder.
-(define (ui-draw-dropdown x y w h flags label)
+(define-part (ui-draw-dropdown x y w h flags label)
   (let ([lh (font-line-height 'ui)] [hot? (memq 'hover flags)]
         [set? (memq 'set flags)] [s (+ (ui-glyph-size) 2)])
     (fill-round-rect x y w h 6 (if hot? 'bg-3 'bg-2))
@@ -1835,7 +1921,7 @@
     (when (memq 'focused flags) (ui-draw-focus x y w h flags 6))))
 
 ;; The text, 10 in, then 6, the chevron and 6.
-(define (ui-dropdown-size labels)
+(define-part (ui-dropdown-size labels)
   (values (min (* 10 (font-line-height 'ui))
                (+ 24 (ui-glyph-size) (widest-text labels 'ui)))
           (ui-control-height)))
@@ -1874,67 +1960,71 @@
 ;; under the field, or above it when there is no room, over a modal
 ;; region that closes it on a press outside.
 (define (ui-calendar ui id fx fy fh date on-select ww wh)
-  (let*-values ([(cw ch) (ui-calendar-size)]
-                [(x y) (ui-popup-place fx (+ fy fh 4) (- fy 4) cw ch ww wh)])
-    (let* ([cursor (cdr (ui-state-popup ui))]
-           [close (lambda () (ui-state-popup-set! ui #f))]
-           [pick (lambda (n) (close) (on-select (ui-day->date n)))]
-           [move (lambda (n) (ui-state-popup-set! ui (cons id n)) #t)]
-           [today (ui-date->day (ui-today))]
-           [cd (ui-day->date cursor)]
-           [first (ui-date->day (list (car cd) (cadr cd) 1))]
-           [start (- first (ui-week-day first))]
-           [chosen (and date (ui-date->day date))]
-           [areas (ui-calendar-areas x y cw ch)]
-           [area (lambda (k) (cdr (assq k areas)))]
-           [button (lambda (k label thunk . opts)
-                     (apply ui-button ui (list id k)
-                            (append (area k) (list label thunk 'quiet #t
-                                                   'focus 'keep)
-                                    opts)))])
-      (ui-region! ui (list id 'calendar) 0 0 ww wh 'modal #t 'focus 'keep
-        'on (ui-modal-on close
-              (lambda (key mods)
-                (case key
-                  [(left) (move (- cursor 1))]
-                  [(right) (move (+ cursor 1))]
-                  [(up) (move (- cursor 7))]
-                  [(down) (move (+ cursor 7))]
-                  [(page-up) (move (ui-add-months cursor -1))]
-                  [(page-down) (move (ui-add-months cursor 1))]
-                  [(home) (move today)]
-                  [(return) (pick cursor) #t]
-                  [else #f]))))
-      (ui-draw-calendar x y cw ch '()
-                        (format "~a ~a" (vector-ref ui-month-titles
-                                                    (- (cadr cd) 1))
-                                (car cd)))
-      (button 'prev #f (lambda () (move (ui-add-months cursor -1)))
-              'glyph 'chevron-left)
-      (button 'next #f (lambda () (move (ui-add-months cursor 1)))
-              'glyph 'chevron-right)
-      (let* ([g (area 'grid)] [gx (car g)] [gy (cadr g)] [cell (caddr g)])
-        (do ([i 0 (+ i 1)]) ((= i 42))
-          (let* ([n (+ start i)] [did (list id 'day n)]
-                 [dx (+ gx (* cell (mod i 7)))] [dy (+ gy (* cell (div i 7)))])
-            (ui-pressable! ui did dx dy cell cell (lambda () (pick n)) '()
-                           '(focus keep))
-            (ui-draw-day dx dy cell cell
-                         (apply ui-flags ui did
-                                (append (if (= n today) '(today) '())
-                                        (if (eqv? n chosen) '(selected) '())
-                                        (if (= n cursor) '(cursor) '())
-                                        (if (= (cadr (ui-day->date n))
-                                               (cadr cd))
-                                            '()
-                                            '(outside))))
-                         (number->string (caddr (ui-day->date n)))))))
-      (button 'today "Today" (lambda () (pick today)))
-      (button 'clear "Clear" (lambda () (close) (on-select #f))))))
+  (with-place 'dialog
+    (lambda ()
+      (let*-values ([(cw ch) (ui-calendar-size)]
+                    [(x y) (ui-popup-place fx (+ fy fh 4) (- fy 4) cw ch ww
+                                           wh)])
+        (let* ([cursor (cdr (ui-state-popup ui))]
+               [close (lambda () (ui-state-popup-set! ui #f))]
+               [pick (lambda (n) (close) (on-select (ui-day->date n)))]
+               [move (lambda (n) (ui-state-popup-set! ui (cons id n)) #t)]
+               [today (ui-date->day (ui-today))]
+               [cd (ui-day->date cursor)]
+               [first (ui-date->day (list (car cd) (cadr cd) 1))]
+               [start (- first (ui-week-day first))]
+               [chosen (and date (ui-date->day date))]
+               [areas (ui-calendar-areas x y cw ch)]
+               [area (lambda (k) (cdr (assq k areas)))]
+               [button (lambda (k label thunk . opts)
+                         (apply ui-button ui (list id k)
+                                (append (area k) (list label thunk 'quiet #t
+                                                       'focus 'keep)
+                                        opts)))])
+          (ui-region! ui (list id 'calendar) 0 0 ww wh 'modal #t 'focus 'keep
+            'on (ui-modal-on close
+                  (lambda (key mods)
+                    (case key
+                      [(left) (move (- cursor 1))]
+                      [(right) (move (+ cursor 1))]
+                      [(up) (move (- cursor 7))]
+                      [(down) (move (+ cursor 7))]
+                      [(page-up) (move (ui-add-months cursor -1))]
+                      [(page-down) (move (ui-add-months cursor 1))]
+                      [(home) (move today)]
+                      [(return) (pick cursor) #t]
+                      [else #f]))))
+          (ui-draw-calendar x y cw ch '()
+                            (format "~a ~a" (vector-ref ui-month-titles
+                                                        (- (cadr cd) 1))
+                                    (car cd)))
+          (button 'prev #f (lambda () (move (ui-add-months cursor -1)))
+                  'glyph 'chevron-left)
+          (button 'next #f (lambda () (move (ui-add-months cursor 1)))
+                  'glyph 'chevron-right)
+          (let* ([g (area 'grid)] [gx (car g)] [gy (cadr g)] [cell (caddr g)])
+            (do ([i 0 (+ i 1)]) ((= i 42))
+              (let* ([n (+ start i)] [did (list id 'day n)]
+                     [dx (+ gx (* cell (mod i 7)))]
+                     [dy (+ gy (* cell (div i 7)))])
+                (ui-pressable! ui did dx dy cell cell (lambda () (pick n)) '()
+                               '(focus keep))
+                (ui-draw-day dx dy cell cell
+                             (apply ui-flags ui did
+                                    (append (if (= n today) '(today) '())
+                                            (if (eqv? n chosen) '(selected) '())
+                                            (if (= n cursor) '(cursor) '())
+                                            (if (= (cadr (ui-day->date n))
+                                                   (cadr cd))
+                                                '()
+                                                '(outside))))
+                             (number->string (caddr (ui-day->date n)))))))
+          (button 'today "Today" (lambda () (pick today)))
+          (button 'clear "Clear" (lambda () (close) (on-select #f))))))))
 
 (define (ui-calendar-cell) (max 28 (round (* (font-line-height 'ui) 1.9))))
 
-(define (ui-calendar-size)
+(define-part (ui-calendar-size)
   (let* ([w (+ 20 (* 7 (ui-calendar-cell)))]
          [t (cdr (assq 'today (ui-calendar-areas 0 0 w 0)))])
     (values w (round (+ (cadr t) (cadddr t) 8)))))
@@ -1942,7 +2032,7 @@
 ;; ((prev x y w h) (next ..) (title ..) (week x y w h) (grid gx gy cell)
 ;; (today ..) (clear ..)); day i of the grid lies at gx + (i mod 7)·cell,
 ;; gy + (i div 7)·cell.
-(define (ui-calendar-areas x y w h)
+(define-part (ui-calendar-areas x y w h)
   (let* ([cell (ui-calendar-cell)] [sh (font-line-height 'ui-small)]
          [b (ui-control-height)] [gy (+ y 4 b sh 6)]
          [fy (+ gy (* 6 cell) 8)])
@@ -1955,12 +2045,11 @@
       (clear ,(+ x 16 (/ (- w 24) 2)) ,fy ,(/ (- w 24) 2) ,b))))
 
 ;; The panel, its title and the weekday initials.
-(define (ui-draw-calendar x y w h flags title)
+(define-part (ui-draw-calendar x y w h flags title)
   (let* ([areas (ui-calendar-areas x y w h)]
          [t (cdr (assq 'title areas))] [wk (cdr (assq 'week areas))]
          [cell (/ (caddr wk) 7)])
-    (fill-round-rect x y w h 8 'bg-2)
-    (stroke-round-rect x y w h 8 'window-border-focus)
+    (ui-draw-panel x y w h '())
     (apply draw-text-centered (append t (list title 'text 'ui-bold)))
     (do ([i 0 (+ i 1)]) ((= i 7))
       (draw-text-centered (+ (car wk) (* i cell)) (cadr wk) cell (cadddr wk)
@@ -1969,7 +2058,7 @@
 
 ;; flags: hover, today (a ring), selected (filled), cursor (the keyboard's
 ;; day), outside (another month).
-(define (ui-draw-day x y w h flags label)
+(define-part (ui-draw-day x y w h flags label)
   (let* ([on? (lambda (f) (memq f flags))] [s (- (min w h) 4)]
          [cx (+ x (/ (- w s) 2))] [cy (+ y (/ (- h s) 2))])
     (cond [(on? 'selected) (fill-round-rect cx cy s s 6 'accent)]
@@ -1993,30 +2082,33 @@
 (define (ui-dialog ui id title message buttons on-dismiss)
   (ui-later! ui
     (lambda (w h)
-      (let*-values ([(labels) (map car buttons)]
-                    [(dw dh) (ui-dialog-size title message labels)]
-                    [(dx dy) (values (max 0 (round (/ (- w dw) 2)))
-                                     (max 0 (round (/ (- h dh) 2))))]
-                    [(f) (ui-state-focus ui)])
-        (unless (or (not f) (and (pair? f) (equal? (car f) id)))
-          (ui-focus! ui #f)
-          (invalidate! (current-window)))
-        (ui-draw-scrim 0 0 w h '())
-        (ui-region! ui id 0 0 w h 'modal #t 'focus 'keep
-          'on (ui-modal-on on-dismiss
-                (lambda (key mods)
-                  (and (eq? key 'return) (null? mods)
-                       (begin ((cadr (car (last-pair buttons)))) #t)))))
-        (ui-draw-dialog dx dy dw dh '() title message)
-        (for-each (lambda (b a i)
-                    (apply ui-button ui (list id i)
-                           (append a (list (car b) (cadr b))
-                                   (apply append (map (lambda (f) (list f #t))
-                                                      (cddr b))))))
-                  buttons
-                  (map cdr (filter (lambda (a) (eq? (car a) 'button))
-                                   (ui-dialog-areas dx dy dw dh labels)))
-                  (iota (length buttons)))))))
+      (with-place 'dialog
+        (lambda ()
+          (let*-values ([(labels) (map car buttons)]
+                        [(dw dh) (ui-dialog-size title message labels)]
+                        [(dx dy) (values (max 0 (round (/ (- w dw) 2)))
+                                         (max 0 (round (/ (- h dh) 2))))]
+                        [(f) (ui-state-focus ui)])
+            (unless (or (not f) (and (pair? f) (equal? (car f) id)))
+              (ui-focus! ui #f)
+              (invalidate! (current-window)))
+            (ui-draw-scrim 0 0 w h '())
+            (ui-region! ui id 0 0 w h 'modal #t 'focus 'keep
+              'on (ui-modal-on on-dismiss
+                    (lambda (key mods)
+                      (and (eq? key 'return) (null? mods)
+                           (begin ((cadr (car (last-pair buttons)))) #t)))))
+            (ui-draw-dialog dx dy dw dh '() title message)
+            (for-each (lambda (b a i)
+                        (apply ui-button ui (list id i)
+                               (append a (list (car b) (cadr b))
+                                       (apply append
+                                              (map (lambda (f) (list f #t))
+                                                   (cddr b))))))
+                      buttons
+                      (map cdr (filter (lambda (a) (eq? (car a) 'button))
+                                       (ui-dialog-areas dx dy dw dh labels)))
+                      (iota (length buttons)))))))))
 
 ;; Each button is at least 88 wide.
 (define (ui-dialog-button-widths labels)
@@ -2029,7 +2121,7 @@
   (let-values ([(lines cut?) (ui-wrap-lines message w 'ui 6)]) lines))
 
 ;; labels: the buttons'.
-(define (ui-dialog-size title message labels)
+(define-part (ui-dialog-size title message labels)
   (let* ([lh (font-line-height 'ui)]
          [bw (+ (apply + (ui-dialog-button-widths labels))
                 (* (ui-gap) (max 0 (- (length labels) 1))))]
@@ -2043,7 +2135,7 @@
 
 ;; ((title x y w h) (message ..) (button x y w h) ...): one button per
 ;; label, right-aligned in the bottom row, a gap apart.
-(define (ui-dialog-areas x y w h labels)
+(define-part (ui-dialog-areas x y w h labels)
   (let* ([hh (font-line-height 'heading)] [b (ui-control-height)]
          [gap (ui-gap)] [widths (ui-dialog-button-widths labels)]
          [by (- (+ y h) 20 b)])
@@ -2057,13 +2149,13 @@
               (cons (list 'button bx by (car ws) b)
                     (loop (cdr ws) (+ bx (car ws) gap))))))))
 
-(define (ui-draw-scrim x y w h flags) (fill-rect x y w h (alpha 'bg-0 0.55)))
+(define-part (ui-draw-scrim x y w h flags)
+  (fill-rect x y w h (alpha 'bg-0 0.55)))
 
-(define (ui-draw-dialog x y w h flags title message)
+(define-part (ui-draw-dialog x y w h flags title message)
   (let* ([areas (ui-dialog-areas x y w h '())] [t (cdr (assq 'title areas))]
          [m (cdr (assq 'message areas))])
-    (fill-round-rect x y w h 10 'bg-2)
-    (stroke-round-rect x y w h 10 'window-border-focus)
+    (ui-draw-panel x y w h '(dialog))
     (draw-text (car t) (cadr t) (fit-text title (caddr t) 'heading) 'text
                'heading)
     (fold-left (lambda (ly line) (draw-text (car m) ly line 'text-dim 'ui)

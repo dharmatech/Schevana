@@ -489,11 +489,11 @@
         [small-lh (font-line-height 'ui-small)]
         [kind-w (complete-kinds-width rows)]
         [count (length rows)])
-    (complete-draw-panel x y w h '())
+    (ui-draw-panel x y w h '(menu))
     (for-each
      (lambda (row i)
        (let ([ry (+ y 4 (* i rh))] [name (car row)] [selected? (cadddr row)])
-         (when selected? (complete-draw-highlight (+ x 4) ry (- w 8) rh '()))
+         (when selected? (ui-draw-highlight (+ x 4) ry (- w 8) rh '()))
          (if (memq 'message flags)
              (draw-text (+ x 10) (+ ry (/ (- rh (font-line-height 'ui)) 2))
                         name 'text-dim 'ui)
@@ -510,13 +510,13 @@
                           (cadr row) 'text-faint 'ui-small)))))
      rows (iota count))
     (when (> n count)   ; where the rows shown are in the whole list
-      (let* ([track (* count rh)] [bar (max 12 (* track (/ count n)))]
-             [by (+ y 4 (* (- track bar) (/ top (max 1 (- n count)))))])
-        (fill-round-rect (+ x w -5) by 3 bar 1.5 (alpha 'text 0.3))))
+      (ui-draw-scrollbar (+ x w (- (ui-scrollbar-width))) (+ y 4)
+                         (ui-scrollbar-width) (* count rh) '()
+                         (/ top n) (/ count n)))
     (unless (string=? sig "")
       (let ([dy (+ y 4 (* count rh) 4)]
             [lines (complete-doc-lines sig doc w k)])
-        (draw-line (+ x 6) (+ dy 0.5) (+ x w -6) (+ dy 0.5) 'window-border)
+        (ui-draw-separator (+ x 6) dy (- w 12) 1 '())
         (draw-text (+ x 10) (+ dy 5) (fit-text sig (- w 20) 'mono-small)
                    'text 'mono-small)
         (for-each (lambda (line i)
@@ -525,13 +525,3 @@
                                   (* i (+ small-lh 2)))
                                line 'text-faint 'ui-small))
                   lines (iota (length lines)))))))
-
-;; The style redesign's ui-draw-panel and ui-draw-highlight take these
-;; two's place.
-(define (complete-draw-panel x y w h flags)
-  (draw-shadow x y w h 6 10)   ; shadow
-  (fill-round-rect x y w h 6 'bg-2)
-  (stroke-round-rect x y w h 6 'window-border-focus))
-
-(define (complete-draw-highlight x y w h flags)
-  (fill-round-rect x y w h 4 (alpha 'accent 0.25)))

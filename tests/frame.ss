@@ -292,7 +292,7 @@
 
 ;;; ------------------------------------------------------------------ identity
 
-(define styles '(mac windows interlisp genera))
+(define four-styles '(mac windows interlisp genera))
 
 (for-each
  (lambda (pct)
@@ -314,7 +314,7 @@
                         (draw-text 14 14 "translucent" 'text 'big)))])
        (try! 'translucent)
        (for-each (lambda (style) (set-theme! 'window-style style) (try! style))
-                 styles)
+                 four-styles)
        (set-theme! 'window-style 'mac)
        (inject! `(mouse-down ,(+ (window-x g) 120) ,(+ (window-y g) 8) right 1)
                 `(mouse-up ,(+ (window-x g) 120) ,(+ (window-y g) 8) right))
@@ -394,7 +394,7 @@
 
 ;; Styles that glow 5 pixels past their frame: glow-5 says so with 'bleed,
 ;; glow does not, as one typed at the REPL might not.
-(define styles-before-glow *window-styles*)
+(define styles-before-glow *styles*)
 (define (glow-under win x y w h focused? hover pressed)
   (fill-rect (- x 5) (- y 5) (+ w 10) (+ h 10) #xff00ff)
   (fill-rect x y w (title-height) 'accent))
@@ -410,13 +410,12 @@
 
 ;; Where a style's button of that kind is, on screen.
 (define (button-point win kind)
-  (let ([b (assq kind (window-buttons win))])
+  (let ([b (assq kind (frame-regions win))])
     (list (+ (window-x win) (cadr b) (quotient (cadddr b) 2))
           (+ (window-y win) (caddr b) (quotient (list-ref b 4) 2)))))
 
 (define (taskbar-point win)
-  (let ([it (find (lambda (it) (eq? (caddr it) win)) *taskbar-items*)])
-    (list (+ (car it) 20) (- (screen-h) 10))))
+  (list (+ (cadr (assq win (taskbar-areas))) 20) (- (screen-h) 10)))
 
 (define (damage-paths pct)
   (set-theme! 'scale pct)
@@ -597,7 +596,7 @@
     (let ([out (filter (lambda (style)
                          (window-set! w 'window-style style)
                          (> (+ (bleeding w #t) (bleeding w #f)) 0))
-                       (window-styles))])
+                       (styles))])
       (close-window! w)
       out)))
 
@@ -605,7 +604,7 @@
  (lambda (pct)
    (set-theme! 'scale pct)
    (clear-world!)
-   (set-theme! 'shadow 0)   ; shadow
+   (override! 'shadow 0)   ; shadow
    (steps 1)
    (let ([bad '()] [glows '()])
      (define (step! label)
@@ -626,7 +625,7 @@
           (for-each (lambda (b)
                       (inject! `(mouse-move ,@(button-point w (car b))))
                       (step! (list style 'hover (car b))))
-                    (window-buttons w))
+                    (frame-regions w))
           (inject! '(mouse-move 1200 650))
           (step! (list style 'left))
           (set! glows (cons (cons style (pixel-of *canvas* (- (window-x w) 3)
@@ -634,10 +633,10 @@
                             glows))
           (close-window! w)
           (step! (list style 'closed))))
-      (window-styles))
+      (styles))
      (let ([glow-5 (cdr (assq 'glow-5 glows))] [glow (cdr (assq 'glow glows))]
            [none (styles-bleeding)])
-       (set-theme! 'shadow (theme-default 'shadow))   ; shadow
+       (override! 'shadow)   ; shadow
        (let ([default (styles-bleeding)])
          (check (format "a window is drawn clipped to its extent: every \
                          style, one glowing past its frame with its 'bleed \
@@ -652,7 +651,7 @@
                      (equal? none '(glow))
                      (null? (remq 'glow default))))))))
  '(100 150))
-(set! *window-styles* styles-before-glow)
+(set! *styles* styles-before-glow)
 (set-theme! 'scale 100)
 (steps 1)
 
@@ -1213,22 +1212,18 @@
 (pause-lifes!)
 (let* ([before (frame-ms 9)]
        [plain-draw-window draw-window] [plain-taskbar draw-taskbar]
-       [plain-styles *window-styles*]
-       [mac (find-window-style 'mac)])
+       [plain-styles *styles*])
   (set! draw-window (lambda (win)
                       (draw-window* win #t)
                       (fill-rect (window-x win) (window-y win) 40 6 #xff0000)))
   (set! draw-taskbar (lambda ()
                        (plain-taskbar)
                        (fill-rect 0 (- (screen-h) 6) 60 6 #x0000ff)))
-  (define-window-style mac "Mac, striped"
-    'insets (window-style-insets mac) 'radius (window-style-radius mac)
-    'buttons (window-style-buttons mac)
-    'draw-under (window-style-draw-under mac)
-    'draw-over (lambda (win x y w h focused? hover pressed)
-                 ((window-style-draw-over mac) win x y w h
-                                               focused? hover pressed)
-                 (fill-rect x (+ y h -5) w 5 #x00ff00)))
+  (register-style! 'mac "Mac, striped"
+    (cons* 'frame-over (lambda (win x y w h focused? hover pressed)
+                         (mac-draw-over win x y w h focused? hover pressed)
+                         (fill-rect x (+ y h -5) w 5 #x00ff00))
+           (style-settings (find-style 'mac))))
   (let* ([after (frame-ms 9)]
          [same (matches-reference? 'redefined)]
          [r (find-window 'repl)]
@@ -1238,8 +1233,8 @@
                                 (+ (window-y r) (window-h r) -2)))])
     (set! draw-window plain-draw-window)
     (set! draw-taskbar plain-taskbar)
-    (set! *window-styles* plain-styles)
-    (request-frame!)
+    (set! *styles* plain-styles)
+    (theme-changed!)
     (check (format
             "draw-window, draw-taskbar and a style, redefined: the next frame \
              shows them ~s, is the reference, and takes ~,2f ms (~,2f before)"

@@ -369,11 +369,12 @@
 ;;; layout & fonts tabs
 
 ;; A slider for a pixel size; label-w is from settings-label-width.
-;; Chrome heights can't go below what the fonts need (chrome-min-height),
-;; so their sliders start there and show the height in effect.
-;; Returns the y below the row.
+;; Chrome heights can't go below what the fonts need (the setting key-min,
+;; see chrome-height), so their sliders start there and show the height
+;; in effect. Returns the y below the row.
 (define (settings-slider-row ui x y w label-w label key lo hi)
-  (let* ([lo (max lo (chrome-min-height key))]
+  (let* ([need (string->symbol (format "~a-min" key))]
+         [lo (if (theme-has? need) (max lo (theme need)) lo)]
          [hi (max hi (+ lo 10))]
          [v (max (theme key) lo)])
     (settings-row x y w label-w label 24 120 (settings-readout-width)
@@ -385,19 +386,18 @@
         (draw-text (+ sx sw 18) (settings-text-y sy 24 'ui) (format "~a px" v)
                    'text-dim 'ui)))))
 
-(define (draw-style-card ui x y w h style selected?)
-  (let ([name (window-style-name style)]
-        [label-h (settings-card-label-height 28)]
+(define (draw-style-card ui x y w h name selected?)
+  (let ([label-h (settings-card-label-height 28)]
         [r 10])
     (call-with-round-clip x y w h r
       (lambda ()
         (fill-desktop-pattern x y w h (theme 'wallpaper)
                               'desktop-top 'desktop-bottom)
-        (draw-window-style-preview name x y w (- h label-h) 0.5)
+        (draw-style-preview name x y w (- h label-h) 0.5)
         (fill-rect x (- (+ y h) label-h) w label-h 'panel)
         (draw-text (+ x 12) (+ (- (+ y h) label-h)
                                (/ (- label-h (font-line-height 'ui)) 2))
-                   (window-style-title style) 'panel-text 'ui)))
+                   (style-title (find-style name)) 'panel-text 'ui)))
     (stroke-round-rect x y w h r
                        (cond [selected? 'accent]
                              [(ui-hover? ui x y w h) 'text-faint]
@@ -407,17 +407,17 @@
 (define (settings-draw-layout ui x y w)
   (let* ([y0 (settings-heading x y w "Layout"
                "Window style, and the sizes of the chrome and the panels.")]
-         [cw (settings-card-width (map window-style-title *window-styles*))]
+         [cw (settings-card-width
+              (map (lambda (s) (style-title (find-style s))) (styles)))]
          [ch (+ 88 (settings-card-label-height 28))]
          [label-w (settings-label-width (map cadr settings-metrics))]
-         [ry (+ 14 (settings-card-grid *window-styles* x y0 w cw ch
-                     (lambda (style cx cy)
-                       (let ([name (window-style-name style)])
-                         (draw-style-card ui cx cy cw ch style
-                                          (eq? name (theme 'window-style)))
-                         (ui-area ui (list 'style name) cx cy cw ch
-                                  (lambda ()
-                                    (settings-set! 'window-style name)))))))])
+         [ry (+ 14 (settings-card-grid (styles) x y0 w cw ch
+                     (lambda (name cx cy)
+                       (draw-style-card ui cx cy cw ch name
+                                        (eq? name (current-style)))
+                       (ui-area ui (list 'style name) cx cy cw ch
+                                (lambda ()
+                                  (settings-set! 'window-style name))))))])
     (fold-left (lambda (ry m)
                  (+ 20 (settings-slider-row ui x ry w label-w (cadr m) (car m)
                                             (caddr m) (cadddr m))))

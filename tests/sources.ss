@@ -5,9 +5,11 @@
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; every file
 ;;; in a folder registers what it defines (a kit's names keep its prefix;
-;;; desktop/, like src/, defines plain names); and in the widget and
-;;; completion kits and Tasks only the drawing procedures draw or name a
-;;; color, and the edit kit never does. Fast: it loads the world but does
+;;; desktop/, like src/, defines plain names); a style sets only settings
+;;; that exist (built in, its options' or its own); in the kits, the
+;;; desktop layer and Tasks only the drawing procedures draw or name a
+;;; color, and the edit kit never does; and only styles call a part's
+;;; built-in body. Fast: it loads the world but does
 ;;; not boot it.
 
 (define *schevana-root*
@@ -110,7 +112,10 @@
                                  (and (pair? c) (eq? (car c) 'fields)))
                                (cddr form))])
              (names 'name (record-names head (if fields (cdr fields) '()))))]
-          [(define-window-style) (names 'style (list head))]
+          [(define-part)
+           (names 'name (list (car head)
+                              (string->symbol (format "~a*" (car head)))))]
+          [(define-style define-window-style) (names 'style (list head))]
           [(define-theme) (names 'theme (list head))]
           [(define-wallpaper) (names 'wallpaper (list head))]
           [(define-surface) (names 'surface (list head))]
@@ -175,7 +180,7 @@
   (case (car d)
     [(name) (and (memq (cdr d) world-symbols) #t)]
     [(app) (and (memq (cdr d) (apps)) #t)]
-    [(style) (and (find-window-style (cdr d)) #t)]
+    [(style) (and (find-style (cdr d)) #t)]
     [(theme) (and (assq (cdr d) *themes*) #t)]
     [(wallpaper) (and (assq (cdr d) *wallpapers*) #t)]
     [(surface) (and (find-surface (cdr d)) #t)]
@@ -226,27 +231,69 @@
                    (apply append (map definitions (folder-files))))))
 
 (check "styles, themes, wallpapers and apps are listed in file-name order"
-       (and (equal? (window-styles) (defined-in-files 'style))
+       (and (equal? (styles) (defined-in-files 'style))
             (equal? (themes) (defined-in-files 'theme))
             (equal? (wallpapers) (defined-in-files 'wallpaper))
             (equal? (apps) (defined-in-files 'app))))
 
 ;;; ------------------------------------------------------------------
-;;; the widgets' seam
-;;; In the kits and in Tasks only the drawing procedures, named ui-draw-…,
-;;; complete-draw-… and tasks-draw-…, draw or choose a color: no other
-;;; top-level form calls a drawing primitive or quotes a theme color key
-;;; ('text, also an event's name, aside). The style redesign turns each
-;;; drawing procedure into a style's part. The edit kit has none: it never
-;;; draws.
+;;; styles' settings
+
+;; A style sets built-in keys, keys its options declare, and its own,
+;; named after it or a parent: so a misspelled key fails here.
+(define (style-key-problems s)
+  (let* ([chain (style-chain (style-name s))]
+         [declared (map car (filter pair? (chain-ref chain 'options '())))]
+         [own (map (lambda (c) (format "~a-" (style-name c))) chain)])
+    (filter-map
+     (lambda (k)
+       (and (not (or (memq k meta-keys) (plist-has? default-theme k)
+                     (memq k declared)
+                     (exists (lambda (p) (string-prefix? p (symbol->string k)))
+                             own)))
+            (format "style ~a sets ~a, which is no setting" (style-name s) k)))
+     (plist-keys (style-settings s)))))
+
+(check "every style sets only settings that exist"
+       (none? (apply append (map style-key-problems *styles*))))
+
+;;; ------------------------------------------------------------------
+;;; the seam
+;;; In the kits, the desktop layer and Tasks only the drawing procedures
+;;; draw or choose a color: parts (define-part), procedures named like a
+;;; drawing primitive (draw-…, fill-…) or ui-draw-…, complete-draw-… and
+;;; tasks-draw-…, and the settings they give (theme-default!: a style may
+;;; give its own). No other top-level form calls a drawing primitive or
+;;; quotes a theme color key ('text, also an event's name, aside), so a
+;;; style restyles all they draw. The edit kit never draws. And outside
+;;; styles/ nothing calls a part's built-in body (name*): a style's own
+;;; part would be passed by.
 
 (define seam-files
-  '("kits/complete.ss" "kits/edit.ss" "kits/ui.ss" "apps/tasks.ss"))
+  (append (filter (lambda (f) (member (file-folder f) '("kits" "desktop")))
+                  (folder-files))
+          '("apps/tasks.ss")))
 
+;; The parts: the keys whose built-in is name*, a body of their own.
+(define parts
+  (filter (lambda (k)
+            (let ([v (theme-default k)])
+              (and (symbol? v) (string=? (symbol->string v) (format "~a*" k)))))
+          (plist-keys default-theme)))
+(define built-ins
+  (map (lambda (k) (string->symbol (format "~a*" k))) parts))
+
+;; What paints or chooses paint. Calling a part is what other code does
+;; (a style's own then draws); making, saving or freeing an image is not
+;; painting.
 (define (drawing-primitive? s)
-  (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
-              '("fill-" "stroke-" "draw-" "cairo-"))
-      (and (memq s '(set-color! use-font! clear! blit-layer!)) #t)))
+  (and (not (memq s parts))
+       (not (memq s '(cairo-create cairo-destroy cairo-image-surface-create
+                      cairo-surface-destroy cairo-surface-write-to-png
+                      draw-into-layer!)))
+       (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
+                   '("fill-" "stroke-" "draw-" "cairo-"))
+           (and (memq s '(set-color! use-font! clear! blit-layer!)) #t))))
 
 ;; What a form does that only a drawing procedure may: ((draws . name)
 ;; (color . key) ...).
@@ -280,28 +327,62 @@
   (and (pair? form) (memq (car form) '(define defvar)) (pair? (cdr form))
        (if (pair? (cadr form)) (caadr form) (cadr form))))
 
+(define (drawing-form? form)
+  (let ([name (form-name form)])
+    (or (and name
+             (or (drawing-primitive? name)
+                 (exists (lambda (p) (string-prefix? p (symbol->string name)))
+                         '("ui-draw-" "complete-draw-" "tasks-draw-"))))
+        (and (pair? form)
+             (memq (car form) '(define-part theme-default! color-default!))
+             #t))))
+
 (define (seam-file-problems f)
   (apply append
          (map (lambda (form)
-                (let ([name (form-name form)])
-                  (if (and name
-                           (exists (lambda (p)
-                                     (string-prefix? p (symbol->string name)))
-                                   '("ui-draw-" "complete-draw-"
-                                     "tasks-draw-")))
-                      '()
-                      (map (lambda (p)
-                             (format "~a: ~a ~a ~a" f (or name (car form))
-                                     (car p) (cdr p)))
-                           (seam-problems form)))))
+                (if (drawing-form? form)
+                    '()
+                    (map (lambda (p)
+                           (format "~a: ~a ~a ~a" f
+                                   (or (form-name form) (car form))
+                                   (car p) (cdr p)))
+                         (seam-problems form))))
               (file-forms f))))
 
-(check "in the kits and Tasks, only drawing procedures draw or name a color"
+(check (format "in ~a, only drawing procedures draw or name a color"
+               (string-join seam-files ", "))
        (none? (apply append (map seam-file-problems seam-files))))
 
-(check "the REPL's docs read the folders too"
+;; The names x calls, its definitions' heads and its data left out.
+(define (calls-in x)
+  (cond
+    [(not (pair? x)) '()]
+    [(memq (car x) '(quote quasiquote)) '()]
+    [(and (memq (car x) '(define define-part)) (pair? (cdr x))
+          (pair? (cadr x)))
+     (apply append (map calls-in (cddr x)))]
+    [else (append (if (symbol? (car x)) (list (car x)) '())
+                  (let loop ([l (cdr x)] [acc '()])
+                    (if (pair? l)
+                        (loop (cdr l) (append acc (calls-in (car l))))
+                        acc)))]))
+
+(check (format "outside styles/ no file calls a part's built-in body (~a \
+                parts)" (length built-ins))
+       (none? (apply append
+                     (map (lambda (f)
+                            (map (lambda (n) (format "~a calls ~a" f n))
+                                 (filter (lambda (n) (memq n built-ins))
+                                         (apply append
+                                                (map calls-in
+                                                     (file-forms f))))))
+                          (remp (lambda (f) (equal? (file-folder f) "styles"))
+                                (source-files))))))
+
+(check "the REPL's docs read the folders too, parts and their built-ins"
        (for-all (lambda (name) (hashtable-contains? (name-docs) name))
-                '("ui-button" "mac-draw-under" "fill-shade" "settings")))
+                '("ui-button" "mac-draw-under" "fill-shade" "settings"
+                  "ui-draw-button" "ui-draw-button*")))
 
 (check "the tests never load ~/.schevana.d"
        (and (not *user-folders?*) (not (exists path-absolute? (source-files)))))

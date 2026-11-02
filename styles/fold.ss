@@ -26,7 +26,7 @@
     (values e (title-height) e e)))
 
 ;; Each mark's cell reaches half a gap past it on either side.
-(define (fold-buttons win)
+(define (fold-regions win)
   (let* ([th (title-height)] [g (fold-gap)] [c (+ fold-mark g)]
          [x (- (window-w win) th c (quotient g 2))])
     (list (list 'close (- (window-w win) th) 0 th th)
@@ -121,7 +121,7 @@
                         (alpha 'text (if (eq? pressed kind) 0.22 0.12))))
            (fold-draw-mark win kind mx top
                            (if (eq? hover kind) 'title-text (alpha ink 0.6))))))
-     (fold-buttons win))
+     (fold-regions win))
     (fold-flap! (+ x w) y f (or back 'window-border)
                 (or back (mix paper 'text 0.1)))
     (when close?   ; an × in the middle of the dog-ear
@@ -133,7 +133,7 @@
                                1.5))
                   '(1 -1))))))
 
-(define-window-style fold "Fold"
-  'insets fold-insets
-  'buttons fold-buttons
-  'draw-under fold-draw-under)
+(define-style fold "Fold"
+  'frame-insets 'fold-insets
+  'frame-regions 'fold-regions
+  'frame-under 'fold-draw-under)

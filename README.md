@@ -67,7 +67,7 @@ an empty part of a bar does not). With nothing to add, a popup says so:
 the sole completion, with its description, or no completions; the next
 key, text, click or wheel closes it. It offers what fits where the
 cursor is: names bound in that REPL's environment; theme keys, apps,
-palettes or window styles after a quote in `(theme '…)`,
+palettes or styles after a quote in `(theme '…)`,
 `(set-theme! '…)`, `(launch-app '…)` and the like; file names inside a
 string; library names inside `(import (…))`, a part at a time. Names
 match as in the editor e: in segments, each starting where a part of the
@@ -118,10 +118,10 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (windows)                                  ; the window list, as data
 (move-window! (find-window 'clock) 40 60)
 (set-theme! 'accent #xff9e64)              ; recolor everything
-(set-theme! 'window-style 'cons)           ; or: mac genera fold ...
+(set-style! 'cons)                         ; or: mac genera fold ...
 ; or: tokyo-night catppuccin nord gruvbox interlisp genera
 (set-theme! 'palette 'paper)               ; remembered for cons
-(open-window "Odd one out" 'window-style 'windows)   ; per-window override
+(open-window "Odd one out" 'window-style 'windows)   ; one in its own style
 (set-theme! 'ui-font-size 15)              ; fonts and sizes are theme keys too
 (override! 'ui-font-size 15)               ; ... in every style
 (theme-source 'accent)                     ; which layer gives it
@@ -154,10 +154,10 @@ Define a new app and it appears in the launcher immediately:
 
 ## Your own apps, styles, themes and wallpapers
 
-Window styles, themes (palettes) and wallpapers (desktop fills) have
-definers of the same shape as `define-app`: a name, a title, then the
-definition. Evaluate one in a REPL and the next frame shows it; define a
-name again and the new definition takes the old one's place.
+Styles, themes (palettes) and wallpapers (desktop fills) have definers
+of the same shape as `define-app`: a name, a title, then the definition.
+Evaluate one in a REPL and the next frame shows it; define a name again
+and the new definition takes the old one's place.
 
 ```scheme
 (define-theme dusk "Dusk"
@@ -174,11 +174,12 @@ name again and the new definition takes the old one's place.
     (fill-rect x y w h top)
     (do ([i 0 (+ i 24)]) ((>= i h)) (fill-rect x (+ y i) w 12 bottom))))
 (set-theme! 'wallpaper 'stripes)
-(define-window-style bare "Bare"
-  'insets (lambda (win) (values 0 8 0 0))
-  'draw-under (lambda (win x y w h focused? hover pressed)
-                (fill-rect x y w 8 (if focused? 'accent 'bg-3))))
-(set-theme! 'window-style 'bare)
+(define (bare-insets win) (values 0 8 0 0))
+(define (bare-under win x y w h focused? hover pressed)
+  (fill-rect x y w 8 (if focused? 'accent 'bg-3)))
+(define-style bare "Bare" 'frame-insets 'bare-insets 'frame-under 'bare-under)
+(set-style! 'bare)
+(define-style flat-mac "Flat Mac" 'parent 'mac 'corner-radius 0 'palette 'nord)
 ```
 
 To keep one, drop it into a file of its own in `~/.schevana.d/`, under
@@ -188,7 +189,7 @@ These folders load at boot after Schevana's own (`kits` first, then
 `desktop`, `styles`, `themes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
 styles and themes with the others, and the saved look may name them.
-`(apps)`, `(window-styles)`, `(themes)`, `(wallpapers)` and
+`(apps)`, `(styles)`, `(themes)`, `(wallpapers)` and
 `(surfaces)` list what is registered.
 
 ## Architecture
@@ -199,7 +200,7 @@ apps/        ordinary procedures: repl  clock  life  sketch  monitor
 wallpapers/  desktop fills: gradient  flat  shade
 themes/      palettes: catppuccin  genera  gruvbox  interlisp  nord  paper
              tokyo-night
-styles/      window styles: cons  curses  draft  fold  genera  halo
+styles/      styles: cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
@@ -211,7 +212,7 @@ kits/        complete: a completion list beside a caret (matching, keys,
              dropdowns, tabs, checkboxes, a table, a tree, chips, a date
              picker, scroll views, tooltips, a dialog), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
-src/styles   window styles: the record, the registry, previews
+src/styles   the frame's parts and its plain built-ins, previews
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!
@@ -219,7 +220,7 @@ src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors, fonts, layers; the two
              screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
-src/theme    settings in layers, rules, palettes; save/load
+src/theme    settings in layers, rules, palettes, styles, parts; save/load
 src/ffi      the only file that knows about C (SDL3 + Cairo)
 ```
 
@@ -230,8 +231,9 @@ each folder in file-name order. A file dropped into a folder loads at the
 next boot or `(reload!)`, with no list to edit, and `(source-files)`
 lists them all.
 
-The core names almost nothing of the desktop layer's (the crash panel
-and the window menu are still called by name). It keeps two registries:
+The core names nothing of the desktop layer's: the crash panel and the
+window menu are parts (`draw-crash-panel`, `open-window-menu`) whose
+built-ins the desktop layer gives. It keeps two registries:
 the screen's **surfaces**, drawn and given input in depth order (the
 desktop under the windows; the taskbar, top bar, menu and toasts over
 them), and the **strips** they reserve at the screen's edges, which
@@ -289,9 +291,9 @@ Decisions worth keeping in mind for the real design:
 - **Settings are theme keys, in layers.** Colors, sizes and fonts all
   live in one table, `(theme key)`, resolved from layers whenever one
   changes: your Overrides (`override!`, in every style), your changes to
-  the chosen window style (`set-theme!`: switch styles and back, and
-  yours come back), the style, its palette (the setting `palette`), and
-  the built-in defaults. A rule is a setting computed from others then,
+  the chosen style (`set-theme!`: switch styles and back, and yours come
+  back), the style and its parents, its palette (the setting `palette`),
+  and the built-in defaults. A rule is a setting computed from others then,
   never per frame: the built-in `selection` is `(rule (mix 'accent 'bg-1
   0.65))`, so a palette gives twenty colors and the rest follow it, and
   so does your accent. `(theme-source key)` says which layer gives one.
@@ -309,24 +311,54 @@ Decisions worth keeping in mind for the real design:
   any style's settings) overrides it.
   Mouse positions are converted at the host boundary, so apps never see
   physical pixels.
-- **Sizes follow the fonts.** Title bars, panels, menus, the apps' bars
-  and the Settings layout each take the larger of their own setting and
-  what their text needs, so the interface stays usable from 9 to 36 px (44
-  px for code). Where a window is too small, Settings scrolls and stacks
-  its rows. A new REPL opens at 80 × 22 characters of the code font.
-- **Window styles own the frame.** A style is a record of procedures:
-  frame insets, a list of buttons (`close`, `minimize`, `maximize`,
-  `depth`), and two drawing passes around the content. The window manager
-  only does geometry and dispatch, so `define-window-style` at the REPL
-  adds a new look. Apps always get their content size, whatever the frame.
-  A window is drawn clipped to its extent, so a style that draws past its
-  frame (a glow, say) gives how far as its `'bleed`.
+- **Fonts are settings, and sizes follow them.** A font role (`'ui`,
+  `'mono`, `'title`, ...) is a rule that makes the font from the four
+  font settings, `(font family size . opts)`, one record per font, so
+  every theme asking for it shares its face, its metrics and the text
+  laid out in it; a style changes a role by setting it. The kit's shared
+  sizes (`control-height`, `gap`, `pad`, ...) are rules from the fonts
+  too, and a style may give its own pixels. Title bars and the bars take
+  the larger of their own setting and what their text needs
+  (`chrome-height`: 0 is none, and a style that fixes one means its
+  pixels), as do menus, the apps' bars and the Settings layout, so the
+  interface stays usable from 9 to 36 px (44 px for code); the screen's
+  scale changing builds the theme again, since fonts measure differently
+  there. Where a window is too small, Settings scrolls and stacks its
+  rows. A new REPL opens at 80 × 22 characters of the code font.
+- **Styles are settings; parts are procedures by name.** A style is a
+  name, a title and settings (`define-style`), one of which may be
+  `'parent`: a derived style changes what it sets and inherits the rest.
+  A part is a setting whose value is a procedure or its name, looked up
+  at each call, so redefining that procedure at the REPL shows on the
+  next frame. The frame is six parts (`src/styles.ss`): `frame-insets`,
+  `frame-regions` (`close`, `minimize`, `maximize`, `depth` buttons and
+  `title` areas), `frame-radius`, `frame-bleed`, and two drawing passes
+  around the content, `frame-under` and `frame-over`. The window manager
+  only does geometry and dispatch. Apps always get their content size,
+  whatever the frame. A window is drawn clipped to its extent, so a style
+  that draws past its frame (a glow, say) gives how far as its
+  `frame-bleed`. A window naming a style (`'window-style`) is drawn and
+  hit-tested in that style's theme, content included; `(with-style name
+  thunk)` draws in one. `define-part` makes a procedure a part: its body
+  becomes the built-in `name*`, and the name calls the style's. Every
+  widget's drawing, size and areas in the kit is one, as are the bars'
+  (`draw-topbar`, `topbar-areas`: what each bar draws where, and where it
+  takes the clicks), the menus' (`menu-areas`, `draw-menu`, and the
+  numbers as settings: `menu-item-height`, `menu-font`, ...), the toasts'
+  and the popups' pieces (`ui-draw-panel`, `ui-draw-highlight`,
+  `ui-draw-separator`, `ui-draw-card`), which menus, toasts, dialogs,
+  tooltips, the calendar and the REPL's completion list share. A
+  container draws its inside in its place (`with-place`: a text box's
+  `field`, a table's `list`, `dialog`, `tooltip`, `menu`, the bars'
+  `bar`, `toast`), so a style can color what sits there, an app's own
+  cells too, by its `'places`. `define-window-style`, the older form,
+  still loads.
   The two 1980s Lisp environments were matched against real screens:
   Interlisp (Interlisp-D/Medley, Xerox PARC) with its black title bars, and
   Genera (Symbolics Lisp Machines), built to the margins its 1986 manuals
   specify, with the window's label in the bottom-left corner, which is
   also where you drag it: a style can list any area as its `'title`. Each
-  pairs with the palette of the same name; the Interlisp one brings back
+  brings the palette of the same name and its wallpaper: Interlisp's is
   the dotted desktop shade (the `wallpaper` theme key).
 - **Every frame is drawn from scratch, where something changed.** The
   canvas is the exact screen. A change says where it shows: input to a
@@ -347,7 +379,7 @@ Decisions worth keeping in mind for the real design:
   A step that nothing asked a frame of draws, uploads and presents
   nothing.
   Nothing is assumed about what a drawing procedure does inside its
-  window, so redefining `draw-window`, a window style or `draw-taskbar` at
+  window, so redefining `draw-window`, a style's part or `draw-taskbar` at
   the REPL changes the next frame: an evaluation asks for the whole screen
   when it ends, and so does `(reload!)`. A window that changes by itself
   over time says so with `(invalidate! win)`, as the Clock and Life do
@@ -487,10 +519,11 @@ This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
 two files, `src/` stays within its size budget (raise it on purpose),
 every file in a folder registers what it defines, under its own name
-(a kit's with its prefix, the desktop's plain), in the widget and
-completion kits and Tasks only the drawing procedures (`ui-draw-…`,
-`complete-draw-…`, `tasks-draw-…`) draw or name a theme color, and the
-edit kit never does.
+(a kit's with its prefix, the desktop's plain), every style sets only
+settings that exist, in the kits, the desktop layer and Tasks only the
+drawing procedures (parts, `draw-…`, `ui-draw-…`, `complete-draw-…`,
+`tasks-draw-…`) draw or name a theme color, the edit kit never does, and
+only styles call a part's built-in body.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]
@@ -548,13 +581,12 @@ Life windows animate at 200%.
   about 18 ms at 100% and 67 ms at 200% until its frame is drawn, so
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
-- Styles change only the windows: the bars, menus, toasts and widgets
-  keep one look. Each widget draws through one `ui-draw-…` procedure
-  given its rectangle and its state as flags, so the style redesign can
-  make each a style's part. Settings still does its own text field, list,
-  tabs and scrolling. The "stable GUI API" question stays open: keep
-  growing these immediate-mode procedures, or describe retained widget
-  trees as data?
+- The built-in styles change only the windows, though everything is a
+  part a style may replace: each widget's drawing, size and areas, the
+  bars, menus, toasts, the popups' panel, highlight, separator and card.
+  Settings still does its own text field, list, tabs and scrolling. The
+  "stable GUI API" question stays open: keep growing these immediate-mode
+  procedures, or describe retained widget trees as data?
 - Tasks redraws its whole window for a keystroke: about 9 ms on a 4K
   screen at 200%, maximized (half of it is any maximized window's frame:
   the wallpaper under it, its rows compared). In a description of 65,536

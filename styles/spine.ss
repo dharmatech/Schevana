@@ -19,7 +19,7 @@
 
 ;; The buttons, then the rest of the spine as the title, which drags. The
 ;; left edge and the bottom corner stay free for resizing.
-(define (spine-buttons win)
+(define (spine-regions win)
   (let ([s (spine-width)] [c (spine-cell)])
     (list (list 'close 0 4 s c)
           (list 'minimize 0 (+ 4 c) s c)
@@ -89,7 +89,7 @@
                       (spine-draw-button win (car b) cx
                                          (+ y (caddr b) (quotient c 2))
                                          focused? hover pressed ink)))
-                  (spine-buttons win))
+                  (spine-regions win))
         (when foot?
           (spine-rules x tail s (alpha ink 0.35))
           (draw-text-centered x (+ tail 6) s c "λ" ink 'title))
@@ -111,9 +111,9 @@
                               'window-border-focus 0.5)
                          'window-border)))
 
-(define-window-style spine "Spine"
-  'insets spine-insets
-  'radius spine-radius
-  'buttons spine-buttons
-  'draw-under spine-draw-under
-  'draw-over spine-draw-over)
+(define-style spine "Spine"
+  'frame-insets 'spine-insets
+  'frame-radius 'spine-radius
+  'frame-regions 'spine-regions
+  'frame-under 'spine-draw-under
+  'frame-over 'spine-draw-over)

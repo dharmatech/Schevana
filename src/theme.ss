@@ -4,19 +4,24 @@
 ;;; one table that (theme key) reads.
 ;;;
 ;;; (theme 'accent)                 => #x7aa2f7
+;;; (set-style! 'genera)            the one switch: frames, palette, ...
 ;;; (set-theme! 'accent #xff9e64)   your change, remembered for this style
 ;;; (override! 'ui-font-size 15)    on top of every style that honors it
 ;;; (theme-source 'accent)          which layer gives it
 ;;;
 ;;; A rule is a setting computed from others when the table is built:
-;;; 'selection (rule (mix 'accent 'bg-1 0.65)). Anywhere a color is
-;;; expected you may pass a theme key symbol instead.
+;;; 'selection (rule (mix 'accent 'bg-1 0.65)). A part is a setting whose
+;;; value is a procedure or its name: 'frame-under 'mac-draw-under.
+;;; Anywhere a color is expected you may pass a theme key symbol instead.
 
 (defvar *theme* (make-eq-hashtable))   ; every setting in effect
+;; the chosen style's: *theme* is another while a window of another style,
+;; a preview or a place is drawn, or a window's handler runs
+(defvar *main-theme* *theme*)
 (defvar *theme-version* 0)
 (defvar *theme-file* (format "~a/.schevana-theme.ss" (or (getenv "HOME") ".")))
 
-(defvar *style-name* 'mac)   ; the chosen style (a window style's name)
+(defvar *style-name* 'mac)   ; the chosen style's name
 (defvar *changes* '())       ; ((style key value ...) ...): yours, per style
 (defvar *overrides* '())     ; (key value ...): on top of every style
 (defvar *scale-setting* 0)   ; the display's, in percent; 0 follows it
@@ -56,6 +61,11 @@
         'button-max (rule (theme 'green))
         'button-idle (rule (mix 'bg-3 'text 0.15))))
 
+;; What the rest of the world adds as it loads (theme-default!): the
+;; fonts, the frame's parts, the kits' and the desktop layer's; kept
+;; across a reload until they add it again.
+(defvar *more-defaults* '())
+
 (define default-theme
   (append base-colors derived-colors
           '(title-height 30  corner-radius 9  topbar-height 28
@@ -65,11 +75,11 @@
             mono-font-size 14
             palette tokyo-night
             ;; a wallpaper's name: gradient, flat or shade
-            wallpaper gradient)))
+            wallpaper gradient)
+          *more-defaults*))
 
 (define color-keys
   (append (plist-keys base-colors) (plist-keys derived-colors)))
-(define font-theme-keys '(ui-font ui-font-size mono-font mono-font-size))
 
 ;; The look's knobs: a style honors those its 'options list (none: all);
 ;; one it does not list holds its own value whatever you change.
@@ -89,6 +99,8 @@
           [(rule? v) (compute-rule! key v)]
           [(eq? v theme-busy) (errorf 'theme "~s is computed from itself" key)]
           [else v])))
+
+(define (theme-has? key) (hashtable-contains? *theme* key))
 
 (define (compute-rule! key r)
   (hashtable-set! *theme* key theme-busy)
@@ -162,6 +174,118 @@
                          (append color-keys '(wallpaper)))))))
 
 ;;; ------------------------------------------------------------------
+;;; styles
+;;; A style is a name, a title and settings: theme keys, and 'parent (a
+;;; style's name: it inherits that style's settings), 'options (the
+;;; common options it honors and its own) and 'places. Each is a file in
+;;; styles/:
+;;;
+;;;   (define-style flat-mac "Flat Mac" 'parent 'mac 'corner-radius 0)
+
+(define-record-type style
+  (nongenerative schevana-style-1)
+  (fields name title settings))
+
+(defvar *styles* '())   ; in registration order
+
+(define (register-style! name title settings)
+  (set! *styles* (registry-add *styles* (make-style name title settings)
+                               style-name))
+  (theme-changed!)
+  name)
+
+;; (define-style name "Title" key value ...) adds a style, or replaces the
+;; one of that name; the next frame shows it, in every style under it.
+(define-syntax define-style
+  (syntax-rules ()
+    [(_ name title setting ...)
+     (register-style! 'name title (list setting ...))]))
+
+(define (find-style name)
+  (find (lambda (s) (eq? (style-name s) name)) *styles*))
+
+(define (styles) (map style-name *styles*))
+
+(define (current-style) *style-name*)
+
+;;; ------------------------------------------------------------------
+;;; parts
+
+;; The procedure the theme gives for key: a procedure, or the name of a
+;; top-level one, looked up at each call, so a redefinition shows on the
+;; next frame.
+(define (part key)
+  (let ([v (theme key)])
+    (if (symbol? v) (top-level-value v *world-env*) v)))
+
+;; (define-part (name formal ...) body ...) defines name* as the body (the
+;; built-in) and name as a call to the theme's part for the key name,
+;; whose built-in setting is name*; a style replaces it by setting the key.
+(define-syntax define-part
+  (lambda (x)
+    (define (star k name)
+      (datum->syntax k (string->symbol (format "~a*" (syntax->datum name)))))
+    (syntax-case x ()
+      [(k (name formal ...) body ...)
+       (with-syntax ([built-in (star #'k #'name)])
+         #'(begin
+             (define (built-in formal ...) body ...)
+             (define (name formal ...) ((part 'name) formal ...))
+             (theme-default! 'name 'built-in)))]
+      [(k (name formal ... . rest) body ...)
+       (with-syntax ([built-in (star #'k #'name)])
+         #'(begin
+             (define (built-in formal ... . rest) body ...)
+             (define (name formal ... . rest)
+               (apply (part 'name) formal ... rest))
+             (theme-default! 'name 'built-in)))])))
+
+;; A built-in color setting: a change of colors alone changes no chrome.
+(define (color-default! key value)
+  (unless (memq key color-keys) (set! color-keys (cons key color-keys)))
+  (theme-default! key value))
+
+;; A built-in setting, under every layer: kits and the desktop layer give
+;; their parts and sizes so as they load.
+(define (theme-default! key value)
+  (set! *more-defaults* (cons* key value (plist-remove *more-defaults* key)))
+  (set! default-theme (cons* key value (plist-remove default-theme key)))
+  (unless (hashtable-contains? *theme* key) (hashtable-set! *theme* key value))
+  (hashtable-clear! *style-themes*))
+
+;;; ------------------------------------------------------------------
+;;; another style's theme
+
+;; Themes of other styles, of styles with a preview's settings, and inside
+;; containers, built once per change.
+(define *style-themes* (make-hashtable equal-hash equal?))
+
+;; The theme of style name with your changes to it and the Overrides,
+;; extra (key value ...) over all, inside the container place (#f: none).
+(define (style-theme name place . extra)
+  (let ([k (list* name place extra)])
+    (or (hashtable-ref *style-themes* k #f)
+        (let ([t (resolve-theme name *overrides* (changes-of name) place
+                                extra)])
+          (hashtable-set! *style-themes* k t)
+          t))))
+
+;; (with-style 'genera thunk) draws in another style; (with-style
+;; (current-style) thunk 'palette 'nord), in this one with a palette.
+(define (with-style name thunk . extra)
+  (fluid-let ([*theme* (apply style-theme name #f extra)]) (thunk)))
+
+;; Draws thunk inside a container: a dialog, a field, a list, a tooltip,
+;; a menu, a bar or a toast. A style colors what sits there by
+;; its settings for that place: 'places ((dialog key value ...) ...).
+(define (with-place place thunk)
+  (if (assq place (theme 'places))
+      (fluid-let ([*theme* (apply style-theme (theme 'window-style) place
+                                  (theme 'theme-extra))])
+        (thunk))
+      (thunk)))
+
+;;; ------------------------------------------------------------------
 ;;; the layers
 
 (define (changes-of name)
@@ -176,15 +300,20 @@
         [(eq? (car p) key) (plist-remove (cddr p) key)]
         [else (cons* (car p) (cadr p) (plist-remove (cddr p) key))]))
 
-;; The style and its parents, nearest first, each (name . settings).
-;; Today's window styles have no settings of their own: each is its name,
-;; which your changes are kept under.
-(define (style-chain name) (list (cons name '())))
+;; The style and its parents, nearest first; a loop or a missing parent
+;; ends the chain (the built-in defaults are under every chain).
+(define (style-chain name)
+  (let loop ([n name] [seen '()])
+    (let ([s (and (not (memq n seen)) (find-style n))])
+      (if s
+          (cons s (loop (plist-ref (style-settings s) 'parent #f)
+                        (cons n seen)))
+          '()))))
 
 ;; The nearest style setting of key in the chain.
 (define (chain-ref chain key default)
-  (let ([s (find (lambda (s) (plist-has? (cdr s) key)) chain)])
-    (if s (plist-ref (cdr s) key default) default)))
+  (let ([s (find (lambda (s) (plist-has? (style-settings s) key)) chain)])
+    (if s (plist-ref (style-settings s) key default) default)))
 
 (define meta-keys '(parent options places))
 
@@ -204,16 +333,29 @@
 
 ;; The theme of style name with these Overrides and changes: each setting
 ;; from the first layer that has it, the palette's colors under the
-;; styles. Its rules are computed when read (theme-changed! reads them
+;; styles; at: inside a container place, and a preview's extra settings
+;; over all. Its rules are computed when read (theme-changed! reads them
 ;; all, so that a broken one fails at the change that broke it).
-(define (resolve-theme name overrides changes)
-  (let ([chain (style-chain name)] [t (make-eq-hashtable)])
+(define (resolve-theme name overrides changes . at)   ; at: [place [extra]]
+  (let* ([chain (style-chain name)] [t (make-eq-hashtable)]
+         [places (chain-ref chain 'places '())]
+         [place (and (pair? at) (car at))]
+         [extra (if (and (pair? at) (pair? (cdr at))) (cadr at) '())])
     (define (all k) #t)
     (hashtable-set! t 'window-style name)
     (hashtable-set! t 'scale *scale-setting*)
+    ;; the common options it does not honor
+    (hashtable-set! t 'fixed (remp (lambda (k) (honored? chain k))
+                                   (map car common-options)))
+    (hashtable-set! t 'places places)
+    (hashtable-set! t 'theme-extra extra)
+    (plist-into! t extra all)
     (plist-into! t overrides (lambda (k) (honored? chain k)))
     (plist-into! t changes (lambda (k) (honored? chain k)))
-    (for-each (lambda (s) (plist-into! t (cdr s)
+    ;; inside a container, the style's settings for it (with-place)
+    (let ([p (assq place places)])
+      (when p (plist-into! t (cdr p) all)))
+    (for-each (lambda (s) (plist-into! t (style-settings s)
                                        (lambda (k) (not (memq k meta-keys)))))
               chain)
     (plist-into! t (list 'palette (theme-default 'palette)) all)
@@ -224,19 +366,20 @@
 (define (compute-rules! t)
   (fluid-let ([*theme* t]) (vector-for-each theme (hashtable-keys t))))
 
-;; Whatever changed: build the theme again, then tell who cares. Fonts
-;; follow their keys; a change not only of colors changes the chrome.
+;; Whatever changed: build the theme again, then tell who cares: a change
+;; not only of colors changes the chrome.
 (define (theme-changed!)
-  (let* ([old *theme*]
+  (let* ([old *main-theme*]
          [new (resolve-theme *style-name* *overrides*
                              (changes-of *style-name*))]
          [changed? (lambda (k)
                      (not (equal? (hashtable-ref old k theme-unset)
                                   (hashtable-ref new k theme-unset))))])
     (compute-rules! new)
+    (set! *main-theme* new)
     (set! *theme* new)
+    (hashtable-clear! *style-themes*)
     (set! *theme-version* (+ *theme-version* 1))
-    (when (exists changed? font-theme-keys) (install-default-fonts!))
     (when (changed? 'scale) (host-rescale!))
     (unless (for-all (lambda (k) (or (memq k color-keys) (not (changed? k))))
                      (append (vector->list (hashtable-keys old))
@@ -249,11 +392,12 @@
 (define (theme-source key)
   (let* ([name *style-name*] [chain (style-chain name)]
          [yours? (lambda (p) (and (honored? chain key) (plist-has? p key)))]
-         [style (find (lambda (s) (plist-has? (cdr s) key)) chain)]
+         [style (find (lambda (s) (plist-has? (style-settings s) key))
+                      chain)]
          [palette (theme 'palette)])
     (cond [(yours? *overrides*) (list 'overrides (theme key))]
           [(yours? (changes-of name)) (list 'changes name (theme key))]
-          [style (list 'style (car style) (theme key))]
+          [style (list 'style (style-name style) (theme key))]
           [(plist-has? (palette-colors palette) key)
            (list 'palette palette (theme key))]
           [(plist-has? default-theme key) (list 'built-in (theme key))]
@@ -286,7 +430,7 @@
 
 ;; The one switch: frames, palette, everything you changed for it.
 (define (set-style! name)
-  (unless (find-window-style name) (errorf 'set-style! "no style ~s" name))
+  (unless (find-style name) (errorf 'set-style! "no style ~s" name))
   (change-layers! (lambda () (set! *style-name* name)))
   (save-theme-soon!))
 
@@ -417,7 +561,7 @@
       [(fixnum? d) (fixnum? v)]
       [else (and (string? d) (string? v))])))
 
-(define (registered-style s) (if (find-window-style s) s 'mac))
+(define (registered-style s) (if (find-style s) s 'mac))
 
 ;; The settings of ((key . value) ...) that fit their keys, as a plist.
 (define (valid-plist alist)
@@ -514,3 +658,4 @@
                (map cons (vector->list keys) (vector->list vals)))))))
 (set! *theme*
   (resolve-theme *style-name* *overrides* (changes-of *style-name*)))
+(set! *main-theme* *theme*)

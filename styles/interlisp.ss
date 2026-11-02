@@ -26,6 +26,9 @@
                    (fit-text (window-title win) (- w 10) 'ui-small)
                    (window-bg win) 'ui-small)))))
 
-(define-window-style interlisp "Interlisp"
-  'insets interlisp-insets
-  'draw-under interlisp-draw-under)
+;; Its palette over the dotted gray shade.
+(define-style interlisp "Interlisp"
+  'palette 'interlisp
+  'wallpaper 'shade
+  'frame-insets 'interlisp-insets
+  'frame-under 'interlisp-draw-under)

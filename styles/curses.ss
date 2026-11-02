@@ -25,7 +25,7 @@
 
 ;; Three cells each: close after the top left corner and a cell of rule,
 ;; minimize and maximize before the top right one, a cell of rule apart.
-(define (curses-buttons win)
+(define (curses-regions win)
   (let ([c (curses-cell)] [s (curses-side)] [w (window-w win)])
     (map (lambda (kind x)
            (list kind (exact (round x)) 0 (exact (round (* 3 c)))
@@ -145,7 +145,7 @@
                     (if focused? (list (- p) p) '(0)))
           (when buttons?
             (for-each (lambda (bt) (button (car bt) (cadr bt) (cadddr bt)))
-                      (curses-buttons win)))
+                      (curses-regions win)))
           (let ([t (curses-title win buttons?)])
             (when t
               (group (cadr t) (caddr t)
@@ -153,7 +153,7 @@
                   (curses-text (car t) (+ cx (/ p 2)) (+ T (/ p 2)) k
                                fg))))))))))
 
-(define-window-style curses "Curses"
-  'insets curses-insets
-  'buttons curses-buttons
-  'draw-under curses-draw-under)
+(define-style curses "Curses"
+  'frame-insets 'curses-insets
+  'frame-regions 'curses-regions
+  'frame-under 'curses-draw-under)

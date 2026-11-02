@@ -78,7 +78,7 @@
         ((caddr wp) x y w h top bottom)
         (fill-rect x y w h top))))
 
-(define (draw-wallpaper w h)
+(define-part (draw-wallpaper w h)
   (fill-desktop-pattern 0 0 w h (theme 'wallpaper) 'desktop-top 'desktop-bottom)
   (when (eq? (wallpaper-shown (theme 'wallpaper)) 'gradient)
     (fill-glow (* w 0.80) (* h 0.22) (* 0.55 (max w h)) (alpha 'accent-2 0.10))

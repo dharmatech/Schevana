@@ -211,7 +211,7 @@
   (press! 'tab)
   (steps 1)
   (check "after (theme ' it offers theme keys only"
-         (equal? (offered) '("accent" "accent-2")))
+         (equal? (offered) '("accent" "accent-2" "panel-accent")))
   (press! 'escape)
   (steps 1)
   (check "escape closes the list" (not (offered)))
@@ -628,7 +628,7 @@
 
 ;; Window styles: the frame, its buttons and their actions come from the style.
 (define (click-button! win kind)
-  (let ([b (assq kind (window-buttons win))])
+  (let ([b (assq kind (frame-regions win))])
     (unless b (errorf 'click-button! "~s has no ~s button" win kind))
     (let ([x (+ (window-x win) (list-ref b 1) (quotient (list-ref b 3) 2))]
           [y (+ (window-y win) (list-ref b 2) (quotient (list-ref b 4) 2))])
@@ -667,7 +667,7 @@
 (let ([w (open-window "Gamma" 'size '(300 . 150) 'pos '(200 . 140))])
   (let-values ([(l t r b) (frame-insets w)])
     (check "interlisp has a 2-pixel border, a 15-pixel title bar and no buttons"
-           (and (= l 2) (= r 2) (= b 2) (= t 15) (null? (window-buttons w)))))
+           (and (= l 2) (= r 2) (= b 2) (= t 15) (null? (frame-regions w)))))
   (inject! '(mouse-move 300 147) '(mouse-down 300 147 right 1)
            '(mouse-up 300 147 right))
   (steps 2)
@@ -723,7 +723,7 @@
   (click-button! b 'depth)
   (check "and brings it to the front again" (eq? (car (windows)) b))
   (let ([w0 (window-w b)])
-    (let ([g (assq 'resize-br (window-buttons b))])
+    (let ([g (assq 'resize-br (frame-regions b))])
       (let ([x (+ (window-x b) (list-ref g 1) 5)]
             [y (+ (window-y b) (list-ref g 2) 5)])
         (inject! `(mouse-down ,x ,y left 1) `(mouse-move ,(+ x 30) ,(+ y 10))
@@ -734,14 +734,14 @@
   (check "zoom gadget maximizes" (maximized? b))
   (let ([m (open-window "Mac island" 'size '(200 . 100) 'window-style 'mac)])
     (check "a window can override the style"
-           (and (= (window-w m) 200) (assq 'minimize (window-buttons m))))))
-(set! *window-styles*
-  (remp (lambda (s) (eq? (window-style-name s) 'gadgets)) *window-styles*))
+           (and (= (window-w m) 200) (assq 'minimize (frame-regions m))))))
+(set! *styles*
+  (remp (lambda (s) (eq? (style-name s) 'gadgets)) *styles*))
 (set-theme! 'window-style 'mac)
 
 ;; A style, theme, wallpaper or app defined again keeps its place and takes
 ;; the new definition.
-(let ([styles *window-styles*] [themes0 *themes*] [papers *wallpapers*]
+(let ([styles0 *styles*] [themes0 *themes*] [papers *wallpapers*]
       [apps0 *apps*])
   (define-window-style genera "Genera, again")
   (define-theme nord "Nord, again")
@@ -750,34 +750,37 @@
   (let ([named (lambda (registry name-of title-of)
                  (map (lambda (e) (cons (name-of e) (title-of e))) registry))])
     (check "a style, theme, wallpaper or app defined again keeps its place"
-           (and (equal? (window-styles) (map window-style-name styles))
+           (and (equal? (styles) (map style-name styles0))
                 (equal? (themes) (map car themes0))
                 (equal? (wallpapers) (map car papers))
                 (equal? (apps) (map app-name apps0))
                 (member '(genera . "Genera, again")
-                        (named *window-styles* window-style-name
-                               window-style-title))
+                        (named *styles* style-name
+                               style-title))
                 (equal? (preset-colors 'nord) (preset-colors 'tokyo-night))
                 (equal? (preset-title 'nord) "Nord, again")
                 (member '(flat . "Flat, again") (named *wallpapers* car cadr))
                 (member '(clock . "Clock, again")
                         (named *apps* app-name app-title)))))
-  (set! *window-styles* styles)
+  (set! *styles* styles0)
   (set! *themes* themes0)
   (set! *wallpapers* papers)
   (set! *apps* apps0)
   (wm-chrome-changed!))
 
-;; a palette is a change to the style chosen
+;; a palette is a change to the style chosen; the wallpaper is the style's
 (set-theme! 'window-style 'interlisp)
 (apply-theme-preset! 'interlisp)
 (style-scene! 'interlisp)
 (screenshot (string-append out-dir "/style-interlisp-palette.png"))
-(check "the interlisp palette shades the desktop"
+(check "the interlisp style shades the desktop"
        (eq? (theme 'wallpaper) 'shade))
 (apply-theme-preset! 'nord)
-(check "and other palettes go back to the gradient"
-       (eq? (theme 'wallpaper) 'gradient))
+(check "in other palettes too, and Mac in its palette keeps the gradient"
+       (and (eq? (theme 'wallpaper) 'shade)
+            (begin (set-theme! 'window-style 'mac)
+                   (apply-theme-preset! 'interlisp)
+                   (eq? (theme 'wallpaper) 'gradient))))
 ;; A theme saved before Amiga and Workbench were removed still loads.
 (reset-theme!)
 (call-with-output-file *theme-file*
@@ -884,7 +887,7 @@
 (scroll-settings-down!)
 (drag-ui! s '(metric title-height) 0.5)
 (check "chrome height sliders start at what the font needs"
-       (and (> (theme 'title-height) (chrome-min-height 'title-height))
+       (and (> (theme 'title-height) (theme 'title-height-min))
             (= (theme 'title-height) (title-height))))
 (click-ui! s '(tab fonts))
 ;; 80 columns of 44 px would not fit this screen
@@ -987,21 +990,19 @@
     (values (+ (ui-region-x r) (/ (ui-region-w r) 2))
             (+ (ui-region-y r) (/ (ui-region-h r) 2)))))
 
-;; Clicks the open menu's entry that starts with label.
+;; Clicks the open menu's entry that starts with label, where menu-areas
+;; puts it.
 (define (menu-click! label)
-  (let-values ([(x y w h) (menu-geometry *menu*)])
-    (let loop ([es (menu-entries *menu*)]
-               [ey (+ y 5 (menu-header-height *menu*))])
-      (cond
-        [(null? es) (errorf 'menu-click! "no entry ~s" label)]
-        [(and (pair? (car es)) (string-prefix? label (caar es)))
-         (let ([my (round (+ ey (/ (menu-item-height) 2)))])
-           (inject! `(mouse-move ,(+ x 30) ,my)
-                    `(mouse-down ,(+ x 30) ,my left 1)
-                    `(mouse-up ,(+ x 30) ,my left))
-           (steps 2))]
-        [else (loop (cdr es)
-                    (+ ey (if (pair? (car es)) (menu-item-height) 9)))]))))
+  (let* ([es (menu-entries *menu*)]
+         [i (list-index (lambda (e)
+                          (and (pair? e) (string-prefix? label (car e))))
+                        es)]
+         [a (and i (assv i (placed-menu-areas *menu*)))])
+    (unless a (errorf 'menu-click! "no entry ~s" label))
+    (let ([x (+ (cadr a) 30)] [my (round (+ (caddr a) (/ (list-ref a 4) 2)))])
+      (inject! `(mouse-move ,x ,my) `(mouse-down ,x ,my left 1)
+               `(mouse-up ,x ,my left))
+      (steps 2))))
 
 (check "Tasks opens on the Board with the seed tasks"
        (and (not (window-error tw)) (= (length tasks-seed) (length *tasks*))
@@ -2682,7 +2683,7 @@
                            (set-theme! 'window-style s)
                            (invalidate!)
                            (> (slowest-of-steps 2) 300))
-                         (window-styles))])
+                         (styles))])
       (close-window! w)
       slow))
   (let* ([slow (slow-styles (substring long-text 0 10000))]
@@ -3247,7 +3248,9 @@
                [*pixel-ratio* 1] [*host-scale* *host-scale*])
      (with-fake-sdl
       (lambda ()
+        ;; the scale saved (a rescale builds the theme again from it)
         (define (open scale ratio desktop . fullscreen?)
+          (set! *scale-setting* scale)
           (hashtable-set! *theme* 'scale scale)
           (set! fake-ratio ratio)
           (set! fake-desktop desktop)
@@ -3265,6 +3268,7 @@
                [wayland (open 0 2 1)]
                [x150 (open 150 1 1)]
                [full (open 200 1 1 #t)])   ; never resized
+          (set! *scale-setting* 0)
           (hashtable-set! *theme* 'scale 0)
           (set! fake-flags 0)
           (set! fake-desktop 1)
@@ -3360,7 +3364,7 @@
    (let ([w (plain-window "Buttons" 200 200 'window-style style)])
      (steps 2)
      (for-each (lambda (kind)
-                 (let* ([b (assq kind (window-buttons w))]
+                 (let* ([b (assq kind (frame-regions w))]
                         [x (+ (window-x w) (list-ref b 1)
                               (quotient (list-ref b 3) 2))]
                         [y (+ (window-y w) (list-ref b 2)
@@ -3403,8 +3407,8 @@
 ;; keeps the focus.
 (let* ([a (plain-window "Aaa" 100 100)] [b (plain-window "Bbb" 500 100)])
   (steps 2)
-  (let* ([it (find (lambda (it) (eq? (caddr it) a)) *taskbar-items*)]
-         [x (exact (round (/ (+ (car it) (cadr it)) 2)))]
+  (let* ([it (cdr (assq a (taskbar-areas)))]
+         [x (exact (round (+ (car it) (/ (caddr it) 2))))]
          [y (- (screen-h) (quotient (taskbar-height) 2))])
     (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1)
              `(mouse-up ,x ,y right))
@@ -3457,8 +3461,8 @@
        (for-each close-window! (list x y))
        (set! *toasts* '())
        (steps 1)))))
-(set! *window-styles*
-  (remp (lambda (s) (eq? (window-style-name s) 'broken)) *window-styles*))
+(set! *styles*
+  (remp (lambda (s) (eq? (style-name s) 'broken)) *styles*))
 
 ;; Life's cells take a theme change made behind set-theme!'s back.
 (let ([l (life)] [green (theme 'green)] [cyan (theme 'cyan)])

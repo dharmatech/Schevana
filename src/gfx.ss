@@ -29,21 +29,24 @@
 ;; *cr* only measures between frames. *back* is the second screen buffer
 ;; (see frames, below); both are new, so the next frame is the whole
 ;; screen. Interrupts are off, so no process is switched out halfway and
-;; no frame is drawn on a canvas half made.
+;; no frame is drawn on a canvas half made. At another scale fonts measure
+;; differently, and so do the theme's sizes made from them.
 (define (canvas-create-pixels! pw ph scale)
-  (with-interrupts-disabled
-    (unless (= (inexact scale) *scale*) (flush-shadow-tiles!))   ; shadow
-    (unless (eqv? *canvas* 0) (cairo-surface-destroy *canvas*))
-    (unless (eqv? *back* 0) (cairo-surface-destroy *back*))
-    (set! *canvas* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph))
-    (set! *back* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph))
-    (set! *canvas-pw* pw)
-    (set! *canvas-ph* ph)
-    (set! *canvas-w* (exact (floor (/ pw scale))))
-    (set! *canvas-h* (exact (floor (/ ph scale))))
-    (set! *scale* (inexact scale))
-    (reset-measure-cr!)
-    (request-frame!)))
+  (let ([rescaled? (not (= (inexact scale) *scale*))])
+    (with-interrupts-disabled
+      (when rescaled? (flush-shadow-tiles!))   ; shadow
+      (unless (eqv? *canvas* 0) (cairo-surface-destroy *canvas*))
+      (unless (eqv? *back* 0) (cairo-surface-destroy *back*))
+      (set! *canvas* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph))
+      (set! *back* (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph))
+      (set! *canvas-pw* pw)
+      (set! *canvas-ph* ph)
+      (set! *canvas-w* (exact (floor (/ pw scale))))
+      (set! *canvas-h* (exact (floor (/ ph scale))))
+      (set! *scale* (inexact scale))
+      (reset-measure-cr!)
+      (request-frame!))
+    (when rescaled? (fonts-rescaled!) (theme-changed!))))
 
 ;; A canvas of w × h logical pixels.
 (define (canvas-create! w h scale)
@@ -80,6 +83,9 @@
     (set! *measure-cr* (cairo-create *measure-surface*))
     (cairo-scale *measure-cr* *scale* *scale*)
     (set! *cr* *measure-cr*)))
+
+;; (the theme's sizes measure fonts before there is a canvas)
+(when (eqv? *measure-cr* 0) (reset-measure-cr!))
 
 ;;; Offscreen surfaces the renderer owns, by address, so that a reset (or a
 ;;; reload that changes how they are used) can free every one of them. A
@@ -177,12 +183,16 @@
     (cairo-set-source-rgba *cr* r g b a)))
 
 ;;; ------------------------------------------------------------------ fonts
+;;; A font is a setting: the theme's roles ('ui, 'mono, 'title, ...) are
+;;; rules, below, that make one with font, and get-font of a role reads
+;;; the theme.
 
-(define-record-type font
-  (nongenerative schevana-font)
-  (fields family slant weight size face (mutable cache)))
-
-(defvar *fonts* (make-eq-hashtable))
+(define-record-type (font-type make-font font?)
+  (nongenerative schevana-font-2)
+  (fields (immutable family font-family) (immutable slant font-slant)
+          (immutable weight font-weight) (immutable size font-size)
+          (immutable face font-face)
+          (mutable cache font-cache font-cache-set!)))
 
 (define (make-font* family size . opts)
   (let ([slant (if (memq 'italic opts)
@@ -194,14 +204,48 @@
     (make-font family slant weight size
                (cairo-toy-font-face-create family slant weight) #f)))
 
-(define (define-font! name family size . opts)
-  (hashtable-set! *fonts* name (apply make-font* family size opts)))
+;; (font family size . opts), opts bold and italic: one record for each,
+;; so that every theme asking for it shares its face, its metrics and
+;; what is laid out in it.
+(define *font-specs* (make-hashtable equal-hash equal?))
+(define (font family size . opts)
+  (let ([spec (cons* family size opts)])
+    (or (hashtable-ref *font-specs* spec #f)
+        (let ([f (apply make-font* family size opts)])
+          (hashtable-set! *font-specs* spec f)
+          f))))
 
-(define (get-font f)
-  (cond
-    [(font? f) f]
-    [(hashtable-ref *fonts* f #f)]
-    [else (errorf 'get-font "unknown font ~s" f)]))
+;; A font, or a theme key whose value is one ('ui, 'mono-bold, ...).
+(define (get-font f) (if (font? f) f (theme f)))
+
+;; The roles, from the four font settings (a style may give any).
+(let loop ([roles
+            (list
+             'ui (rule (font (theme 'ui-font) (theme 'ui-font-size)))
+             'ui-bold (rule (font (theme 'ui-font) (theme 'ui-font-size) 'bold))
+             'ui-small (rule (font (theme 'ui-font)
+                                   (- (theme 'ui-font-size) 2)))
+             'ui-italic (rule (font (theme 'ui-font) (theme 'ui-font-size)
+                                    'italic))
+             'title (rule (font (theme 'ui-font) (theme 'ui-font-size) 'bold))
+             'heading (rule (font (theme 'ui-font) (+ (theme 'ui-font-size) 5)
+                                  'bold))
+             'big (rule (font (theme 'ui-font) (* 2 (theme 'ui-font-size))
+                              'bold))
+             'huge (rule (font "serif" 360 'bold))
+             'mono (rule (font (theme 'mono-font) (theme 'mono-font-size)))
+             'mono-small (rule (font (theme 'mono-font)
+                                     (- (theme 'mono-font-size) 2)))
+             'mono-bold (rule (font (theme 'mono-font) (theme 'mono-font-size)
+                                    'bold)))])
+  (unless (null? roles)
+    (theme-default! (car roles) (cadr roles))
+    (loop (cddr roles))))
+
+;; The screen's scale changed: each font is measured again.
+(define (fonts-rescaled!)
+  (vector-for-each (lambda (f) (font-cache-set! f #f))
+                   (hashtable-values *font-specs*)))
 
 (define (use-font! f) (use-font-on! *cr* f))
 
@@ -229,25 +273,6 @@
 (define (font-ascent f) (vector-ref (font-metrics f) 0))
 (define (font-line-height f) (vector-ref (font-metrics f) 2))
 (define (font-char-width f) (vector-ref (font-metrics f) 3))
-
-;; The standard fonts, built from the theme's font keys.
-(define (install-default-fonts!)
-  (let ([ui (theme 'ui-font)] [ui-size (theme 'ui-font-size)]
-        [mono (theme 'mono-font)] [mono-size (theme 'mono-font-size)])
-    (define-font! 'mono mono mono-size)
-    (define-font! 'mono-small mono (- mono-size 2))
-    (define-font! 'mono-bold mono mono-size 'bold)
-    (define-font! 'ui ui ui-size)
-    (define-font! 'ui-bold ui ui-size 'bold)
-    (define-font! 'ui-small ui (- ui-size 2))
-    (define-font! 'ui-italic ui ui-size 'italic)
-    (define-font! 'title ui ui-size 'bold)
-    (define-font! 'heading ui (+ ui-size 5) 'bold)
-    (define-font! 'big ui (* 2 ui-size) 'bold)
-    (define-font! 'huge "serif" 360 'bold)))
-
-;; (keyed on the newest font, so a world reloaded from before it gets it)
-(unless (hashtable-contains? *fonts* 'ui-italic) (install-default-fonts!))
 
 ;;; ------------------------------------------------------------------ text
 

@@ -209,11 +209,9 @@
                   (= scale *host-scale*)
                   (not (= 0 *sdl-texture*)))
              #f
-             (let ([rescaled? (not (= scale *host-scale*))])
+             (begin
                (set! *host-scale* scale)
                (canvas-create-pixels! pw ph scale)
-               ;; their metrics were measured at the old scale
-               (when rescaled? (install-default-fonts!))
                ;; The host window may not shrink below 640 × 400 logical pixels.
                ;; SDL is told only when that changes: each call also sets the
                ;; window's size again (a request to the window manager,
@@ -233,7 +231,6 @@
             (begin
               (set! *host-scale* scale)
               (canvas-create! (car *headless-size*) (cdr *headless-size*) scale)
-              (install-default-fonts!)
               #t)))]
     [else #f]))
 

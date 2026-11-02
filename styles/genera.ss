@@ -25,7 +25,7 @@
 
 ;; The label strip is the window's title area. The corners and the bottom
 ;; edge stay free for resizing.
-(define (genera-buttons win)
+(define (genera-regions win)
   (let ([w (window-w win)] [h (window-h win)] [lh (genera-label-height)])
     (list (list 'title 14 (- h genera-border lh) (- w 28) (- lh 4)))))
 
@@ -43,7 +43,10 @@
                              'ui-italic)
                    'text 'ui-italic)))))
 
-(define-window-style genera "Genera"
-  'insets genera-insets
-  'buttons genera-buttons
-  'draw-under genera-draw-under)
+;; Its palette on a plain white screen.
+(define-style genera "Genera"
+  'palette 'genera
+  'wallpaper 'flat
+  'frame-insets 'genera-insets
+  'frame-regions 'genera-regions
+  'frame-under 'genera-draw-under)

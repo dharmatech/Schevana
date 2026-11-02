@@ -10,8 +10,21 @@
 
 (defvar *menu* #f)
 
-(define (menu-item-height) (max 26 (round (+ (font-line-height 'ui) 11))))
-(define (menu-field-height) (menu-item-height))
+;; The menu's numbers are settings, a style's to give: an entry's height
+;; (a rule from the font), a separator's, the room above the first entry
+;; and below the last, the text's inset, the least width, the font and
+;; the entries' ink, chosen and not.
+(theme-default! 'menu-item-height
+                (rule (max 26 (round (+ (font-line-height 'ui) 11)))))
+(theme-default! 'menu-separator-height 9)
+(theme-default! 'menu-pad 5)
+(theme-default! 'menu-text-x 18)
+(theme-default! 'menu-min-width 230)
+(theme-default! 'menu-font 'ui)
+(theme-default! 'menu-ink 'text-dim)
+(theme-default! 'menu-ink-selected 'text)
+
+(define (menu-item-height) (theme 'menu-item-height))
 
 (define (menu-open?) (and *menu* #t))
 
@@ -35,41 +48,54 @@
                           (and (pair? e) (string-contains-ci? (car e) f)))
                         items)])))
 
-(define (menu-header-height m)
-  (if (menu-filter? m) (+ (menu-field-height) 8) 0))
-
-(define (menu-geometry m)
-  (let* ([es (menu-entries m)]
+;; Where menu m and its pieces are, which its drawing, its clicks and the
+;; pointer read: (menu x y w h), then (filter x y w h) when it filters,
+;; then each entry's (i x y w h) or separator's (separator x y w h), top
+;; to bottom.
+(define-part (menu-areas m)
+  (let* ([es (menu-entries m)] [ih (theme 'menu-item-height)]
+         [sh (theme 'menu-separator-height)] [pad (theme 'menu-pad)]
+         [head (if (menu-filter? m) (+ ih 8) 0)]
          [w (fold-left (lambda (acc e)
                          (if (pair? e)
-                             (max acc (+ 44 (text-width (car e) 'ui)))
+                             (max acc (+ 8 (* 2 (theme 'menu-text-x))
+                                         (text-width (car e)
+                                                     (theme 'menu-font))))
                              acc))
-                       230 es)]
-         [h (fold-left (lambda (acc e)
-                         (+ acc (if (pair? e) (menu-item-height) 9)))
-                       (+ 10 (menu-header-height m)) es)]
+                       (theme 'menu-min-width) es)]
+         [h (fold-left (lambda (acc e) (+ acc (if (pair? e) ih sh)))
+                       (+ pad pad head) es)]
          [x (clamp (menu-x m) 4 (- (screen-w) w 4))]
-         [y (clamp (menu-y m) (+ 2 (topbar-height)) (- (screen-h) h 4))])
-    (values x y w h)))
+         [y (let-values ([(dx dy dw dh) (desktop-rect)])
+              (clamp (menu-y m) (+ 2 dy) (- (screen-h) h 4)))])
+    (cons (list 'menu x y w h)
+          (append (if (menu-filter? m)
+                      (list (list 'filter (+ x 6) (+ y 6) (- w 12) ih))
+                      '())
+                  (let loop ([es es] [i 0] [ey (+ y pad head)])
+                    (if (null? es)
+                        '()
+                        (let ([eh (if (pair? (car es)) ih sh)])
+                          (cons (list (if (pair? (car es)) i 'separator)
+                                      x ey w eh)
+                                (loop (cdr es) (+ i 1) (+ ey eh))))))))))
+
+;; The areas of menu m where it draws them, in its place: what the
+;; pointer reads too.
+(define (placed-menu-areas m) (with-place 'menu (lambda () (menu-areas m))))
+
+;; The menu's box: (values x y w h).
+(define (menu-geometry m) (apply values (cdar (placed-menu-areas m))))
 
 (define (point-in-menu? px py)
-  (let-values ([(x y w h) (menu-geometry *menu*)])
-    (point-in? px py x y w h)))
+  (apply point-in? px py (cdar (placed-menu-areas *menu*))))
 
 ;; Index of the entry under (px, py), or #f.
 (define (menu-entry-at px py)
-  (let-values ([(x y w h) (menu-geometry *menu*)])
-    (let loop ([es (menu-entries *menu*)]
-               [i 0]
-               [ey (+ y 5 (menu-header-height *menu*))])
-      (cond
-        [(null? es) #f]
-        [(pair? (car es))
-         (if (and (>= py ey) (< py (+ ey (menu-item-height)))
-                  (>= px x) (< px (+ x w)))
-             i
-             (loop (cdr es) (+ i 1) (+ ey (menu-item-height))))]
-        [else (loop (cdr es) (+ i 1) (+ ey 9))]))))
+  (let ([a (find (lambda (a)
+                   (and (fixnum? (car a)) (apply point-in? px py (cdr a))))
+                 (placed-menu-areas *menu*))])
+    (and a (car a))))
 
 (define (menu-select-next! dir)
   (let* ([es (list->vector (menu-entries *menu*))] [n (vector-length es)])
@@ -115,45 +141,49 @@
     (menu-filter-set! *menu* (string-append (menu-filter *menu*) str))
     (menu-select-next! 0)))
 
-(define (draw-menu)
+(define-part (draw-menu)
   (when *menu*
-    (let-values ([(x y w h) (menu-geometry *menu*)])
-      (let ([lh (font-line-height 'ui)] [m *menu*]
-            [ih (menu-item-height)] [fh (menu-field-height)])
-        (draw-shadow x y w h 8 12)   ; shadow
-        (fill-round-rect x y w h 8 'bg-2)
-        (stroke-round-rect x y w h 8 'window-border-focus)
-        (when (menu-filter? m)
-          (fill-round-rect (+ x 6) (+ y 6) (- w 12) fh 6 'bg-0)
-          (let ([f (menu-filter m)] [ty (+ y 6 (/ (- fh lh) 2))])
-            (if (string=? f "")
-                (draw-text (+ x 16) ty "Type to filter…" 'text-faint 'ui)
-                ;; inside the field; a longer filter scrolls, so its end and
-                ;; the caret stay in view
-                (call-with-clip (+ x 6) (+ y 6) (- w 12) fh
-                  (lambda ()
-                    (let ([ex (draw-text (min (+ x 16)
-                                              (- (+ x w) 19 (text-width f 'ui)))
-                                         ty f 'text 'ui)])
-                      (fill-rect (+ ex 1) (+ y 6 (round (/ (- fh lh 1) 2)))
-                                 1.5 (round (+ lh 1)) 'accent)))))))
-        (let loop ([es (menu-entries m)]
-                   [i 0]
-                   [ey (+ y 5 (menu-header-height m))])
-          (unless (null? es)
-            (let ([e (car es)])
-              (if (pair? e)
-                  (begin
-                    (when (= i (menu-sel m))
-                      (fill-round-rect (+ x 5) ey (- w 10) ih 5
-                                       (alpha 'accent 0.22)))
-                    (draw-text (+ x 18) (+ ey (/ (- ih lh) 2)) (car e)
-                               (if (= i (menu-sel m)) 'text 'text-dim) 'ui)
-                    (loop (cdr es) (+ i 1) (+ ey ih)))
-                  (begin
-                    (draw-line (+ x 12) (+ ey 4.5) (- (+ x w) 12) (+ ey 4.5)
-                               'window-border)
-                    (loop (cdr es) (+ i 1) (+ ey 9)))))))))))
+    (with-place 'menu
+      (lambda ()
+        (let* ([m *menu*] [areas (menu-areas m)]
+               [es (list->vector (menu-entries m))] [font (theme 'menu-font)]
+               [lh (font-line-height font)] [f (assq 'filter areas)])
+          (apply ui-draw-panel (append (cdar areas) '((menu))))
+          (when f
+            (apply (lambda (fx fy fw fh) (draw-menu-filter m fx fy fw fh))
+                   (cdr f)))
+          (for-each
+           (lambda (a)
+             (apply
+              (lambda (what x y w h)
+                (cond
+                  [(eq? what 'separator)
+                   (ui-draw-separator (+ x 12) y (- w 24) h '())]
+                  [(fixnum? what)
+                   (let ([sel? (= what (menu-sel m))])
+                     (when sel? (ui-draw-highlight (+ x 5) y (- w 10) h '()))
+                     (draw-text (+ x (theme 'menu-text-x)) (+ y (/ (- h lh) 2))
+                                (car (vector-ref es what))
+                                (theme (if sel? 'menu-ink-selected 'menu-ink))
+                                font))]))
+              a))
+           areas))))))
+
+;; The filter's field: what is typed, or a hint; a longer filter scrolls,
+;; so its end and the caret stay in view.
+(define (draw-menu-filter m x y w h)
+  (let* ([font (theme 'menu-font)] [lh (font-line-height font)]
+         [f (menu-filter m)] [ty (+ y (/ (- h lh) 2))])
+    (fill-round-rect x y w h 6 'bg-0)
+    (if (string=? f "")
+        (draw-text (+ x 10) ty "Type to filter…" 'text-faint font)
+        (call-with-clip x y w h
+          (lambda ()
+            (let ([ex (draw-text (min (+ x 10)
+                                      (- (+ x w) 13 (text-width f font)))
+                                 ty f 'text font)])
+              (fill-rect (+ ex 1) (+ y (round (/ (- h lh 1) 2))) 1.5
+                         (round (+ lh 1)) 'accent)))))))
 
 ;;; The surface: over the bars, under the toasts.
 
@@ -206,8 +236,8 @@
       (open-launcher! 6 (+ 2 (topbar-height)))))
 
 ;; A window's menu: a right click on its title (the window manager calls
-;; it) or on its taskbar button.
-(define (open-window-menu! win x y)
+;; the part) or on its taskbar button.
+(define-part (open-window-menu win x y)
   (open-menu! x y
               (list (cons "Bind to $w for the REPL"
                           (lambda ()

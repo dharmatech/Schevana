@@ -8,7 +8,7 @@
 
 (define (mac-radius win) (if (maximized? win) 0 (theme 'corner-radius)))
 
-(define (mac-buttons win)
+(define (mac-regions win)
   (let ([cy (/ (title-height) 2)])
     (map (lambda (kind cx) (list kind (- cx 9) (- cy 9) 18 18))
          '(close minimize maximize) '(18 38 58))))
@@ -25,6 +25,9 @@
       [(maximize) (draw-line (- cx a) cy (+ cx a) cy ink lw)
                   (draw-line cx (- cy a) cx (+ cy a) ink lw)])))
 
+;; The top of a focused title's gradient.
+(color-default! 'mac-title-top (rule (mix 'title-bg-focus 'text 0.04)))
+
 (define (mac-draw-under win x y w h focused? hover pressed)
   (let ([th (title-height)] [r (mac-radius win)]
         [glyphs? (memq hover '(close minimize maximize))])
@@ -33,7 +36,7 @@
     (call-with-round-clip x y w h r
       (lambda ()
         (fill-gradient x y w th
-                       (if focused? (mix 'title-bg-focus 'text 0.04) 'title-bg)
+                       (if focused? 'mac-title-top 'title-bg)
                        (if focused? 'title-bg-focus 'title-bg))
         (draw-line x (+ y th -0.5) (+ x w) (+ y th -0.5) (alpha #x000000 0.5))
         (for-each (lambda (cx color glyph)
@@ -57,8 +60,8 @@
   (unless (or (maximized? win) (< w 14) (< h 14))
     (draw-resize-grip (+ x w) (+ y h))))
 
-(define-window-style mac "Mac"
-  'radius mac-radius
-  'buttons mac-buttons
-  'draw-under mac-draw-under
-  'draw-over mac-draw-over)
+(define-style mac "Mac"
+  'frame-radius 'mac-radius
+  'frame-regions 'mac-regions
+  'frame-under 'mac-draw-under
+  'frame-over 'mac-draw-over)

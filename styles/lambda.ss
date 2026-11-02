@@ -33,7 +33,7 @@
          [gap (if (string=? title "") 0 lambda-gap)])
     (values title tx (round (+ tx (text-width title 'title) gap)))))
 
-(define (lambda-buttons win)
+(define (lambda-regions win)
   (let-values ([(title tx bx) (lambda-tab win)])
     (let ([bw (lambda-button-width)] [th (lambda-tab-height)])
       (map (lambda (kind i) (list kind (+ bx (* i bw)) 0 bw th))
@@ -105,7 +105,7 @@
                                         ink hover pressed))
                   '(minimize maximize close) '(0 1 2))))))
 
-(define-window-style lambda "Lambda"
-  'insets lambda-insets
-  'buttons lambda-buttons
-  'draw-under lambda-draw-under)
+(define-style lambda "Lambda"
+  'frame-insets 'lambda-insets
+  'frame-regions 'lambda-regions
+  'frame-under 'lambda-draw-under)
