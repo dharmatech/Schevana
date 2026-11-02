@@ -122,7 +122,11 @@
                              '(width . 1.5))
                        'close)))))
 
+;; A double click on the title folds the sheet up to it (shades it).
 (define-style fold "Fold"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
+  'title-double-click 'shade
   'frame-insets 'fold-insets
   'frame-regions 'fold-regions
   'frame-under 'fold-draw-under)

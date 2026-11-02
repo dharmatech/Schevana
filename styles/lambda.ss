@@ -103,7 +103,11 @@
                                         ink hover pressed))
                   '(minimize maximize close) '(0 1 2))))))
 
+;; The wheel on the tab rolls the window up into it (shades it) and down.
 (define-style lambda "Lambda"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
+  'title-wheel 'shade
   'frame-insets 'lambda-insets
   'frame-regions 'lambda-regions
   'frame-under 'lambda-draw-under)

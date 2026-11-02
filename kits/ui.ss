@@ -540,11 +540,11 @@
 ;; arrow).
 (for-each theme-default!
   '(control-height glyph-size small-glyph-size gap pad)
-  (list (rule (max 28 (round (+ (font-line-height 'ui) 13))))
-        (rule (round (* 4/5 (font-line-height 'ui))))
-        (rule (round (* 4/5 (font-line-height 'ui-small))))
-        (rule (max 8 (round (/ (font-line-height 'ui) 2))))
-        (rule (max 12 (round (* (font-line-height 'ui) 4/5))))))
+  (list (theme-rule (max 28 (round (+ (font-line-height 'ui) 13))))
+        (theme-rule (round (* 4/5 (font-line-height 'ui))))
+        (theme-rule (round (* 4/5 (font-line-height 'ui-small))))
+        (theme-rule (max 8 (round (/ (font-line-height 'ui) 2))))
+        (theme-rule (max 12 (round (* (font-line-height 'ui) 4/5))))))
 (define (ui-control-height) (theme 'control-height))
 (define (ui-glyph-size) (theme 'glyph-size))
 (define (ui-small-glyph-size) (theme 'small-glyph-size))
@@ -656,7 +656,7 @@
 ;; Vector glyphs, no font: check cross plus chevron-down chevron-left
 ;; chevron-right search expand, the triangles up down left right (sort
 ;; marks, scroll arrows, submenus; sort-up and sort-down, their old names),
-;; centered in the box; and a window's
+;; centered in the box; pin and undo (Settings' rows); and a window's
 ;; buttons, close minimize maximize restore shade, filling a square box
 ;; in lines of 1 pixel. flags may hold (ink . color) and (width . w),
 ;; the line's.
@@ -700,6 +700,17 @@
        (fill-rect (+ ox 2) oy (- s 2) 1 ink)
        (fill-rect (+ ox s -1) oy 1 (- s 2) ink)]
       [(shade) (stroke-rect ox oy s (ceiling (/ s 3)) ink t)]   ; a title
+      [(pin)   ; a pushpin from the side: its head, its collar, its point
+       (fill-circle (+ ox (* 0.5 s)) (+ oy (* 0.3 s)) (* 0.25 s) ink)
+       (line (p 0.22 0.56) (p 0.78 0.56))
+       (line (p 0.5 0.56) (p 0.5 1))]
+      [(undo)   ; ↺: three quarters of a circle, an arrowhead at its top
+       (apply line (map (lambda (i)
+                          (let ([a (* pi (/ (- i 6) 12))])
+                            (p (+ 0.5 (* 0.38 (cos a)))
+                               (+ 0.56 (* 0.38 (sin a))))))
+                        (iota 19)))
+       (triangle '(0.26 0.18) '(0.56 0) '(0.56 0.36))]
       [(search)
        (stroke-circle (+ ox (* 0.43 s)) (+ oy (* 0.43 s)) (* 0.25 s) ink lw)
        (line (p 0.62 0.62) (p 0.82 0.82))]
@@ -726,8 +737,8 @@
                   label (plist-ref opts 'glyph #f)))
 
 ;; A primary button's fill while pressed, and under the pointer.
-(color-default! 'primary-pressed (rule (mix 'accent 'bg-0 0.15)))
-(color-default! 'primary-hover (rule (mix 'accent 'text 0.15)))
+(color-default! 'primary-pressed (theme-rule (mix 'accent 'bg-0 0.15)))
+(color-default! 'primary-hover (theme-rule (mix 'accent 'text 0.15)))
 
 ;; With hover and selected only it is the look Settings was built with.
 (define-part (ui-draw-button x y w h flags label glyph)
@@ -994,10 +1005,14 @@
                    (iota k))
               cut?))))
 
-;; flags: page, toolbar (a line below), side (a line at the left), well.
+;; flags: page, toolbar (a line below), side (a line at the left), nav
+;; (a deeper column, a line at the right: Settings' tabs), well.
 (define-part (ui-draw-surface x y w h flags)
   (cond
     [(memq 'well flags) (fill-round-rect x y w h 8 'bg-0)]
+    [(memq 'nav flags)
+     (fill-rect x y w h 'bg-0)
+     (fill-rect (+ x w -1) y 1 h 'window-border)]
     [else
      (fill-rect x y w h 'bg-1)
      (cond [(memq 'toolbar flags)
@@ -1307,9 +1322,9 @@
 ;; A scroll view: body is (lambda (top) ... bottom), drawing its content
 ;; from top and returning where it ends; it is clipped to the view, and
 ;; the wheel and a scroll bar over its edge move it. The style places the
-;; bar (scrollbar-side right, left, or outside: in the left margin its
-;; frame leaves, for a view against the window's left edge; on the right
-;; where there is none) and shows it
+;; bar (scrollbar-side right, left, or outside: over all of its frame's
+;; region of kind scrollbar, for a view against the window's left edge;
+;; on the right where there is none) and shows it
 ;; always or while the pointer is over the view (scrollbar-show hover;
 ;; outside, over the margin); it lies over the content, which never
 ;; reflows for it.
@@ -1357,11 +1372,10 @@
                     (loop (cdr rs)))))))
         (let* ([win (current-window)] [bid (list id 'bar)]
                [side (theme 'scrollbar-side)]
-               [margin (if (and win (eq? side 'outside) (zero? x))
-                           (let-values ([(l t r b) (frame-insets win)]) l)
-                           0)]
-               [out? (> margin 0)]   ; all of the margin its frame leaves
-               [bw (if out? margin (ui-scrollbar-width))]
+               [r (and win (eq? side 'outside) (zero? x)
+                       (assq 'scrollbar (frame-regions win)))]
+               [out? (and r #t)]   ; all of the region its frame leaves
+               [bw (if out? (list-ref r 3) (ui-scrollbar-width))]
                [hover (and win (window-hover win))])
           (when (and (> content h)
                      (or (eq? (theme 'scrollbar-show) 'always)
@@ -1370,13 +1384,19 @@
                              (eq? hover 'scrollbar)
                              (and (eq? hover 'content)
                                   (ui-hover? ui x y w h)))))
-            (let ([bx (cond [out? (- bw)] [(eq? side 'left) x]
-                            [else (- (+ x w) bw)])])
-              (ui-scrollbar ui bid bx y bw h new content h
+            ;; outside, all of the region (in the content's coordinates)
+            (let-values ([(bx by bh)
+                          (if out?
+                              (let-values ([(l t . rb) (frame-insets win)])
+                                (values (- (cadr r) l) (- (caddr r) t)
+                                        (list-ref r 4)))
+                              (values (if (eq? side 'left) x (- (+ x w) bw))
+                                      y h))])
+              (ui-scrollbar ui bid bx by bw bh new content h
                             (lambda (off) (ui-memo! ui id (cons off most))))
               (when out?   ; for the frame's over pass: ui-frame-scrollbar
                 (hashtable-set! (window-props win) 'scrollbar
-                                (list bx y bw h (ui-flags ui bid)
+                                (list bx by bw bh (ui-flags ui bid)
                                       (/ new content) (/ h content)))))))))))
 
 ;; A scroll bar at x y w h, for a view h high showing content from off on:
@@ -1530,8 +1550,9 @@
 (define (ui-table-page ui id) (ui-memo ui (list id 'page) 1))
 
 (theme-default! 'table-header-height
-                (rule (round (+ (font-line-height 'ui-small) 13))))
-(theme-default! 'table-row-height (rule (round (+ (font-line-height 'ui) 13))))
+                (theme-rule (round (+ (font-line-height 'ui-small) 13))))
+(theme-default! 'table-row-height
+                (theme-rule (round (+ (font-line-height 'ui) 13))))
 (define (ui-table-header-height) (theme 'table-header-height))
 (define (ui-table-row-height) (theme 'table-row-height))
 
@@ -1910,7 +1931,7 @@
                      (if (>= frac 1) 'green 'accent))))
 
 (theme-default! 'progress-height
-                (rule (max 4 (round (* (font-line-height 'ui) 0.4)))))
+                (theme-rule (max 4 (round (* (font-line-height 'ui) 0.4)))))
 (define (ui-progress-height) (theme 'progress-height))
 
 ;;; ------------------------------------------------------------------
@@ -1933,9 +1954,11 @@
                                        'window-border-focus)))))
 
 ;; The entry chosen in a menu or a list; with outline (a menu's
-;; menu-hover), a 1-pixel box, and pressed, filled: inverted.
+;; menu-hover), a 1-pixel box, and pressed, filled: inverted. With hover,
+;; one under the pointer, not chosen (Settings' list).
 (define-part (ui-draw-highlight x y w h flags)
-  (cond [(not (memq 'outline flags))
+  (cond [(memq 'hover flags) (fill-round-rect x y w h 5 'bg-2)]
+        [(not (memq 'outline flags))
          (fill-round-rect x y w h 5 (alpha 'accent 0.22))]
         [(memq 'pressed flags) (px-fill x y w h 'text)]
         [else (px-ring x y w h 'text)]))

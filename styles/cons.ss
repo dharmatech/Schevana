@@ -84,9 +84,9 @@
 ;; is drawn: hinting makes it 9 px at 100% but 10 logical px at 200%. The
 ;; baseline goes on a whole device pixel, never below the middle.
 (define (cons-title-y cy c)
-  (let*-values ([(l top w h) (text-ink "H" 'title)]
-                [(base) (+ cy (/ c 2) (/ (- top) 2))])
-    (- (/ (floor (* base *scale*)) *scale*) (font-ascent 'title))))
+  (let-values ([(l top w h) (text-ink "H" 'title)])
+    (- (px-baseline (+ cy (/ c 2) (/ (- top) 2)) floor)
+       (font-ascent 'title))))
 
 (define (cons-tint kind hover pressed color)
   (cond [(eq? pressed kind) (alpha color 0.6)]
@@ -124,6 +124,8 @@
   (stroke-rect x y w h (if focused? 'window-border-focus 'window-border)))
 
 (define-style cons "Cons"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
   'frame-regions 'cons-regions
   'frame-under 'cons-draw-under
   'frame-over 'cons-draw-over)

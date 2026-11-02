@@ -211,7 +211,8 @@
   (press! 'tab)
   (steps 1)
   (check "after (theme ' it offers theme keys only"
-         (equal? (offered) '("accent" "accent-2" "panel-accent")))
+         (equal? (offered)
+                 '("accent" "accent-2" "accent-choices" "panel-accent")))
   (press! 'escape)
   (steps 1)
   (check "escape closes the list" (not (offered)))
@@ -666,8 +667,9 @@
 (check "interlisp style draws" (style-scene! 'interlisp))
 (let ([w (open-window "Gamma" 'size '(300 . 150) 'pos '(200 . 140))])
   (let-values ([(l t r b) (frame-insets w)])
-    (check "interlisp has a 2-pixel border, a 15-pixel title bar and no buttons"
-           (and (= l 2) (= r 2) (= b 2) (= t 15) (null? (frame-regions w)))))
+    (check "interlisp has Medley's border of 4 (2 of ink, 2 of paper), a \
+            15-pixel title strip and no buttons"
+           (and (= l 4) (= r 4) (= b 4) (= t 17) (null? (frame-regions w)))))
   (inject! '(mouse-move 300 147) '(mouse-down 300 147 right 1)
            '(mouse-up 300 147 right))
   (steps 2)
@@ -702,6 +704,16 @@
 (screenshot (string-append out-dir "/style-genera-palette.png"))
 (check "genera's palette keeps its own panel text"
        (= (theme 'panel-text) #xffffff))
+(reset-theme!)
+
+(check "cadr style draws" (style-scene! 'cadr))
+(let ([w (open-window "Epsilon" 'size '(300 . 150) 'pos '(200 . 140))])
+  (let-values ([(l t r b) (frame-insets w)])
+    (check "the CADR is Genera's frame with a 1-pixel border and margin, \
+            its who line at the bottom and no top bar"
+           (and (= l 2) (= t 2) (= r 2) (> b 16) (= (topbar-height) 0)
+                (> (taskbar-height) 0))))
+  (close-window! w))
 (reset-theme!)
 
 ;; Depth and size gadgets, which no built-in style uses now, still work in
@@ -797,24 +809,126 @@
 (for-each close-window! (windows))
 
 ;; Settings: every control is a theme key; changes apply live and persist.
+;; Save as new style writes into the output folder, never ~/.schevana.d.
 (for-each close-window! (windows))
+(set! *style-save-directory* (string-append out-dir "/styles"))
+(let ([f (string-append *style-save-directory* "/my-windows.ss")])
+  (when (file-exists? f) (delete-file f)))
+;; A style with its own palette and fonts, and few options: the text size
+;; is not one.
+(define-style test-serif "Test serif"
+  'palette 'gruvbox 'ui-font "serif" 'wallpaper 'flat
+  'options '(palette accent wallpaper corner-radius))
 (define s (settings))
+(define (settings-ui) (window-ref s 'ui))
 (steps 2)
-;; The Layout tab's sliders sit below the style cards, out of view once
-;; there are enough styles: scroll the pane to its end.
+;; The pane's last rows sit below the style cards, out of view: scroll the
+;; pane to its end.
 (define (scroll-settings-down!)
   (let-values ([(cx cy cw ch) (content-rect s)])
     (apply inject! `(mouse-move ,(+ cx cw -20) ,(+ cy 100))
-           (make-list 30 '(wheel 0 -1)))
+           (make-list 60 '(wheel 0 -1)))
     (steps 2)))
 (check "settings opens" (and s (not (window-error s))))
 (check "settings is single-instance" (eq? s (settings)))
-(click-ui! s '(palette nord))
-(check "clicking a preset applies it"
-       (and (= (theme 'accent) #x88c0d0) (eq? (theme 'palette) 'nord)))
+;; An old, flat theme file shows as its style, its choices your changes.
+(call-with-output-file *theme-file*
+  (lambda (p) (write '((window-style . genera) (accent . #x3366cc)) p))
+  'replace)
+(load-saved-theme!)
+(steps 2)
+(check "an old theme file shows in Settings as its style and your changes"
+       (and (eq? (current-style) 'genera) (= (theme 'accent) #x3366cc)
+            (ui-find (settings-ui) '(revert accent))
+            (not (ui-find (settings-ui) '(revert corner-radius)))))
+(delete-file *theme-file*)
+(reset-theme!)
+(set-style! 'mac)
+(steps 2)
 (screenshot (string-append out-dir "/settings-theme.png"))
-(click-ui! s '(accent orange))
+(click-ui! s '(style test-serif))
+(check "a style card switches the style, its palette, wallpaper and fonts \
+        at once"
+       (and (eq? (current-style) 'test-serif) (eq? (theme 'palette) 'gruvbox)
+            (eq? (theme 'wallpaper) 'flat)
+            (equal? (font-family (get-font 'ui)) "serif")))
+;; A style's own slider keeps to its range: Genera's border is 1 to 4.
+(click-ui! s '(style genera))
+(scroll-to-ui! s '(option genera-border))
+(drag-ui! s '(option genera-border) 1)
+(check "a style's own slider stops at its most"
+       (= (theme 'genera-border) 4))
+(reset-style!)
+;; The keyboard reaches the cards, the swatches and the sidebar's tabs.
+(define (tab-to! id)
+  (let loop ([n 0])
+    (cond [(equal? (ui-focused (settings-ui)) id) #t]
+          [(= n 400) #f]
+          [else (press! 'tab) (steps 1) (loop (+ n 1))])))
+(click-ui! s '(style mac))
+(let* ([reached (map tab-to! '((palette nord) (swatch orange) (tab fonts)
+                               (style windows)))]
+       [chosen (begin (press! #\space) (steps 2) (current-style))]
+       [tabbed (begin (tab-to! '(tab fonts)) (press! 'return) (steps 2)
+                      (settings-st-tab (window-ref s 'state)))])
+  (check "Tab reaches the palette cards, the swatches, the sidebar's tabs \
+          and the style cards; space chooses a card, Return a tab"
+         (and (for-all values reached) (eq? chosen 'windows)
+              (eq? tabbed 'fonts))))
+(click-ui! s '(tab theme))
+(click-ui! s '(style mac))
+(click-ui! s '(palette nord))
+(check "clicking a palette applies it, to this style"
+       (and (= (theme 'accent) #x88c0d0) (eq? (theme 'palette) 'nord)
+            (equal? (style-changes-of 'mac) '(palette nord))))
+(click-ui! s '(swatch orange))
 (check "accent swatch sets the accent" (= (theme 'accent) #xd08770))
+(scroll-to-ui! s '(option corner-radius))
+(drag-ui! s '(option corner-radius) 0)
+(check "a slider sets a size" (= 0 (theme 'corner-radius)))
+(click-ui! s '(style windows))
+(let ([away (list (theme 'corner-radius) (theme 'palette))])
+  (click-ui! s '(style mac))
+  (check "a change is remembered for its style across switches"
+         (and (equal? away (list (theme-default 'corner-radius)
+                                 (theme-default 'palette)))
+              (= 0 (theme 'corner-radius)) (eq? (theme 'palette) 'nord)
+              (ui-find (settings-ui) '(revert corner-radius)))))
+(click-ui! s '(revert corner-radius))
+(check "↺ drops one change" (= (theme 'corner-radius) 9))
+(scroll-to-ui! s '(option corner-radius))
+(drag-ui! s '(option corner-radius) 0)
+(screenshot (string-append out-dir "/settings-changed.png"))
+;; The text size is on the Fonts tab: pinned, it holds in every style
+;; that honors it, and test-serif does not.
+(click-ui! s '(tab fonts))
+(scroll-to-ui! s '(option ui-font-size))
+(drag-ui! s '(option ui-font-size) 0.2)
+(let ([size (theme 'ui-font-size)])
+  (click-ui! s '(pin ui-font-size))
+  (check "a pin makes the change an Override"
+         (and (= (theme 'ui-font-size) size)
+              (equal? (theme-overrides) (list 'ui-font-size size))
+              (not (plist-has? (style-changes-of 'mac) 'ui-font-size))))
+  (set-style! 'windows)
+  (steps 2)
+  (let ([windows (theme 'ui-font-size)])
+    (set-style! 'test-serif)
+    (steps 2)
+    (check "a pin holds in every style that honors it, and is passed by \
+            where the style sets it"
+           (and (= windows size) (= (theme 'ui-font-size) 13)
+                (eq? (car (theme-source 'ui-font-size)) 'built-in)
+                (not (ui-find (settings-ui) '(option ui-font-size)))
+                (not (ui-find (settings-ui) '(pin ui-font-size)))))
+    (screenshot (string-append out-dir "/settings-fonts-unused.png"))
+    (set-style! 'mac)
+    (steps 2)
+    (click-ui! s '(pin ui-font-size))
+    (check "unpinned, the Override is this style's change again"
+           (and (null? (theme-overrides))
+                (= size (plist-ref (style-changes-of 'mac) 'ui-font-size #f))))
+    (set-theme! 'ui-font-size 13)))
 (click-ui! s '(tab colors))
 (click-ui! s '(color accent))
 (click-ui! s 'hex)
@@ -829,13 +943,46 @@
        (let-values ([(h sat l) (color->hsl (theme 'accent))])
          (< (abs (- l 0.25)) 0.02)))
 (screenshot (string-append out-dir "/settings-colors.png"))
-(click-ui! s '(tab layout))
+;; Reset, after a dialog listing the changes; Save as new style.
+(click-ui! s '(tab theme))
 (click-ui! s '(style windows))
-(check "style card sets the window style" (eq? (theme 'window-style) 'windows))
-(screenshot (string-append out-dir "/settings-layout-windows.png"))
-(click-ui! s '(style genera))
-(check "and Genera" (eq? (theme 'window-style) 'genera))
-(click-ui! s '(style mac))
+(set-theme! 'corner-radius 3)
+(set-theme! 'bell 'screen)
+(steps 2)
+(click-ui! s 'reset-style)
+(screenshot (string-append out-dir "/settings-reset.png"))
+(let ([shown (and (ui-find (settings-ui) '(reset-dialog 1)) #t)])
+  (click-ui! s '(reset-dialog 1))
+  (check "Reset asks first, then forgets the style's changes"
+         (and shown (null? (style-changes-of 'windows))
+              (= (theme 'corner-radius) 9) (eq? (theme 'bell) 'none))))
+(set-theme! 'corner-radius 3)
+(set-theme! 'accent #x112233)
+(steps 2)
+(click-ui! s 'save-style)
+(press! 'backspace)   ; the title is selected: typing replaces it
+(type! "My Windows")
+(screenshot (string-append out-dir "/settings-save.png"))
+(press! 'return)
+(steps 2)
+(let ([file (string-append out-dir "/styles/my-windows.ss")])
+  (check "Save as new style writes a style file that loads, its parent the \
+          style and its settings your changes, and chooses it"
+         (and (file-exists? file)
+              (equal? (call-with-input-file file read)
+                      '(define-style my-windows "My Windows"
+                         'parent 'windows 'accent #x112233
+                         'corner-radius 3))
+              (eq? (current-style) 'my-windows)
+              (null? (style-changes-of 'windows))
+              (= (theme 'accent) #x112233)
+              (equal? (theme-source 'corner-radius) '(style my-windows 3))
+              (ui-find (settings-ui) '(style my-windows)))))
+(set-style! 'mac)
+(set! *styles* (remp (lambda (s) (memq (style-name s) '(my-windows test-serif)))
+                     *styles*))
+(steps 2)
+(click-ui! s '(tab theme))
 (scroll-settings-down!)
 ;; a column of pixels down the middle of the pane
 (define (settings-column)
@@ -854,18 +1001,19 @@
   (steps 1)
   (check "the wheel past the pane's end shows no frame past it"
          (equal? at-end (settings-column))))
-(drag-ui! s '(metric corner-radius) 0)
-(check "layout slider sets a metric" (= 0 (theme 'corner-radius)))
-(drag-ui! s '(metric title-height) 1)
+(scroll-to-ui! s '(option title-height))
+(drag-ui! s '(option title-height) 1)
 (check "title bar height follows" (= 44 (theme 'title-height)))
-(screenshot (string-append out-dir "/settings-layout.png"))
+(screenshot (string-append out-dir "/settings-behavior.png"))
 (click-ui! s '(tab fonts))
-(click-ui! s '(ui-font "serif"))
-(drag-ui! s '(metric mono-font-size) 1)
+(click-ui! s '((option ui-font) "serif"))
+(scroll-to-ui! s '(option mono-font-size))
+(drag-ui! s '(option mono-font-size) 1)
 (check "font settings rebuild fonts"
        (and (equal? (font-family (get-font 'ui)) "serif")
-            (= 44 (font-size (get-font 'mono)))))
-(drag-ui! s '(metric ui-font-size) 1)
+            (= 36 (font-size (get-font 'mono)))))
+(scroll-to-ui! s '(option ui-font-size))
+(drag-ui! s '(option ui-font-size) 1)
 (check "at the biggest fonts the sidebar button fits its label"
        (let ([r (ui-find (window-ref s 'ui) 'reset-all)])
          (and (= 36 (theme 'ui-font-size))
@@ -883,14 +1031,14 @@
          (and (> (settings-st-pane-scroll (window-ref s 'state)) 0)
               (ui-find (window-ref s 'ui) 'pane-scrollbar))))
 (screenshot (string-append out-dir "/settings-fonts.png"))
-(click-ui! s '(tab layout))
-(scroll-settings-down!)
-(drag-ui! s '(metric title-height) 0.5)
+(click-ui! s '(tab theme))
+(scroll-to-ui! s '(option title-height))
+(drag-ui! s '(option title-height) 0.5)
 (check "chrome height sliders start at what the font needs"
        (and (> (theme 'title-height) (theme 'title-height-min))
             (= (theme 'title-height) (title-height))))
 (click-ui! s '(tab fonts))
-;; 80 columns of 44 px would not fit this screen
+;; 80 columns of 36 px would not fit this screen
 (set-theme! 'mono-font-size 22)
 (let ([r (repl)])
   (steps 1)
@@ -2736,7 +2884,7 @@
          (not (window-error (find-window 'clock)))))
 (let ([s (settings)])
   (steps 2)
-  (click-ui! s '(tab layout))
+  (click-ui! s '(tab theme))
   (click-ui! s '(style interlisp))
   (check "settings still work after reload"
          (and (eq? (theme 'window-style) 'interlisp) (not (window-error s))))
@@ -3311,14 +3459,20 @@
   (click-ui! s 'hex)
   (let ([n (count-draws! s)])
     (steps 2)
-    (let ([n0 (n)] [editing? (and (settings-st-hex st) #t)])
-      (let-values ([(x y) (ui-point s '(color accent) 0.5)])
-        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1)
-                 `(mouse-up ,x ,y right)))
+    (type! "12")
+    (steps 2)
+    (let ([n0 (n)]
+          [editing? (and (equal? (ui-focused (window-ref s 'ui)) 'hex)
+                         (equal? (settings-st-hex st) "12"))])
+      (let-values ([(x y) (ui-point s '(color bg-1) 0.5)])
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                 `(mouse-up ,x ,y left)))
       (steps 2)
       (check
-       "right-clicking Settings while editing a hex color closes the editor"
-       (and editing? (not (settings-st-hex st)) (> (n) n0))))
+       "a press elsewhere while typing a hex color leaves its field, the \
+        typing dropped"
+       (and editing? (not (settings-st-hex st)) (> (n) n0)
+            (eq? (settings-st-key st) 'bg-1))))
     (click-ui! s '(tab display))
     (let ([n0 (n)])
       (press! 'f11)

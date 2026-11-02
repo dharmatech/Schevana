@@ -10,8 +10,8 @@
 ;;; (theme-source 'accent)          which layer gives it
 ;;;
 ;;; A rule is a setting computed from others when the table is built:
-;;; 'selection (rule (mix 'accent 'bg-1 0.65)). A part is a setting whose
-;;; value is a procedure or its name: 'frame-under 'mac-draw-under.
+;;; 'selection (theme-rule (mix 'accent 'bg-1 0.65)). A part is a setting
+;;; whose value is a procedure or its name: 'frame-under 'mac-draw-under.
 ;;; Anywhere a color is expected you may pass a theme key symbol instead.
 
 (defvar *theme* (make-eq-hashtable))   ; every setting in effect
@@ -22,16 +22,17 @@
 (defvar *theme-file* (format "~a/.schevana-theme.ss" (or (getenv "HOME") ".")))
 
 (defvar *style-name* 'mac)   ; the chosen style's name
-(defvar *changes* '())       ; ((style key value ...) ...): yours, per style
-(defvar *overrides* '())     ; (key value ...): on top of every style
+;; ((style key value ...) ...): yours, per style
+(defvar *style-changes* '())
+(defvar *theme-overrides* '())   ; (key value ...): on top of every style
 (defvar *scale-setting* 0)   ; the display's, in percent; 0 follows it
 
 ;; A setting computed from others when the theme is built.
-(define-record-type (rule-box make-rule rule?)
+(define-record-type (theme-rule-box make-theme-rule theme-rule?)
   (nongenerative schevana-rule-1)
   (fields thunk))
-(define-syntax rule
-  (syntax-rules () [(_ e) (make-rule (lambda () e))]))
+(define-syntax theme-rule
+  (syntax-rules () [(_ e) (make-theme-rule (lambda () e))]))
 
 (define theme-unset (list 'unset))
 (define theme-busy (list 'busy))
@@ -49,22 +50,22 @@
 
 ;; (a palette may give any of these itself)
 (define derived-colors
-  (list 'selection (rule (mix 'accent 'bg-1 0.65))
-        'panel-text (rule (theme 'text))  'panel-dim (rule (theme 'text-faint))
-        'panel-hover (rule (theme 'bg-3))  'window-bg (rule (theme 'bg-1))
-        'window-border (rule (mix 'bg-3 'text 0.08))
-        'window-border-focus (rule (mix 'bg-3 'accent 0.45))
-        'title-bg (rule (theme 'bg-2))  'title-bg-focus (rule (theme 'bg-3))
-        'title-text (rule (theme 'text))
-        'title-text-dim (rule (theme 'text-faint))
-        'button-close (rule (theme 'red))  'button-min (rule (theme 'yellow))
-        'button-max (rule (theme 'green))
-        'button-idle (rule (mix 'bg-3 'text 0.15))))
+  (let ([same (lambda (k) (theme-rule (theme k)))])
+    (list 'selection (theme-rule (mix 'accent 'bg-1 0.65))
+          'panel-text (same 'text)  'panel-dim (same 'text-faint)
+          'panel-hover (same 'bg-3)  'window-bg (same 'bg-1)
+          'window-border (theme-rule (mix 'bg-3 'text 0.08))
+          'window-border-focus (theme-rule (mix 'bg-3 'accent 0.45))
+          'title-bg (same 'bg-2)  'title-bg-focus (same 'bg-3)
+          'title-text (same 'text)  'title-text-dim (same 'text-faint)
+          'button-close (same 'red)  'button-min (same 'yellow)
+          'button-max (same 'green)
+          'button-idle (theme-rule (mix 'bg-3 'text 0.15)))))
 
 ;; What the rest of the world adds as it loads (theme-default!): the
 ;; fonts, the frame's parts, the kits' and the desktop layer's; kept
 ;; across a reload until they add it again.
-(defvar *more-defaults* '())
+(defvar *added-defaults* '())
 
 (define default-theme
   (append base-colors derived-colors
@@ -80,27 +81,29 @@
             frame-edge 5  frame-corner 14  title-double-click maximize
             button-double-click ()  title-wheel none  drag-feedback live
             raise-on-click #t)
-          *more-defaults*))
+          *added-defaults*))
 
 (define color-keys
   (append (plist-keys base-colors) (plist-keys derived-colors)))
 
-;; The look's knobs: a style honors those its 'options list (none: all);
-;; one it does not list holds its own value whatever you change.
+;; The look's knobs, (key "Label" . kind): a style honors those its
+;; 'options list (none: all); one it does not list holds its own value
+;; whatever you change. Pixels: lo hi, and the key of the text's least.
 (define common-options
   '((palette "Palette" palette)  (accent "Accent" color)
     (wallpaper "Wallpaper" wallpaper)  (ui-font "Typeface" typeface)
     (ui-font-size "Text size" 9 36)  (mono-font "Code typeface" typeface)
     (mono-font-size "Code size" 9 36)  (corner-radius "Corner radius" 0 20)
-    (title-height "Title bar" 22 44)
+    (title-height "Title bar" 22 44 title-height-min)
     (shadow "Window shadow" 0 32)   ; shadow
-    (topbar-height "Top bar" 22 40)  (taskbar-height "Taskbar" 28 56)))
+    (topbar-height "Top bar" 22 40 topbar-height-min)
+    (taskbar-height "Taskbar" 28 56 taskbar-height-min)))
 
 ;; A rule still in the table is computed the first time it is read.
 (define (theme key)
   (let ([v (hashtable-ref *theme* key theme-unset)])
     (cond [(eq? v theme-unset) (errorf 'theme "unknown theme key ~s" key)]
-          [(rule? v) (compute-rule! key v)]
+          [(theme-rule? v) (compute-rule! key v)]
           [(eq? v theme-busy) (errorf 'theme "~s is computed from itself" key)]
           [else v])))
 
@@ -109,7 +112,7 @@
 (define (compute-rule! key r)
   (hashtable-set! *theme* key theme-busy)
   (let ([v (guard (c [#t (hashtable-set! *theme* key r) (raise c)])
-             ((rule-box-thunk r)))])
+             ((theme-rule-box-thunk r)))])
     (hashtable-set! *theme* key v)
     v))
 
@@ -200,7 +203,7 @@
 ;; The procedure the theme gives for key: a procedure, or the name of a
 ;; top-level one, looked up at each call, so a redefinition shows on the
 ;; next frame.
-(define (part key)
+(define (theme-part key)
   (let ([v (theme key)])
     (if (symbol? v) (top-level-value v *world-env*) v)))
 
@@ -216,14 +219,14 @@
        (with-syntax ([built-in (star #'k #'name)])
          #'(begin
              (define (built-in formal ...) body ...)
-             (define (name formal ...) ((part 'name) formal ...))
+             (define (name formal ...) ((theme-part 'name) formal ...))
              (theme-default! 'name 'built-in)))]
       [(k (name formal ... . rest) body ...)
        (with-syntax ([built-in (star #'k #'name)])
          #'(begin
              (define (built-in formal ... . rest) body ...)
              (define (name formal ... . rest)
-               (apply (part 'name) formal ... rest))
+               (apply (theme-part 'name) formal ... rest))
              (theme-default! 'name 'built-in)))])))
 
 ;; A built-in color setting: a change of colors alone changes no chrome.
@@ -234,7 +237,7 @@
 ;; A built-in setting, under every layer: kits and the desktop layer give
 ;; their parts and sizes so as they load.
 (define (theme-default! key value)
-  (set! *more-defaults* (cons* key value (plist-remove *more-defaults* key)))
+  (set! *added-defaults* (cons* key value (plist-remove *added-defaults* key)))
   (set! default-theme (cons* key value (plist-remove default-theme key)))
   (unless (hashtable-contains? *theme* key) (hashtable-set! *theme* key value))
   (hashtable-clear! *style-themes*))
@@ -251,8 +254,8 @@
 (define (style-theme name place . extra)
   (let ([k (list* name place extra)])
     (or (hashtable-ref *style-themes* k #f)
-        (let ([t (resolve-theme name *overrides* (changes-of name) place
-                                extra)])
+        (let ([t (resolve-theme name *theme-overrides* (style-changes-of name)
+                                place extra)])
           (hashtable-set! *style-themes* k t)
           t))))
 
@@ -274,8 +277,8 @@
 ;;; ------------------------------------------------------------------
 ;;; the layers
 
-(define (changes-of name)
-  (let ([p (assq name *changes*)]) (if p (cdr p) '())))
+(define (style-changes-of name)
+  (let ([p (assq name *style-changes*)]) (if p (cdr p) '())))
 
 (define (plist-has? p key)
   (and (pair? p) (pair? (cdr p))
@@ -356,8 +359,8 @@
 ;; not only of colors changes the chrome.
 (define (theme-changed!)
   (let* ([old *main-theme*]
-         [new (resolve-theme *style-name* *overrides*
-                             (changes-of *style-name*))]
+         [new (resolve-theme *style-name* *theme-overrides*
+                             (style-changes-of *style-name*))]
          [changed? (lambda (k)
                      (not (equal? (hashtable-ref old k theme-unset)
                                   (hashtable-ref new k theme-unset))))])
@@ -381,8 +384,8 @@
          [style (find (lambda (s) (plist-has? (style-settings s) key))
                       chain)]
          [palette (theme 'palette)])
-    (cond [(yours? *overrides*) (list 'overrides (theme key))]
-          [(yours? (changes-of name)) (list 'changes name (theme key))]
+    (cond [(yours? *theme-overrides*) (list 'overrides (theme key))]
+          [(yours? (style-changes-of name)) (list 'changes name (theme key))]
           [style (list 'style (style-name style) (theme key))]
           [(plist-has? (palette-colors palette) key)
            (list 'palette palette (theme key))]
@@ -444,17 +447,18 @@
 ;; (a broken rule, a bad value), the layers are as they were, and so is
 ;; the theme (a failure after the new table took over, in fonts, say).
 (define (change-layers! thunk)
-  (let ([s *style-name*] [c *changes*] [o *overrides*] [sc *scale-setting*])
-    (guard (e [#t (set! *style-name* s) (set! *changes* c)
-                  (set! *overrides* o) (set! *scale-setting* sc)
+  (let ([s *style-name*] [c *style-changes*] [o *theme-overrides*]
+        [sc *scale-setting*])
+    (guard (e [#t (set! *style-name* s) (set! *style-changes* c)
+                  (set! *theme-overrides* o) (set! *scale-setting* sc)
                   (guard (again [#t #f]) (theme-changed!))
                   (raise e)])
       (thunk)
       (theme-changed!))))
 
 (define (set-changes! name plist)
-  (set! *changes* (let ([rest (remp (lambda (c) (eq? (car c) name))
-                                    *changes*)])
+  (set! *style-changes* (let ([rest (remp (lambda (c) (eq? (car c) name))
+                                    *style-changes*)])
                     (if (null? plist) rest (cons (cons name plist) rest)))))
 
 ;; The one switch: frames, palette, everything you changed for it.
@@ -473,8 +477,8 @@
      (change-layers!
       (lambda ()
         (set-changes! *style-name*
-                      (cons* key value
-                             (plist-remove (changes-of *style-name*) key)))))
+                      (cons* key value (plist-remove
+                                        (style-changes-of *style-name*) key)))))
      (save-theme-soon!)]))
 
 ;; Forgets your changes to the chosen style: those keys, or all.
@@ -484,7 +488,7 @@
      (set-changes! *style-name*
                    (if (null? keys)
                        '()
-                       (fold-left plist-remove (changes-of *style-name*)
+                       (fold-left plist-remove (style-changes-of *style-name*)
                                   keys)))))
   (save-theme-soon!))
 
@@ -495,12 +499,12 @@
     (errorf 'override! "~s is not a style's setting" key))
   (change-layers!
    (lambda ()
-     (set! *overrides*
-       (let ([rest (plist-remove *overrides* key)])
+     (set! *theme-overrides*
+       (let ([rest (plist-remove *theme-overrides* key)])
          (if (pair? value) (cons* key (car value) rest) rest)))))
   (save-theme-soon!))
 
-(define (overrides) *overrides*)
+(define (theme-overrides) *theme-overrides*)
 
 ;; The display's scale in percent, 0 to follow the desktop: not a style's.
 (define (set-scale! pct)
@@ -521,7 +525,9 @@
 
 ;; Every style's changes and the Overrides go.
 (define (reset-theme!)
-  (change-layers! (lambda () (set! *changes* '()) (set! *overrides* '()))))
+  (change-layers!
+   (lambda () (set! *style-changes* '()) (set! *theme-overrides* '())))
+  (save-theme-soon!))
 
 ;;; ------------------------------------------------------------------
 ;;; persistence
@@ -553,20 +559,20 @@
         (fprintf p ";; Schevana appearance, written by Settings. Plain data; \
                     safe to edit.\n((version . 2)\n (style . ~s)\n \
                     (scale . ~s)\n (overrides" *style-name* *scale-setting*)
-        (pairs p *overrides*)
+        (pairs p *theme-overrides*)
         (fprintf p ")\n (changes")
         (for-each (lambda (c)
                     (fprintf p "\n  (~s" (car c))
                     (pairs p (cdr c))
                     (fprintf p ")"))
-                  *changes*)
+                  *style-changes*)
         (fprintf p "))\n")))
     (rename-file tmp *theme-file*)
     *theme-file*))
 
 (defvar *theme-save-pending* #f)
 
-;; Save shortly after the last change, so dragging a slider writes once.
+;; Saves 600 ms after a change, with the changes made meanwhile.
 (define (save-theme-soon!)
   (unless *theme-save-pending*
     (set! *theme-save-pending* #t)
@@ -575,18 +581,20 @@
                  (save-theme!)))))
 
 ;; A palette or style that is gone falls back, a wallpaper that is gone
-;; draws as the default; a value not of its default's kind is dropped.
+;; draws as the default; a value of no kind its defaults have is dropped
+;; (the built-in one, or a style's for its own options).
 (define (valid-theme-value? key v)
-  (let ([d (plist-ref default-theme key theme-unset)])
+  (let ([ds (map (lambda (p) (plist-ref p key #f))
+                 (filter (lambda (p) (plist-has? p key))
+                         (cons default-theme (map style-settings *styles*))))])
     (cond
       [(memq key color-keys)
        (or (fixnum? v) (stipple? v)
            (and (pair? v) (or (fixnum? (car v)) (symbol? (car v)))
                 (real? (cdr v))))]
       [(eq? key 'palette) (and (assq v *palettes*) #t)]
-      [else (and (not (eq? d theme-unset))
-                 (exists (lambda (kind?) (and (kind? d) (kind? v)))
-                         (list fixnum? string? symbol? boolean? list?)))])))
+      [else (exists (lambda (kind?) (and (kind? v) (exists kind? ds)))
+                    (list fixnum? string? symbol? boolean? list?))])))
 
 (define (registered-style s) (if (find-style s) s 'mac))
 
@@ -617,7 +625,7 @@
                (cons (cons 'wallpaper (ref 'desktop-pattern 'gradient))
                      (remp (lambda (kv) (eq? (car kv) 'desktop-pattern))
                            alist)))]
-         [derived? (lambda (k) (rule? (theme-default k)))]
+         [derived? (lambda (k) (theme-rule? (theme-default k)))]
          ;; the keys of kvs that keep? takes and that differ from the
          ;; theme these changes give
          [differing
@@ -641,8 +649,8 @@
          [scale (let ([s (ref 'scale 0)]) (if (fixnum? s) s 0))])
     (define (set-layers! style overrides changes)
       (set! *style-name* style)
-      (set! *overrides* overrides)
-      (set! *changes* changes)
+      (set! *theme-overrides* overrides)
+      (set! *style-changes* changes)
       (set! *scale-setting* scale))
     (if (eqv? (ref 'version 1) 2)
         (let ([cs (ref 'changes '())])
@@ -668,21 +676,8 @@
             (change-layers!
              (lambda () (load-theme-data! (filter pair? data))))))))))
 
-;; A world reloaded from before this file keeps its look: its one flat
-;; table, less its old defaults (what it would have saved), loads as an
-;; old file does. Then the theme until its first change, its rules
-;; computed when read (no color can be mixed before gfx.ss loads).
-(when (and (> (hashtable-size *theme*) 0)
-           (not (hashtable-contains? *theme* 'palette)))
-  (let ([old (if (top-level-bound? 'default-metrics)
-                 (append (top-level-value 'default-colors)
-                         (top-level-value 'default-metrics))
-                 '())])
-    (let-values ([(keys vals) (hashtable-entries *theme*)])
-      (load-theme-data!
-       (filter (lambda (kv)
-                 (not (equal? (cdr kv) (plist-ref old (car kv) theme-unset))))
-               (map cons (vector->list keys) (vector->list vals)))))))
-(set! *theme*
-  (resolve-theme *style-name* *overrides* (changes-of *style-name*)))
+;; The theme until its first change, its rules computed when read (no
+;; color can be mixed before gfx.ss loads).
+(set! *theme* (resolve-theme *style-name* *theme-overrides*
+                             (style-changes-of *style-name*)))
 (set! *main-theme* *theme*)

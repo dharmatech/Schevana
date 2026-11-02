@@ -70,11 +70,12 @@
                  (+ (draw-text x y (string c) color reticle-font) t))
                (reticle-snap x) (string->list s))))
 
-;; Brackets on the corners of the box (x y w h), arms a long and lw thick,
-;; on whole device pixels inside it. Each lies along two sides of its
-;; corner's a-square: the outer sides, or the inner ones when turned in.
+;; Brackets on the corners of the box (x y w h), arms a long (at most
+;; half the box) and lw thick, on whole device pixels inside it. Each
+;; lies along two sides of its corner's a-square: the outer sides, or the
+;; inner ones when turned in.
 (define (reticle-corners x y w h a lw color in?)
-  (let* ([lw (reticle-px lw)] [a (reticle-snap a)]
+  (let* ([lw (reticle-px lw)] [a (reticle-snap (min a (/ w 2) (/ h 2)))]
          [x0 (reticle-snap x ceiling)] [y0 (reticle-snap y ceiling)]
          [x1 (- (reticle-snap (+ x w) floor) a)]
          [y1 (- (reticle-snap (+ y h) floor) a)]
@@ -148,7 +149,16 @@
                      gy g d focused? hover pressed))
                   bs)))))
 
+;; A move or a resize drags the brackets alone to where the window goes.
+(define (reticle-drag-outline x y w h)
+  (reticle-corners x y w h (round (* 0.7 (title-height))) 2 'accent #f))
+
+;; Scroll bars show while the pointer is over what they scroll.
 (define-style reticle "Reticle"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
+  'drag-feedback 'outline  'draw-drag-outline 'reticle-drag-outline
+  'scrollbar-show 'hover
   'frame-insets 'reticle-insets
   'frame-regions 'reticle-regions
   'frame-under 'reticle-draw-under)

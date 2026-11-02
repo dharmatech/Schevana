@@ -23,6 +23,13 @@
         (inexact (/ (- (floor (+ (* (exactly v) s) o 1/2)) o) s))))
     (values (snap x ox) (snap y oy))))
 
+;; A baseline, y, on a whole device row by snap (round, floor, ...) at
+;; the scale and translation where we draw: on the screen, and in
+;; Settings' half-size miniatures.
+(define (px-baseline y snap)
+  (let*-values ([(s ox oy) (px-device)] [(f) (- oy (floor oy))])
+    (/ (- (snap (+ (* y s) f)) f) s)))
+
 ;; Fills the logical rectangle, its corners snapped: never antialiased.
 (define (px-fill x y w h color)
   (let-values ([(x0 y0) (px-snap x y)] [(x1 y1) (px-snap (+ x w) (+ y h))])

@@ -580,6 +580,7 @@
     (reset-style! "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme-source "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme "key" ,(lambda () (map symbol->string (theme-keys))))
+    (theme-part "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme-default "key" ,(lambda () (map symbol->string (theme-keys))))
     (launch-app "app" ,(lambda () (map symbol->string (apps))))
     (find-window "app" ,(lambda () (map symbol->string (apps))))
@@ -1240,10 +1241,13 @@
                    (draw-repl-line pad top text (style-color (car e))
                                    cols 0 shown cw lh)])
                 (loop (cdr entries) top 0))))))
-    ;; the kit's scroll bar when scrolled back
+    ;; the kit's scroll bar when scrolled back, on the style's side, no
+    ;; wider than the text's inset (Interlisp's bars are 24)
     (when (> (repl-scroll r) 0)
-      (let ([size (/ rows (max rows total))] [bw (ui-scrollbar-width)])
-        (ui-draw-scrollbar (- w bw) 4 bw (- h 8) '()
+      (let ([size (/ rows (max rows total))]
+            [bw (min (ui-scrollbar-width) pad)])
+        (ui-draw-scrollbar (if (eq? (theme 'scrollbar-side) 'left) 0 (- w bw))
+                           4 bw (- h 8) '()
                            (* (- 1 size)
                               (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))
                            size)))

@@ -143,7 +143,7 @@
     (if (or (eqv? v 0) (memq key (theme 'fixed))) v (max v (theme min)))))
 
 (theme-default! 'title-height-min
-                (rule (exact (round (+ (font-line-height 'title) 7)))))
+                (theme-rule (exact (round (+ (font-line-height 'title) 7)))))
 (define (title-height) (chrome-height 'title-height 'title-height-min))
 
 (define (point-in? px py x y w h)
@@ -279,6 +279,17 @@
 ;;; ------------------------------------------------------------------ windows
 
 (define (open-window title . opts)
+  (let ([win (apply detached-window title opts)])
+    (set! *next-window-id* (+ *next-window-id* 1))
+    (place-window! win (plist-ref opts 'pos #f))
+    (set! *windows* (cons win *windows*))
+    (window-call win 'open)
+    (focus-window! win)
+    win))
+
+;; A window as open-window makes it, at 0, 0, but not on screen: a
+;; style's miniature (Settings' previews) draws one with draw-window*.
+(define (detached-window title . opts)
   (let* ([whole (lambda (p)
                   (cons (exact (round (car p))) (exact (round (cdr p)))))]
          [size (whole (plist-ref opts 'size '(480 . 320)))]
@@ -288,7 +299,6 @@
                            0 0 (car size) (cdr size) 'normal #f
                            (make-eq-hashtable) (make-eq-hashtable) #f
                            (car min-size) (cdr min-size))])
-    (set! *next-window-id* (+ *next-window-id* 1))
     ;; Handler options become handlers; any other option becomes a property.
     (let loop ([o opts])
       (when (and (pair? o) (pair? (cdr o)))
@@ -302,10 +312,6 @@
     (let-values ([(l t r b) (frame-insets win)])
       (window-w-set! win (+ l r (car size)))
       (window-h-set! win (+ t b (cdr size))))
-    (place-window! win (plist-ref opts 'pos #f))
-    (set! *windows* (cons win *windows*))
-    (window-call win 'open)
-    (focus-window! win)
     win))
 
 ;; Where a window opens when open-window gets no 'pos: #f to cascade, or a
@@ -385,7 +391,7 @@
 
 ;; Calls win's frame part key (theme.ss) in win's theme.
 (define (frame-call win key . args)
-  (in-window-theme win (lambda () (apply (part key) win args))))
+  (in-window-theme win (lambda () (apply (theme-part key) win args))))
 
 ;; A setting in win's theme: its own style's, or the chosen one's.
 (define (window-setting win key) (in-window-theme win (lambda () (theme key))))
@@ -793,14 +799,14 @@
          [(and (>= clicks 2)
                (assq region (window-setting win 'button-double-click)))
           => (lambda (a) (window-action! win (cdr a)))]
-         [(eq? region 'menu) ((part 'open-window-menu) win x y)]
+         [(eq? region 'menu) ((theme-part 'open-window-menu) win x y)]
          [(eq? button 'left)
           (set! *drag* (make-drag region win button x y 0 0 0 0))
           (invalidate! win)])]   ; its style draws the button pressed
       [(frame) (void)]
       [(title)
        (cond
-         [(eq? button 'right) ((part 'open-window-menu) win x y)]
+         [(eq? button 'right) ((theme-part 'open-window-menu) win x y)]
          [(and (eq? button 'left) (>= clicks 2))
           (window-action! win (window-setting win 'title-double-click))]
          [(eq? button 'left)
@@ -940,7 +946,7 @@
             [w (window-w win)] [h (window-h win)]
             [hover (window-hover win)]
             [pressed (window-pressed win)])
-        ((part 'frame-under) win x y w h focused? hover pressed)
+        ((theme-part 'frame-under) win x y w h focused? hover pressed)
         (unless (shaded? win)
           (let-values ([(cx cy cw ch) (content-rect win)])
             (call-with-round-clip x y w h (frame-radius win)
@@ -951,9 +957,9 @@
                       (lambda ()
                         (fill-rect 0 0 cw ch (window-bg win))
                         (if (window-error win)
-                            ((part 'draw-crash-panel) win cw ch)
+                            ((theme-part 'draw-crash-panel) win cw ch)
                             (window-call win 'draw cw ch))))))))))
-        ((part 'frame-over) win x y w h focused? hover pressed)))))
+        ((theme-part 'frame-over) win x y w h focused? hover pressed)))))
 
 ;; the last frame's time: drawing it, comparing its rows
 (defvar *frame-ms* 0.0)

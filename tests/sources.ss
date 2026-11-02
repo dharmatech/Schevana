@@ -7,8 +7,8 @@
 ;;; in a folder registers what it defines (a kit's names keep its prefix;
 ;;; desktop/, like src/, defines plain names); a style sets only settings
 ;;; that exist (built in, its options' or its own); in the kits, the
-;;; desktop layer and Tasks only the drawing procedures draw or name a
-;;; color, and the edit kit never does; and only styles call a part's
+;;; desktop layer, Tasks and Settings only the drawing procedures draw or
+;;; name a color, and the edit kit never does; and only styles call a part's
 ;;; built-in body. Fast: it loads the world but does
 ;;; not boot it.
 
@@ -259,20 +259,21 @@
 
 ;;; ------------------------------------------------------------------
 ;;; the seam
-;;; In the kits, the desktop layer and Tasks only the drawing procedures
-;;; draw or choose a color: parts (define-part), procedures named like a
-;;; drawing primitive (draw-…, fill-…) or ui-draw-…, complete-draw-… and
-;;; tasks-draw-…, and the settings they give (theme-default!: a style may
-;;; give its own). No other top-level form calls a drawing primitive or
-;;; quotes a theme color key ('text, also an event's name, aside), so a
-;;; style restyles all they draw. The edit kit never draws. And outside
+;;; In the kits, the desktop layer, Tasks and Settings only the drawing
+;;; procedures draw or choose a color: parts (define-part), procedures
+;;; named like a drawing primitive (draw-…, fill-…) or ui-draw-…,
+;;; complete-draw-…, tasks-draw-… and settings-draw-…, and the settings
+;;; they give (theme-default!: a style may give its own). No other
+;;; top-level form calls a drawing primitive or quotes a theme color key
+;;; ('text, also an event's name, aside), so a style restyles all they
+;;; draw. The edit kit never draws. And outside
 ;;; styles/ nothing calls a part's built-in body (name*): a style's own
 ;;; part would be passed by.
 
 (define seam-files
   (append (filter (lambda (f) (member (file-folder f) '("kits" "desktop")))
                   (folder-files))
-          '("apps/tasks.ss")))
+          '("apps/tasks.ss" "apps/settings.ss")))
 
 ;; The parts: the keys whose built-in is name*, a body of their own.
 (define parts
@@ -332,7 +333,8 @@
     (or (and name
              (or (drawing-primitive? name)
                  (exists (lambda (p) (string-prefix? p (symbol->string name)))
-                         '("ui-draw-" "complete-draw-" "tasks-draw-"))))
+                         '("ui-draw-" "complete-draw-" "tasks-draw-"
+                           "settings-draw-"))))
         (and (pair? form)
              (memq (car form) '(define-part theme-default! color-default!))
              #t))))

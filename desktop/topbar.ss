@@ -1,9 +1,11 @@
 ;;; topbar.ss — the bar at the top: the launcher, the focused window's
 ;;; title and the status segments (status.ss), redrawn once a second; or,
-;;; in their place, the mouse documentation where the style shows it.
+;;; in their place, the mouse documentation where the style shows it. A
+;;; style that sets its height to 0 has none (Genera): it neither draws
+;;; nor ticks.
 
 (theme-default! 'topbar-height-min
-                (rule (exact (round (+ (font-line-height 'ui) 7)))))
+                (theme-rule (exact (round (+ (font-line-height 'ui) 7)))))
 ;; (in the bars' place, as the bar is drawn: its strip and its drawing
 ;; agree)
 (define (topbar-height)
@@ -15,7 +17,7 @@
 ;; The accent on the panels, or the panels' text color where the accent
 ;; would vanish (Genera's black accent on its black panels).
 (color-default! 'panel-accent
-  (rule (let-values ([(ar ag ab aa) (color-rgba 'accent)]
+  (theme-rule (let-values ([(ar ag ab aa) (color-rgba 'accent)]
                      [(pr pg pb pa) (color-rgba 'panel)])
           (define (lum r g b) (+ (* 0.299 r) (* 0.587 g) (* 0.114 b)))
           (theme (if (< (abs (- (lum ar ag ab) (lum pr pg pb))) 0.2)
@@ -77,25 +79,16 @@
 (define (topbar-mouse kind what x y button clicks)
   (bar-mouse (with-place 'bar topbar-areas) kind what x y button clicks))
 
-(defvar *last-second* -1)
+(define (topbar-draw) (unless (zero? (topbar-height)) (draw-topbar)))
 
-;; Once a second the bar asks for itself (the clock). The status shown
-;; changes only with the bar that shows it: it is taken when the frame
-;; this step draws holds the bar.
 (define (topbar-tick)
-  (let ([s (time-second (current-time))])
-    (unless (= s *last-second*)
-      (set! *last-second* s)
-      (call-with-values topbar-box request-frame!)))
-  (when (and *dirty*
-             (holds? (frame-box *dirty*)
-                     (call-with-values topbar-box pixel-box)))
-    (refresh-status!))
-  (mouse-doc-tick topbar-box))
+  (unless (zero? (topbar-height))
+    (status-tick topbar-box)
+    (mouse-doc-tick topbar-box)))
 
 (define (topbar-doc what) (if (eq? what 'launcher) '((L . "Apps")) '()))
 
 (define-surface topbar 20
-  'draw 'draw-topbar 'box 'topbar-box 'at 'topbar-at 'mouse 'topbar-mouse
+  'draw 'topbar-draw 'box 'topbar-box 'at 'topbar-at 'mouse 'topbar-mouse
   'tick 'topbar-tick 'doc 'topbar-doc)
 (define-strip topbar 'top 'topbar-height)

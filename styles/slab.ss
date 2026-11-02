@@ -56,9 +56,9 @@
 ;; and 10 at 200%), and the baseline goes on the nearest device pixel,
 ;; the higher one when two are as near.
 (define (slab-title-y cy)
-  (let*-values ([(l top w h) (text-ink "H" 'title)]
-                [(base) (- cy (/ top 2))])
-    (- (/ (ceiling (- (* base *scale*) 1/2)) *scale*) (font-ascent 'title))))
+  (let-values ([(l top w h) (text-ink "H" 'title)])
+    (- (px-baseline (- cy (/ top 2)) (lambda (v) (ceiling (- v 1/2))))
+       (font-ascent 'title))))
 
 ;; ×, −, a square, or (to restore) a square on its slab, 2a wide around
 ;; the middle (cx, cy) of a key, on the key's face. The × reaches a
@@ -123,6 +123,8 @@
                   buttons)))))
 
 (define-style slab "Slab"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
   'frame-insets 'slab-insets
   'frame-regions 'slab-regions
   'frame-under 'slab-draw-under)

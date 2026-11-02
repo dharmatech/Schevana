@@ -2388,8 +2388,8 @@
 (check "a rule computed from itself is named, and the theme stays"
        (with-mac-settings '()
          (lambda ()
-           (set-changes! 'mac (list 'loop-a (rule (theme 'loop-b))
-                                    'loop-b (rule (theme 'loop-a))))
+           (set-changes! 'mac (list 'loop-a (theme-rule (theme 'loop-b))
+                                    'loop-b (theme-rule (theme 'loop-a))))
            (let* ([before *theme*]
                   [msg (guard (c [#t (condition->string c)])
                          (theme-changed!)
@@ -2477,7 +2477,7 @@
                                 palette-keys)
                        (theme 'window-style) (theme 'palette)
                        (theme 'corner-radius) (theme 'wallpaper)
-                       *changes*)))
+                       *style-changes*)))
              old-theme-files)])
   (set-style! 'mac)
   (reset-theme!)
@@ -2507,14 +2507,14 @@
          (set-style! 'mac)
          (set-theme! 'accent #xff9e64)
          (override! 'ui-font-size 15)
-         (let ([state (list *style-name* *scale-setting* *overrides*
-                            *changes*)]
+         (let ([state (list *style-name* *scale-setting* *theme-overrides*
+                            *style-changes*)]
                [file (begin (save-theme!) (text))])
            (set-style! 'windows)
            (reset-theme!)
            (load-saved-theme!)
-           (let ([back (list *style-name* *scale-setting* *overrides*
-                             *changes*)])
+           (let ([back (list *style-name* *scale-setting* *theme-overrides*
+                             *style-changes*)])
              (reset-theme!)
              (set-style! 'mac)
              (and (equal? back state)
@@ -4203,6 +4203,621 @@
              (and (same 'sort-up 'up) (same 'sort-down 'down)
                   (not (window-error w))
                   (equal? doc '((L . "Edit me"))))))))
+
+;;; Settings' Theme tab (step 8)
+
+;; A style with options of its own: a size, a choice.
+(define-style test-own "Own options"
+  'test-own-width 3  'test-own-ink 'dim
+  'options '(palette (test-own-width "Width" 1 6)
+             (test-own-ink "Ink" (("Dim" . dim) ("Bright" . bright)))))
+
+(check "a style's own option's value saves and loads back, of the kind the \
+        style gives it; one of another kind is dropped"
+       (begin
+         (set-style! 'test-own)
+         (set-theme! 'test-own-width 5)
+         (set-theme! 'test-own-ink 'bright)
+         (save-theme!)
+         (reset-theme!)
+         (load-saved-theme!)
+         (let ([got (list (theme 'test-own-width) (theme 'test-own-ink))])
+           (reset-theme!)
+           (set-style! 'mac)
+           (and (equal? got '(5 bright))
+                (valid-theme-value? 'test-own-width 2)
+                (not (valid-theme-value? 'test-own-width 'wide))
+                (not (valid-theme-value? 'test-own-ink 4))))))
+
+(check "Settings shows a style's own options, and the common ones it does \
+        not honor as fixed"
+       (begin
+         (set-style! 'test-own)
+         (let ([own (map car (settings-own-options))]
+               [words (settings-value-words 'test-own-ink 'bright)]
+               [fixed (theme 'fixed)])
+           (set-style! 'mac)
+           (and (equal? own '(test-own-width test-own-ink))
+                (equal? words "Bright")
+                (memq 'corner-radius fixed) (not (memq 'palette fixed))
+                (null? (settings-own-options))
+                (not (settings-option 'test-own-ink))))))
+
+(check "a detached window is a window in its style that is not on screen"
+       (let ([w (detached-window "Away" 'size '(200 . 100)
+                                 'window-style 'genera)])
+         (let-values ([(l t r b) (frame-insets w)])
+           (and (not (memq w (windows)))
+                (= (window-w w) (+ 200 l r)) (= (window-h w) (+ 100 t b))
+                (eq? (window-ref w 'window-style) 'genera)))))
+
+(check "save-style-as! writes a define-style of your changes over the \
+        chosen style, loads it and chooses it; a name in use is refused"
+       (let ([dir (string-append out-dir "/saved-styles")])
+         (set! *style-save-directory* dir)
+         (when (file-exists? (string-append dir "/test-saved.ss"))
+           (delete-file (string-append dir "/test-saved.ss")))
+         (set-style! 'test-own)
+         (set-theme! 'test-own-width 4)
+         (set-theme! 'palette 'nord)
+         (let* ([path (save-style-as! 'test-saved "Test saved")]
+                [form (call-with-input-file path read)]
+                [ok (list (current-style) (style-changes-of 'test-own)
+                          (theme 'test-own-width) (theme 'palette)
+                          (raises? (lambda () (save-style-as! 'mac "Mac"))))])
+           (set-style! 'mac)
+           (reset-theme!)
+           (set! *styles* (remp (lambda (s) (memq (style-name s)
+                                                  '(test-saved test-own)))
+                                *styles*))
+           (and (equal? form '(define-style test-saved "Test saved"
+                                'parent 'test-own 'palette 'nord
+                                'test-own-width 4))
+                (equal? ok '(test-saved () 4 nord #t))))))
+
+(check "a new style's name comes from its title"
+       (and (eq? (settings-style-name "My Genera") 'my-genera)
+            (eq? (settings-style-name "  CDE: Broica II ") 'cde-broica-ii)
+            (not (settings-style-name " - "))))
+
+;;; Our styles, finished (step 9)
+
+(define (style-insets st)
+  (let ([w (open-window "Insets" 'size '(300 . 200) 'window-style st)])
+    (let-values ([(l t r b) (frame-insets w)])
+      (close-window! w)
+      (list l t r b))))
+
+(check "at the default fonts the insets are Genera's 6 6 6 23, the CADR's \
+        2 2 2 and its label strip, the code font's line and 2, Interlisp's \
+        4 17 4 4"
+       (and (equal? (style-insets 'genera) '(6 6 6 23))
+            (equal? (style-insets 'cadr)
+                    (list 2 2 2 (+ 2 (exact (round (+ 2 (font-line-height
+                                                         'mono)))))))
+            (equal? (style-insets 'interlisp) '(4 17 4 4))))
+
+(check "our styles' own behaviors, and the CADR's Genera's but its frame \
+        and its gray"
+       (let ([of (lambda (st . keys)
+                   (with-style st (lambda () (map theme keys))))])
+         (and (equal? (of 'fold 'title-double-click) '(shade))
+              (equal? (of 'lambda 'title-wheel) '(shade))
+              (equal? (of 'halo 'scrollbar-show) '(hover))
+              (equal? (of 'reticle 'scrollbar-show 'drag-feedback
+                          'draw-drag-outline)
+                      '(hover outline reticle-drag-outline))
+              (equal? (of 'draft 'drag-feedback 'draw-drag-outline)
+                      '(outline draft-drag-outline))
+              (equal? (of 'curses 'bell 'menu-hover) '(screen outline))
+              (equal? (of 'genera 'mouse-doc 'bell 'menu-hover 'scrollbar-side
+                          'title-double-click 'topbar-height)
+                      '(#t screen outline left none 0))
+              (equal? (of 'cadr 'mouse-doc 'draw-taskbar 'genera-border
+                          'genera-margin 'genera-label-font
+                          'genera-label-align 'frame-over)
+                      '(#t genera-draw-who-line 1 1 mono top frame-over*))
+              (equal? (of 'interlisp 'drag-feedback 'draw-drag-outline
+                          'menu-choose 'menu-hover 'bell 'title-double-click
+                          'scrollbar-side 'scrollbar-show 'scrollbar-width)
+                      '(outline interlisp-drag-outline release outline window
+                        none left hover 24))
+              (equal? (of 'spine 'title-double-click 'title-wheel)
+                      '(maximize none))
+              (equal? (of 'mac 'drag-feedback 'bell 'mouse-doc)
+                      '(live none #f)))))
+
+;; An outline drawn on white at 100 and 150 %: what changed, and what
+;; changed outside its rectangle.
+(define (outline-changes st w h)
+  (map (lambda (s)
+         (with-style st
+           (lambda ()
+             (let* ([k (lambda (v) (exact (round (* v s))))]
+                    [paint (lambda (outline?)
+                             (image (k 300) (k 200) (inexact s)
+                                    (lambda ()
+                                      (fill-rect 0 0 300 200 #xffffff)
+                                      (when outline?
+                                        (draw-drag-outline 20 30 w h)))))]
+                    [blank (paint #f)] [drawn (paint #t)]
+                    [r (list (max-diff blank drawn)
+                             (max-diff blank drawn
+                                       (list (k 20) (k 30) (k (+ 20 w))
+                                             (k (+ 30 h)))))])
+               (cairo-surface-destroy blank)
+               (cairo-surface-destroy drawn)
+               r))))
+       '(1 3/2)))
+
+(check "Draft's, Reticle's and Interlisp's outlines are drawn within their \
+        rectangle, smaller than one of Reticle's brackets too"
+       (for-all (lambda (st)
+                  (for-all (lambda (wh)
+                             (for-all (lambda (r)
+                                        (and (> (car r) 0) (= (cadr r) 0)))
+                                      (outline-changes st (car wh) (cdr wh))))
+                           '((240 . 120) (30 . 20) (8 . 8))))
+                '(draft reticle interlisp)))
+
+(check "Draft's outline shows the live size, where it fits"
+       (with-style 'draft
+         (lambda ()
+           (let* ([at (lambda (w)
+                        (image 300 200 1
+                               (lambda ()
+                                 (fill-rect 0 0 300 200 #xffffff)
+                                 (draw-drag-outline 20 30 w 120))))]
+                  [a (at 240)] [b (at 239)] [narrow (at 60)]
+                  [plain (image 300 200 1
+                                (lambda ()
+                                  (fill-rect 0 0 300 200 #xffffff)
+                                  (stroke-rect 20 30 60 120 'accent)))]
+                  ;; the right edge moved; the label changed too
+                  [r (list (max-diff a b '(250 0 300 200))
+                           (max-diff narrow plain))])
+             (for-each cairo-surface-destroy (list a b narrow plain))
+             (and (> (car r) 0) (= (cadr r) 0))))))
+
+(check "Genera grays a window not selected with a sparse stipple, and not \
+        the selected one"
+       (let* ([a (open-window "A" 'size '(200 . 120) 'pos '(100 . 100)
+                              'window-style 'genera)]
+              [b (open-window "B" 'size '(200 . 120) 'pos '(500 . 100)
+                              'window-style 'genera)])
+         (steps 2)
+         (let* ([dot (lambda (win)   ; the first stipple dot in its content
+                       (let-values ([(cx cy cw ch) (content-rect win)])
+                         (canvas-pixel (* 4 (ceiling (/ cx 4)))
+                                       (* 4 (ceiling (/ cy 4))))))]
+                [r (list (dot a) (dot b)
+                         (with-style 'genera
+                           (lambda () (list (color->pixel 'text)
+                                            (color->pixel 'window-bg)))))])
+           (close-window! a)
+           (close-window! b)
+           (steps 1)
+           (equal? (list (car r) (cadr r)) (caddr r)))))
+
+(check "Genera's buttons are command words: plain, boxed under the \
+        pointer, reversed while pressed"
+       (with-style 'genera
+         (lambda ()
+           (let ([at (lambda (flags)
+                       (let* ([img (image 120 40 1
+                                          (lambda ()
+                                            (fill-rect 0 0 120 40 'window-bg)
+                                            (ui-draw-button 10 5 100 30 flags
+                                                            "Go" #f)))]
+                              [ps (list (pixel-at img 10 5)
+                                        (pixel-at img 60 8))])
+                         (cairo-surface-destroy img)
+                         ps))]
+                 [ink (color->pixel 'text)] [paper (color->pixel 'window-bg)])
+             (and (equal? (at '()) (list paper paper))
+                  (equal? (at '(hover)) (list ink paper))
+                  (equal? (at '(pressed)) (list ink ink)))))))
+
+(check "Genera's who line: no top bar; what the mouse does reversed across \
+        its top line, in Genera's words; its fields at character columns; \
+        its windows field lists them, and one chosen is selected"
+       (let ([a (open-window "Alpha" 'size '(300 . 160) 'pos '(200 . 200))]
+             [b (open-window "Beta" 'size '(300 . 160) 'pos '(600 . 200))])
+         (set-style! 'genera)
+         (inject! '(mouse-move 900 600))
+         (steps 2)
+         (let* ([lh (genera-line)] [top (- (screen-h) (* 2 lh))]
+                [areas (with-place 'bar taskbar-areas)]
+                [cw (font-char-width 'mono)]
+                [row (lambda () (map (lambda (x) (canvas-pixel x (+ top 8)))
+                                     (iota 300)))]
+                [desk (row)]
+                [sizes (list (topbar-height) (taskbar-height) (* 2 lh))]
+                [cols (map (lambda (a) (/ (cadr a) cw)) (cdr areas))]
+                [colors (list (canvas-pixel 2 (+ top 1))
+                              (canvas-pixel 2 (+ top lh 1))
+                              (canvas-pixel 640 2))]
+                [ink+paper (list (color->pixel 'text) (color->pixel 'bg-1)
+                                 (color->pixel 'desktop-top))])
+           (inject! `(mouse-move ,(+ (window-x a) 100)
+                                 ,(+ (window-y a) (window-h a) -8)))
+           (steps 2)
+           (let ([over (row)] [doc (mouse-doc)]
+                 [f (cdr (assq 'windows areas))])
+             (inject! `(mouse-move ,(+ (car f) 4) ,(+ (cadr f) 4))
+                      `(mouse-down ,(+ (car f) 4) ,(+ (cadr f) 4) left 1)
+                      `(mouse-up ,(+ (car f) 4) ,(+ (cadr f) 4) left))
+             (steps 1)
+             (let ([listed (and (menu-open?)
+                                (map car (menu-items *menu*)))])
+               (when (menu-open?)
+                 ((cdr (assoc "Alpha" (menu-items *menu*))))
+                 (close-menu!))
+               (let ([chosen (eq? *focus* a)])
+                 (set-style! 'mac)
+                 (close-window! a)
+                 (close-window! b)
+                 (steps 2)
+                 (and (= (car sizes) 0) (= (cadr sizes) (caddr sizes))
+                      (for-all integer? cols)
+                      (equal? colors ink+paper)
+                      (not (equal? desk over))
+                      (equal? (genera-mouse-doc-text doc)
+                              "Mouse-L: Move; Mouse-R: Window menu.")
+                      (member "Alpha" listed) (member "Beta" listed)
+                      chosen)))))))
+
+(check "Interlisp's title shade fills its strip's title rows after the \
+        title, the border's ink above and below"
+       (let ([w (open-window "T" 'size '(300 . 160) 'pos '(200 . 200)
+                             'window-style 'interlisp)])
+         (steps 2)
+         (let* ([x (+ (window-x w) 200)] [y (window-y w)]
+                [px (lambda () (map (lambda (dy) (canvas-pixel x (+ y dy)))
+                                    '(0 5 14)))]
+                [ink (px)])
+           (override! 'interlisp-title-shade #xffffff)
+           (steps 2)
+           (let ([shaded (px)])
+             (override! 'interlisp-title-shade)
+             (close-window! w)
+             (steps 1)
+             (let ([i #xff000000] [p #xffffffff])
+               (and (equal? ink (list i i i))
+                    (equal? shaded (list i p i))))))))
+
+(check "Interlisp's desktop is Medley's #x8822: dashes two pixels tall, \
+        moved two columns every two rows"
+       (let* ([img (image 4 4 1 (lambda ()
+                                  (fill-wallpaper 0 0 4 4 'shade #xffffff
+                                                  #x000000)))]
+              [rows (map (lambda (y)
+                           (list->string
+                            (map (lambda (x)
+                                   (if (= (pixel-at img x y) #xff000000)
+                                       #\# #\.))
+                                 (iota 4))))
+                         (iota 4))])
+         (cairo-surface-destroy img)
+         (equal? rows '("#..." "#..." "..#." "..#."))))
+
+(check "Interlisp's scroll bars beside the window: with the side Outside \
+        its frame leaves Medley's 24 pixels at the left, and the bar shows \
+        there under the pointer"
+       (begin
+         (override! 'scrollbar-side 'outside)
+         (let ([w (scroll-window "Medley" 'window-style 'interlisp)])
+           (steps 2)
+           (let-values ([(l t r b) (frame-insets w)])
+             (let ([mx (+ (window-x w) 12)] [my (+ (window-y w) 100)])
+               (inject! `(mouse-move ,mx ,my))
+               (steps 2)
+               (let ([bar (window-ref w 'scrollbar #f)]
+                     [region (window-region w mx my)])
+                 (override! 'scrollbar-side)
+                 (close-window! w)
+                 (steps 1)
+                 ;; from the title strip's bottom (15) to the frame's
+                 (and (= l 28) (eq? region 'scrollbar) bar
+                      (= (car bar) -28) (= (caddr bar) 24)
+                      (= (cadr bar) (- 15 t))
+                      (= (cadddr bar) (- (window-h w) 15)))))))))
+
+(check "the REPL's scroll bar is on the style's side, and no wider than \
+        its text's inset there (Interlisp's 24)"
+       (let* ([r (repl)] [rs (window-ref r 'state)])
+         (override! 'scrollbar-width 24)
+         (do ([i 0 (+ i 1)]) ((= i 80)) (repl-add! rs 'output "a line"))
+         (repl-scroll-set! rs 20)
+         (invalidate!)
+         (steps 2)
+         (let-values ([(cx cy cw ch) (content-rect r)])
+           (let* ([column (lambda (x)
+                            (map (lambda (i) (canvas-pixel x (+ cy i)))
+                                 (iota ch)))]
+                  [right (list (column (+ cx 5)) (column (+ cx cw -5))
+                               (column (+ cx 15)))])
+             (override! 'scrollbar-side 'left)
+             (invalidate!)
+             (steps 2)
+             (let ([left (list (column (+ cx 5)) (column (+ cx cw -5))
+                               (column (+ cx 15)))])
+               (override! 'scrollbar-side)
+               (override! 'scrollbar-width)
+               (close-window! r)
+               (steps 1)
+               (and (not (equal? (car right) (car left)))
+                    (not (equal? (cadr right) (cadr left)))
+                    (equal? (caddr right) (caddr left))))))))
+
+(check "Mac draws no resize grip on a shaded window"
+       (let ([w (open-window "Grip" 'size '(300 . 200) 'pos '(200 . 200)
+                             'window-style 'mac)]
+             [n 0])
+         (steps 2)
+         (let ([count (lambda ()
+                        (set! n 0)
+                        (fluid-let ([draw-resize-grip
+                                     (lambda (x y) (set! n (+ n 1)))])
+                          (render-full-into! *canvas*))
+                        n)])
+           (let* ([open (count)] [shaded (begin (shade-window! w) (count))])
+             (close-window! w)
+             (steps 1)
+             (= shaded (- open 1))))))
+
+(check "a baseline lands on a whole device row in a half-size miniature, \
+        and moved half a device pixel"
+       (let ([rows '()])
+         (cairo-surface-destroy
+          (image 10 10 1
+                 (lambda ()
+                   (cairo-scale *cr* 0.5 0.5)
+                   (set! rows (list (* 0.5 (px-baseline 10.6 round))))
+                   (cairo-translate *cr* 0 1)
+                   (set! rows (cons (+ 0.5 (* 0.5 (px-baseline 10.6 round)))
+                                    rows)))))
+         (for-all integer? rows)))
+
+(check "a stipple's tile is made once for its rows, colors and scale"
+       (let* ([gray (stipple 'text #f "#..." "...." "...." "....")]
+              [paint (lambda (s)
+                       (cairo-surface-destroy
+                        (image 24 24 s (lambda () (fill-rect 0 0 16 16 gray)
+                                         (fill-rect 0 0 8 8 gray)))))])
+         (vector-for-each free-owned-surface!
+                          (hashtable-values *stipple-tiles*))
+         (hashtable-clear! *stipple-tiles*)
+         (paint 1)
+         (let ([one (hashtable-size *stipple-tiles*)])
+           (paint 1)
+           (paint 1.5)
+           (and (= one 1) (= (hashtable-size *stipple-tiles*) 2)))))
+
+;;; the verifier's findings on steps 8 and 9
+
+;; Runs the timers due within the next second: a save asked for soon.
+(define (run-soon-timers!)
+  (let ([real now-ms])
+    (fluid-let ([now-ms (lambda () (+ (real) 1000))]) (steps 1))))
+
+(check "Reset to defaults is saved, as a change is"
+       (let ([saved (lambda ()
+                      (cdr (assq 'changes
+                                 (call-with-input-file *theme-file* read))))])
+         (set-theme! 'corner-radius 3)
+         (run-soon-timers!)
+         (let ([before (saved)])
+           (reset-theme!)
+           (run-soon-timers!)
+           (and (equal? before '((mac (corner-radius . 3))))
+                (null? (saved))))))
+
+(check "a title that reads as a number names a style that reads back as a \
+        symbol, and save-style-as! writes any name so"
+       (let ([reads-as-symbol?
+              (lambda (name)
+                (symbol? (read (open-string-input-port (format "~s" name)))))])
+         (set! *style-save-directory* (string-append out-dir "/saved-styles"))
+         (let* ([names (map settings-style-name '("1984" "2" "-1" "1e3"))]
+                [path (save-style-as! (string->symbol "12") "Twelve")]
+                [form (call-with-input-file path read)])
+           (set-style! 'mac)
+           (set! *styles* (remp (lambda (s) (eq? (style-name s) '|12|))
+                                *styles*))
+           (delete-file path)
+           (and (equal? names '(style-1984 style-2 style-1 style-1e3))
+                (for-all reads-as-symbol? names)
+                (eq? (cadr form) '|12|)))))
+
+(check "the square styles honor every common option but the corner radius"
+       (for-all (lambda (st)
+                  (let ([fixed (with-style st (lambda () (theme 'fixed)))])
+                    (and (equal? fixed '(corner-radius))
+                         (not (memq 'title-height fixed)))))
+                '(cons curses draft fold interlisp lambda reticle slab)))
+
+(check "the CADR's label strip lies under the content, its margin and \
+        border under it; Genera's directly inside the border"
+       (let ([strip-y (lambda (st)
+                        (let ([w (open-window "Label" 'size '(300 . 150)
+                                              'window-style st)])
+                          (let-values ([(l t r b) (frame-insets w)])
+                            (let ([y (caddr (assq 'title (frame-regions w)))]
+                                  [h (window-h w)])
+                              (close-window! w)
+                              (list y (- h b) (- h 2 (- b 6)))))))])
+         (let ([c (strip-y 'cadr)] [g (strip-y 'genera)])
+           (and (= (car c) (cadr c)) (= (car g) (caddr g))))))
+
+(check "an Override of another style's own option says whose it is and \
+        that it does not apply here; in that style it does"
+       (begin
+         (override! 'genera-margin 3)
+         (let ([label (settings-key-label 'genera-margin)]
+               [here (settings-override-words 'genera-margin)])
+           (set-style! 'genera)
+           (let ([there (settings-override-words 'genera-margin)])
+             (set-style! 'mac)
+             (override! 'genera-margin)
+             (and (equal? label "White margin (Genera)")
+                  (equal? here "3 px; does not apply here")
+                  (equal? there "3 px"))))))
+
+(check "a pinned row reads Override; unpinned with the style's own value, \
+        it leaves no change"
+       (let ([o (assq 'corner-radius common-options)])
+         (settings-pin! 'corner-radius #t)
+         (let ([pinned (settings-row-label o)])
+           (settings-pin! 'corner-radius #f)
+           (and (equal? pinned "Corner radius · Override")
+                (equal? (settings-row-label o) "Corner radius")
+                (null? (style-changes-of 'mac))
+                (null? (theme-overrides))))))
+
+(check "a style's colors that are not options are saved and load back"
+       (begin
+         (set-style! 'interlisp)
+         (set-theme! 'interlisp-title-shade #x808080)
+         (set-theme! 'interlisp-scroll-shade #x404040)
+         (save-theme!)
+         (reset-theme!)
+         (load-saved-theme!)
+         (let ([got (list (theme 'interlisp-title-shade)
+                          (theme 'interlisp-scroll-shade))])
+           (reset-theme!)
+           (set-style! 'mac)
+           (and (equal? got '(#x808080 #x404040))
+                (valid-theme-value? 'genera-gray #x333333)))))
+
+(check "the stipple tiles cached are at most 64"
+       (begin
+         (cairo-surface-destroy
+          (image 8 8 1 (lambda ()
+                         (do ([i 0 (+ i 1)]) ((= i 70))
+                           (fill-rect 0 0 8 8 (stipple (* i 1000) #f "#."
+                                                       ".#"))))))
+         (<= (hashtable-size *stipple-tiles*) 64)))
+
+(check "the who line counts one window, not one windows"
+       (let ([w (open-window "Only" 'size '(200 . 100))] [texts '()])
+         (set-style! 'genera)
+         (steps 1)
+         (let ([real draw-text])
+           (fluid-let ([*windows* (list w)]
+                       [draw-text (lambda (x y s . rest)
+                                    (set! texts (cons s texts))
+                                    (apply real x y s rest))])
+             (render-full-into! *canvas*)))
+         (set-style! 'mac)
+         (close-window! w)
+         (steps 1)
+         (and (member "1 window" texts) #t)))
+
+(check "Settings' pane scroll bar is on the style's side, and shown on \
+        hover only where the style says so, and not once the pointer has \
+        left the window"
+       (let ([s (settings)])
+         (move-window! s 60 40)
+         (focus-window! s)
+         (steps 2)
+         (let* ([ui (window-ref s 'ui)]
+                [bar-x (lambda ()
+                         (invalidate! s)
+                         (steps 2)
+                         (let ([r (ui-find ui 'pane-scrollbar)])
+                           (and r (ui-region-x r))))]
+                [sw (settings-sidebar-width)])
+           (let-values ([(cx cy cw ch) (content-rect s)])
+             (inject! `(mouse-move ,(+ cx 40) ,(+ cy 200)))   ; the sidebar
+             (let ([right (bar-x)])
+               (override! 'scrollbar-side 'left)
+               (let ([left (bar-x)])
+                 (override! 'scrollbar-show 'hover)
+                 (let ([away (bar-x)])
+                   (inject! `(mouse-move ,(+ cx sw 100) ,(+ cy 200)))
+                   (let* ([over (bar-x)]
+                          [gone (begin
+                                  (inject! `(mouse-move ,(+ cx cw 30)
+                                                        ,(+ cy 200)))
+                                  (bar-x))])
+                     (override! 'scrollbar-show)
+                     (override! 'scrollbar-side)
+                     (close-window! s)
+                     (steps 1)
+                     (and right (> right sw) (eqv? left (+ sw 1))
+                          (not away) (eqv? over (+ sw 1)) (not gone))))))))))
+
+(check "a change the style passes by is said, with its ↺"
+       (let ([s (settings)] [texts '()])
+         (set-style! 'curses)
+         (set-theme! 'corner-radius 4)
+         (steps 2)
+         (let ([real draw-text])
+           (fluid-let ([draw-text (lambda (x y str . rest)
+                                    (set! texts (cons str texts))
+                                    (apply real x y str rest))])
+             (invalidate! s)
+             (steps 1)))
+         (let ([revert (and (ui-find (window-ref s 'ui) '(revert corner-radius))
+                            #t)])
+           (reset-style!)
+           (set-style! 'mac)
+           (close-window! s)
+           (steps 1)
+           (and revert
+                (exists (lambda (t)
+                          (string-contains-ci?
+                           t "Curses sets this: 9 px; your change (4 px)"))
+                        texts)))))
+
+(check "Genera's and the CADR's frames lie on whole device pixels at 125, \
+        150 and 175 %: their bottom rows are ink or paper, never between"
+       (for-all
+        (lambda (st)
+          (for-all
+           (lambda (k)
+             (with-style st
+               (lambda ()
+                 (let* ([w (detached-window "Crisp" 'size '(200 . 100)
+                                            'window-style st)]
+                        [ww (window-w w)] [wh (window-h w)]
+                        [img (image (exact (ceiling (* k (+ ww 4))))
+                                    (exact (ceiling (* k (+ wh 4)))) k
+                                    (lambda ()
+                                      (genera-draw-under w 1 1 ww wh #t #f
+                                                         #f)))]
+                        [ink (color->pixel 'text)]
+                        [paper (color->pixel (window-bg w))]
+                        [x (exact (floor (* k (+ 1 (/ ww 2)))))]
+                        [bottom (exact (floor (* k (+ 1 wh))))]
+                        [rows (map (lambda (i)
+                                     (pixel-at img x (- bottom i 1)))
+                                   (iota 6))])
+                   (cairo-surface-destroy img)
+                   (for-all (lambda (p) (or (= p ink) (= p paper)))
+                            rows)))))
+           '(1.25 1.5 1.75)))
+        '(genera cadr)))
+
+(check "a mouse press on a style card takes the keyboard from where it was"
+       (let ([s (settings)])
+         (move-window! s 60 40)
+         (focus-window! s)
+         (steps 2)
+         (let* ([ui (window-ref s 'ui)]
+                [r (ui-find ui (list 'style (car (styles))))])
+           (ui-focus! ui '(tab colors))
+           (let-values ([(cx cy cw ch) (content-rect s)])
+             (let ([x (+ cx (ui-region-x r) 20)] [y (+ cy (ui-region-y r) 20)])
+               (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                        `(mouse-up ,x ,y left))
+               (steps 2)
+               (let ([focus (ui-focused ui)])
+                 (set-style! 'mac)
+                 (close-window! s)
+                 (steps 1)
+                 (not focus)))))))
 
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)

@@ -1,6 +1,8 @@
-;;; wallpapers/shade.ss — Interlisp's dotted gray: the top color with one
-;;; dot of the bottom color in four, a 4 × 4 stipple.
+;;; wallpapers/shade.ss — Interlisp's desktop gray, Medley's
+;;; WINDOWBACKGROUNDSHADE #x8822 (WINDOW:137): the top color with dashes
+;;; of the bottom color two pixels tall, one in each 4 × 4 cell, moved two
+;;; columns every two rows.
 
 (define-wallpaper shade "Shade"
   (lambda (x y w h top bottom)
-    (fill-rect x y w h (stipple bottom top "..#." "#..." "#..." "..#."))))
+    (fill-rect x y w h (stipple bottom top "#..." "#..." "..#." "..#."))))

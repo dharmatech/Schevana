@@ -147,7 +147,11 @@
                   (curses-text (car t) (+ cx (/ p 2)) (+ T (/ p 2)) k
                                fg))))))))))
 
+;; A terminal's visual bell flashes the screen; menus box their entries.
 (define-style curses "Curses"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
+  'bell 'screen  'menu-hover 'outline
   'frame-insets 'curses-insets
   'frame-regions 'curses-regions
   'frame-under 'curses-draw-under)

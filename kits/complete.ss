@@ -509,10 +509,15 @@
                (draw-text (- (+ x w) kind-w -4) (+ ry (/ (- rh small-lh) 2))
                           (cadr row) 'text-faint 'ui-small)))))
      rows (iota count))
-    (when (> n count)   ; where the rows shown are in the whole list
-      (ui-draw-scrollbar (+ x w (- (ui-scrollbar-width))) (+ y 4)
-                         (ui-scrollbar-width) (* count rh) '()
-                         (/ top n) (/ count n)))
+    ;; where the rows shown are in the whole list, on the style's side, no
+    ;; wider than the names' inset (Interlisp's bars are 24)
+    (when (> n count)
+      (let ([bw (min (ui-scrollbar-width) 10)])
+        (ui-draw-scrollbar (if (eq? (theme 'scrollbar-side) 'left)
+                               x
+                               (+ x w (- bw)))
+                           (+ y 4) bw (* count rh) '() (/ top n)
+                           (/ count n))))
     (unless (string=? sig "")
       (let ([dy (+ y 4 (* count rh) 4)]
             [lines (complete-doc-lines sig doc w k)])

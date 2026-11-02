@@ -94,6 +94,7 @@
 ;;; through one and no frame is drawn from a cache half freed.
 
 (defvar *gfx-owned* (make-eqv-hashtable))   ; surface address -> tag
+(defvar *stipple-tiles* (make-hashtable equal-hash equal?))   ; owned too
 ;; how often free-owned-surfaces! has run
 (defvar *owned-frees* 0)
 
@@ -115,6 +116,7 @@
 (define (free-owned-surfaces!)
   (with-interrupts-disabled
     (flush-shadow-tiles!)   ; shadow
+    (hashtable-clear! *stipple-tiles*)
     (vector-for-each free-owned-surface! (hashtable-keys *gfx-owned*))
     (set! *owned-frees* (+ *owned-frees* 1))))
 
@@ -206,31 +208,44 @@
 
 ;; A stipple's tile on device pixels where px's rule puts them at our
 ;; scale (logical ceiling((d + 1/2)/s) - 1), whole periods: exact anywhere.
-(define (set-stipple! c)
-  (cairo-get-matrix *cr* *scratch*)   ; the pattern's space is the device's
-  (let* ([s (rationalize (exact (foreign-ref 'double *scratch* 0)) 1/100000)]
-         [w (string-length (cadddr c))] [h (length (cdddr c))]
+(define (stipple-tile c s ink paper)
+  (let* ([w (string-length (cadddr c))] [h (length (cdddr c))]
          [pw (numerator (* w s))] [ph (numerator (* h s))]
          [at (lambda (d n) (mod (- (ceiling (/ (+ d 1/2) s)) 1) n))]
          [us (list->vector (map (lambda (x) (at x w)) (iota pw)))]
-         [tile (cairo-image-surface-create CAIRO_FORMAT_ARGB32 pw ph)]
-         [pat (cairo-pattern-create-for-surface tile)]
-         [ink (color->pixel (cadr c))]
-         [paper (color->pixel (or (caddr c) (alpha 0 0)))])
-    (do ([y 0 (+ y 1)]) ((= y ph))
+         [tile (make-owned-surface 'stipple pw ph)])
+    (do ([y 0 (+ y 1)]) ((= y ph) (cairo-surface-mark-dirty tile) tile)
       (let ([row (list-ref (cdddr c) (at y h))])
         (do ([x 0 (+ x 1)]) ((= x pw))
           (foreign-set! 'unsigned-32 (cairo-image-surface-get-data tile)
                         (* 4 (+ x (* y pw)))
                         (if (char=? #\# (string-ref row (vector-ref us x)))
-                            ink paper)))))
-    (cairo-surface-mark-dirty tile)
+                            ink paper)))))))
+
+;; Tiles are made once per rows, colors and scale (one takes about 1 ms
+;; at 133 %, and Genera grays every window not selected), at most 64.
+;; Interrupts are off until the pattern holds its tile.
+(define (set-stipple! c)
+  (cairo-get-matrix *cr* *scratch*)   ; the pattern's space is the device's
+  (let* ([s (rationalize (exact (foreign-ref 'double *scratch* 0)) 1/100000)]
+         [ink (color->pixel (cadr c))]
+         [paper (color->pixel (or (caddr c) (alpha 0 0)))]
+         [key (list* s ink paper (cdddr c))] [t *stipple-tiles*]
+         [pat (with-interrupts-disabled
+                (cairo-pattern-create-for-surface
+                 (or (hashtable-ref t key #f)
+                     (let ([tile (stipple-tile c s ink paper)])
+                       (when (>= (hashtable-size t) 64)
+                         (vector-for-each free-owned-surface!
+                                          (hashtable-values t))
+                         (hashtable-clear! t))
+                       (hashtable-set! t key tile)
+                       tile))))])
     (cairo-pattern-set-matrix pat *scratch*)
     (cairo-pattern-set-extend pat CAIRO_EXTEND_REPEAT)
     (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
     (cairo-set-source *cr* pat)   ; which keeps the pattern and its tile
-    (cairo-pattern-destroy pat)
-    (cairo-surface-destroy tile)))
+    (cairo-pattern-destroy pat)))
 
 ;;; ------------------------------------------------------------------ fonts
 ;;; A font is a setting: the theme's roles ('ui, 'mono, 'title, ...) are
@@ -275,26 +290,24 @@
 ;; A font, or a theme key whose value is one ('ui, 'mono-bold, ...).
 (define (get-font f) (if (font? f) f (theme f)))
 
-;; The roles, from the four font settings (a style may give any).
-(let loop ([roles
-            (list
-             'ui (rule (font (theme 'ui-font) (theme 'ui-font-size)))
-             'ui-bold (rule (font (theme 'ui-font) (theme 'ui-font-size) 'bold))
-             'ui-small (rule (font (theme 'ui-font)
-                                   (- (theme 'ui-font-size) 2)))
-             'ui-italic (rule (font (theme 'ui-font) (theme 'ui-font-size)
-                                    'italic))
-             'title (rule (font (theme 'ui-font) (theme 'ui-font-size) 'bold))
-             'heading (rule (font (theme 'ui-font) (+ (theme 'ui-font-size) 5)
-                                  'bold))
-             'big (rule (font (theme 'ui-font) (* 2 (theme 'ui-font-size))
-                              'bold))
-             'huge (rule (font "serif" 360 'bold))
-             'mono (rule (font (theme 'mono-font) (theme 'mono-font-size)))
-             'mono-small (rule (font (theme 'mono-font)
-                                     (- (theme 'mono-font-size) 2)))
-             'mono-bold (rule (font (theme 'mono-font) (theme 'mono-font-size)
-                                    'bold)))])
+;; The roles, from the four font settings (a style may give any): the ui
+;; or mono family at its size plus d (or twice it).
+(define (theme-font-rule family d . opts)
+  (theme-rule
+   (let ([size (theme (if (eq? family 'ui) 'ui-font-size 'mono-font-size))])
+     (apply font (theme (if (eq? family 'ui) 'ui-font 'mono-font))
+            (if (eq? d 'twice) (* 2 size) (+ size d)) opts))))
+(let loop ([roles (list 'ui (theme-font-rule 'ui 0)
+                        'ui-bold (theme-font-rule 'ui 0 'bold)
+                        'ui-small (theme-font-rule 'ui -2)
+                        'ui-italic (theme-font-rule 'ui 0 'italic)
+                        'title (theme-font-rule 'ui 0 'bold)
+                        'heading (theme-font-rule 'ui 5 'bold)
+                        'big (theme-font-rule 'ui 'twice 'bold)
+                        'huge (theme-rule (font "serif" 360 'bold))
+                        'mono (theme-font-rule 'mono 0)
+                        'mono-small (theme-font-rule 'mono -2)
+                        'mono-bold (theme-font-rule 'mono 0 'bold))])
   (unless (null? roles)
     (theme-default! (car roles) (cadr roles))
     (loop (cddr roles))))

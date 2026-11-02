@@ -27,7 +27,7 @@
                   (draw-line cx (- cy a) cx (+ cy a) ink lw)])))
 
 ;; The top of a focused title's gradient.
-(color-default! 'mac-title-top (rule (mix 'title-bg-focus 'text 0.04)))
+(color-default! 'mac-title-top (theme-rule (mix 'title-bg-focus 'text 0.04)))
 
 (define (mac-draw-under win x y w h focused? hover pressed)
   (let ([th (title-height)] [r (mac-radius win)]
@@ -57,8 +57,8 @@
 (define (mac-draw-over win x y w h focused? hover pressed)
   (stroke-round-rect x y w h (mac-radius win)
                      (if focused? 'window-border-focus 'window-border))
-  ;; (the grip reaches 11 pixels in)
-  (unless (or (maximized? win) (< w 14) (< h 14))
+  ;; (the grip reaches 11 pixels in; a shaded window has no corner)
+  (unless (or (maximized? win) (shaded? win) (< w 14) (< h 14))
     (draw-resize-grip (+ x w) (+ y h))))
 
 (define-style mac "Mac"

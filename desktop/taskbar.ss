@@ -1,8 +1,10 @@
 ;;; taskbar.ss — the bar at the bottom: a button for each window (left
 ;;; focuses or minimizes, middle closes, right opens its menu) and a hint.
+;;; A style may make it another bar, with its areas, drawing and tick
+;;; (Genera's who line).
 
 (theme-default! 'taskbar-height-min
-                (rule (exact (round (+ (font-line-height 'ui) 13)))))
+                (theme-rule (exact (round (+ (font-line-height 'ui) 13)))))
 ;; (in the bars' place, as the bar is drawn)
 (define (taskbar-height)
   (with-place 'bar
@@ -76,11 +78,15 @@
   (bar-mouse (with-place 'bar taskbar-areas) kind what x y button clicks))
 
 (define (taskbar-doc what)
-  (if (window? what)
-      '((L . "Focus or minimize") (M . "Close") (R . "Window menu"))
-      '()))
+  (cond [(window? what)
+         '((L . "Focus or minimize") (M . "Close") (R . "Window menu"))]
+        [(eq? what 'windows) '((L . "Choose a window"))]
+        [else '()]))
+
+;; Each step: the built-in bar shows nothing that changes by itself.
+(define-part (taskbar-tick) (void))
 
 (define-surface taskbar 10
   'draw 'draw-taskbar 'box 'taskbar-box 'at 'taskbar-at
-  'mouse 'taskbar-mouse 'doc 'taskbar-doc)
+  'mouse 'taskbar-mouse 'tick 'taskbar-tick 'doc 'taskbar-doc)
 (define-strip taskbar 'bottom 'taskbar-height)

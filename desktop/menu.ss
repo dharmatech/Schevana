@@ -20,7 +20,7 @@
 ;; and below the last, the text's inset, the least width, the font and
 ;; the entries' ink, chosen and not.
 (theme-default! 'menu-item-height
-                (rule (max 26 (round (+ (font-line-height 'ui) 11)))))
+                (theme-rule (max 26 (round (+ (font-line-height 'ui) 11)))))
 (theme-default! 'menu-separator-height 9)
 (theme-default! 'menu-pad 5)
 (theme-default! 'menu-text-x 18)

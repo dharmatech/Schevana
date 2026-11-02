@@ -37,9 +37,8 @@
 ;; on a whole device pixel, from their height measured on *cr*: hinting
 ;; makes them 9 pixels tall at 100% but 10 logical pixels at 200%.
 (define (draft-baseline cy)
-  (let*-values ([(l top w h) (text-ink "H" 'title)]
-                [(base) (+ cy (/ (- top) 2))])
-    (/ (round (* base *scale*)) *scale*)))
+  (let-values ([(l top w h) (text-ink "H" 'title)])
+    (px-baseline (+ cy (/ (- top) 2)) round)))
 
 ;; The dimension's text in room, as (values title size): both where they
 ;; fit, else the title cut to fit, else nothing: the line reads better
@@ -128,7 +127,27 @@
                    (if focused? ink 'title-text-dim) 'ui)
         (draft-block win x y hover pressed ink)))))
 
+;; A move or a resize drags a drawing of where the window goes: its
+;; outline and, along its top, the dimension line with the live size,
+;; within it, where they fit.
+(define (draft-drag-outline x y w h)
+  (let* ([a draft-arrow] [p draft-pad] [ly (+ y (quotient (draft-band) 2))]
+         [size (format "~a × ~a" (exact (round w)) (exact (round h)))]
+         [sw (ceiling (text-width size 'ui))]
+         [lx (round (+ x (/ (- w sw) 2)))])
+    (stroke-rect x y w h 'accent)
+    (when (and (> w (+ sw (* 2 (+ a 8 p)))) (> h (draft-band)))
+      (fill-rect (+ x a) ly (- lx p x a) 1 'accent)
+      (fill-rect (+ lx sw p) ly (- (+ x w) a lx sw p) 1 'accent)
+      (draft-arrowhead (+ x 1) (+ ly 1/2) 1 'accent)
+      (draft-arrowhead (+ x w -1) (+ ly 1/2) -1 'accent)
+      (draw-text lx (- (draft-baseline (+ ly 1/2)) (font-ascent 'ui)) size
+                 'accent 'ui))))
+
 (define-style draft "Draft"
+  ;; its corners are square: every common option but the radius
+  'options (remq 'corner-radius (map car common-options))
+  'drag-feedback 'outline  'draw-drag-outline 'draft-drag-outline
   'frame-insets 'draft-insets
   'frame-regions 'draft-regions
   'frame-under 'draft-draw-under)

@@ -147,7 +147,9 @@
            [else (halo-glyph win kind gx gy 'text-dim)])))
      (halo-regions win))))
 
+;; Scroll bars show while the pointer is over what they scroll.
 (define-style halo "Halo"
+  'scrollbar-show 'hover
   'frame-insets 'halo-insets
   'frame-bleed 'halo-bleed
   'frame-radius 'halo-radius

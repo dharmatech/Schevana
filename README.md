@@ -202,7 +202,7 @@ apps/        ordinary procedures: repl  clock  life  sketch  monitor
 wallpapers/  desktop fills: gradient  flat  shade
 palettes/    named colors: catppuccin  genera  gruvbox  interlisp  nord
              paper  tokyo-night
-styles/      styles: cons  curses  draft  fold  genera  halo
+styles/      styles: cadr  cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
@@ -298,11 +298,22 @@ Decisions worth keeping in mind for the real design:
   the chosen style (`set-theme!`: switch styles and back, and yours come
   back), the style and its parents, its palette (the setting `palette`),
   and the built-in defaults. A rule is a setting computed from others then,
-  never per frame: the built-in `selection` is `(rule (mix 'accent 'bg-1
-  0.65))`, so a palette gives twenty colors and the rest follow it, and
-  so does your accent. `(theme-source key)` says which layer gives one.
-  The Settings app is only a front end to `set-theme!`, so anything it
-  does can be scripted from the REPL. The saved file is plain data: the
+  never per frame: the built-in `selection` is `(theme-rule (mix 'accent
+  'bg-1 0.65))`, so a palette gives twenty colors and the rest follow it, and
+  so does your accent. `(theme-source key)` says which layer gives one,
+  `(theme-part key)` the procedure a part key gives.
+  The Settings app is a front end to these, so anything it does can be
+  scripted from the REPL: its Theme tab's style cards are the one
+  switch (`set-style!`: frames, palette, wallpaper, fonts, behaviors and
+  what you changed for that style at once); each row is one of the style's
+  options (the common ones it honors, the behaviors, its own; those it
+  does not honor show dimmed), and changing it is your change to this
+  style (`set-theme!`; ↺ drops it, `reset-style!`); its pin makes it an
+  Override (`override!`); Reset forgets your changes to the style; Save
+  as new style writes them as a `define-style` with the style as its
+  parent, `(save-style-as! 'my-mac "My Mac")`, into
+  `~/.schevana.d/styles/` (`*style-save-directory*`). The saved file is
+  plain data: the
   style, the scale, the Overrides and your changes per style; an older,
   flat file loads as the saved style's changes.
 - **Logical pixels.** All layout is in logical pixels; the canvas is
@@ -325,7 +336,7 @@ Decisions worth keeping in mind for the real design:
   the larger of their own setting and what their text needs
   (`chrome-height`: 0 is none, and a style that fixes one means its
   pixels), as do menus, the apps' bars and the Settings layout, so the
-  interface stays usable from 9 to 36 px (44 px for code); the screen's
+  interface stays usable from 9 to 36 px; the screen's
   scale changing builds the theme again, since fonts measure differently
   there. Where a window is too small, Settings scrolls and stacks its
   rows. A new REPL opens at 80 × 22 characters of the code font.
@@ -368,13 +379,33 @@ Decisions worth keeping in mind for the real design:
   kit's `ui-draw-glyph` draws a window's buttons (`close`, `minimize`,
   `maximize`, `restore`, `shade`) and the triangles (`up`, `down`,
   `left`, `right`), which the styles share.
-  The two 1980s Lisp environments were matched against real screens:
-  Interlisp (Interlisp-D/Medley, Xerox PARC) with its black title bars, and
+  The 1980s Lisp environments: Interlisp, from Medley's window system
+  sources (MIT licensed): a border of 2 pixels of ink and 2 of paper, a
+  black title strip with the title at x 4, the window's title shade
+  after it (`interlisp-title-shade`), Medley's #x8822 desktop, and its
+  scroll bars, 24 pixels at the left under the pointer or, with the
+  scroll bar side `outside`, beside the window in its frame's margin.
   Genera (Symbolics Lisp Machines), built to the margins its 1986 manuals
   specify, with the window's label in the bottom-left corner, which is
-  also where you drag it: a style can list any area as its `'title`. Each
-  brings the palette of the same name and its wallpaper: Interlisp's is
-  the dotted desktop shade, a stipple (the `wallpaper` theme key).
+  also where you drag it: a style can list any area as its `'title`. It
+  takes the whole screen: no top bar, and at the bottom the who line,
+  what the mouse buttons do in reverse video ("Mouse-L: Move; Mouse-R:
+  Window menu.") over the selected window, a field listing the windows
+  and the status, in character columns; a window not selected is
+  grayed over, and buttons are command words. Its numbers are settings
+  (`genera-border`, `genera-margin`, `genera-label-font`), so the MIT
+  CADR, from MIT's System 99 sources (BSD), is Genera in a few settings:
+  a 1-pixel border and margin, the label upright in the code font at
+  the top of its strip under the content, and no gray (the CADR grayed
+  only covered windows). Each brings the palette of the same name and its
+  wallpaper (the `wallpaper` theme key).
+  Our own styles choose their feel where it suits them: Fold folds a
+  window up to its title on a double click, Lambda rolls it into its tab
+  on the wheel, Halo and Reticle show scroll bars under the pointer,
+  Draft drags an outline that is a drawing with the live size, Reticle
+  drags its brackets, Curses rings the bell on the whole screen and boxes
+  menu entries, Interlisp drags Medley's dashed outline, chooses from
+  menus on release and flashes the window.
 - **How it feels is settings too.** Shared code does what a style
   chooses, each a setting whose default is today's feel: a double click
   on the title (`title-double-click`: `maximize`, `shade` or `none`) or
@@ -389,12 +420,15 @@ Decisions worth keeping in mind for the real design:
   (`raise-on-click`); the bell, `(bell)` (`none`, or `screen` or
   `window` flashed inverted); menus (`menu-choose`: `click` or
   `release`, `menu-blink`, `menu-hover`: `fill` or `outline`); scroll
-  bars (`scrollbar-side`: `right`, `left`, or `outside` in a margin the
-  frame leaves; `scrollbar-show`: `always` or `hover`); and the mouse
-  documentation, `(mouse-doc)`, what each button does under the pointer
-  as data (from the window's regions, a kit widget's `'doc`, an app's
-  `'mouse-doc`, a surface's `'doc`), which the top bar shows where
-  `mouse-doc` is on.
+  bars (`scrollbar-side`: `right`, `left`, or `outside` in a region of
+  kind `scrollbar` the frame leaves; `scrollbar-show`: `always` or
+  `hover`); and the mouse documentation, `(mouse-doc)`, what each button
+  does under the pointer as data (from the window's regions, a kit
+  widget's `'doc`, an app's `'mouse-doc`, a surface's `'doc`), which the
+  top bar shows where `mouse-doc` is on, and Genera's who line. A top
+  bar 0 high is none; a style may make the taskbar another bar with its
+  areas, drawing and tick (`taskbar-areas`, `draw-taskbar`,
+  `taskbar-tick`).
 - **Every frame is drawn from scratch, where something changed.** The
   canvas is the exact screen. A change says where it shows: input to a
   window and `(invalidate! win)` ask for the window's extent (its frame
@@ -555,10 +589,11 @@ source file is at most 80 characters, no top-level name is defined in
 two files, `src/` stays within its size budget (raise it on purpose),
 every file in a folder registers what it defines, under its own name
 (a kit's with its prefix, the desktop's plain), every style sets only
-settings that exist, in the kits, the desktop layer and Tasks only the
-drawing procedures (parts, `draw-…`, `ui-draw-…`, `complete-draw-…`,
-`tasks-draw-…`) draw or name a theme color, the edit kit never does, and
-only styles call a part's built-in body.
+settings that exist, in the kits, the desktop layer, Tasks and Settings
+only the drawing procedures (parts, `draw-…`, `ui-draw-…`,
+`complete-draw-…`, `tasks-draw-…`, `settings-draw-…`) draw or name a
+theme color, the edit kit never does, and only styles call a part's
+built-in body.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]
@@ -616,10 +651,14 @@ Life windows animate at 200%.
   about 18 ms at 100% and 67 ms at 200% until its frame is drawn, so
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
-- The built-in styles change only the windows, though everything is a
-  part a style may replace: each widget's drawing, size and areas, the
-  bars, menus, toasts, the popups' panel, highlight, separator and card.
-  Settings still does its own text field, list, tabs and scrolling. The
+- The built-in styles change mostly the windows (Genera and the CADR
+  their bars and buttons too, Interlisp its scroll bars), though
+  everything is a part a style may replace: each widget's drawing, size
+  and areas, the bars, menus, toasts, the popups' panel, highlight,
+  separator and card.
+  Settings draws with the kit's widgets and only its own pictures with
+  its own code (the styles' miniatures, swatches, color tracks); its
+  color list and its pane's scrolling are still its own. The
   "stable GUI API" question stays open: keep growing these immediate-mode
   procedures, or describe retained widget trees as data?
 - Tasks redraws its whole window for a keystroke: about 9 ms on a 4K
