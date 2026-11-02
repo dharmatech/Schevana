@@ -151,18 +151,34 @@
 
 ;;; ------------------------------------------------------------------
 ;;; the core's size
+;;; In tokens: the atoms the reader sees (symbols, numbers, strings,
+;;; characters, booleans). Comments, whitespace, line breaks, parentheses
+;;; and the length of a name are free, so the count moves only with the
+;;; code itself: less of it, or some of it moved to a later layer.
 
 ;; Raise it deliberately: the core is what the desktop needs to boot and
 ;; run; everything else belongs in a folder.
-(define src-budget 4100)
+(define src-budget 14200)
 
-(let ([n (apply + (map (lambda (f) (length (file-lines f)))
-                       (map (lambda (f) (string-append "src/" f))
-                            (directory-list (source-path "src")))))])
-  (check (format "src/ is ~a lines, within its budget of ~a (to grow the \
+;; The tokens of a datum as read; a list's end is none.
+(define (tokens x)
+  (cond [(pair? x) (+ (tokens (car x))
+                      (if (null? (cdr x)) 0 (tokens (cdr x))))]
+        [(vector? x) (apply + (map tokens (vector->list x)))]
+        [else 1]))
+
+(let* ([counts (map (lambda (f)
+                      (let ([path (string-append "src/" f)])
+                        (cons path (apply + (map tokens (file-forms path))))))
+                    (directory-list (source-path "src")))]
+       [n (apply + (map cdr counts))])
+  (check (format "src/ is ~a tokens, within its budget of ~a (to grow the \
                   core, raise src-budget in tests/sources.ss on purpose)"
                  n src-budget)
-         (<= n src-budget)))
+         (or (<= n src-budget)
+             ;; over: each file's share, the largest first
+             (none? (map (lambda (c) (format "~a: ~a tokens" (car c) (cdr c)))
+                         (sort (lambda (a b) (> (cdr a) (cdr b))) counts))))))
 
 ;;; ------------------------------------------------------------------
 ;;; folders

@@ -606,7 +606,8 @@ scheme --script tests/sources.ss
 
 This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
-two files, `src/` stays within its size budget (raise it on purpose),
+two files, `src/` stays within its size budget, counted in tokens so
+that comments, names and line breaks are free (raise it on purpose),
 every file in a folder registers what it defines, under its own name
 (a kit's with its prefix, the desktop's plain), every style sets only
 settings that exist, in the kits, the desktop layer, Tasks and Settings
