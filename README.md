@@ -1,5 +1,7 @@
 # Schevana
 
+![Schevana: a REPL and a Clock in the Spine style](docs/screenshot.png)
+
 A Lisp Machine-style desktop that lives inside one host window and is written
 entirely in Chez Scheme. Every window, color, key binding, status-bar segment
 and running process is a live Scheme value. You can inspect it, redefine it and
