@@ -9,12 +9,32 @@ The only C code involved is SDL3 (host window and input) and Cairo (2D
 drawing), both called through Chez's FFI. There is no build step: the whole
 world compiles from source in about 0.1 s at startup.
 
+**WARNING:** Schevana is a toy. It's meant to be a happy place for Lisp
+enthusiasts, and it doesn't pretend to be a serious desktop replacement.
+Simplicity is priority #1. The desktop is just a function of the
+environment, drawn by the CPU in a single thread, and the apps see the
+whole environment. Future versions of Schevana might offload some work to
+threads, use the GPU for window composition, and make it possible to write
+sandboxed apps with limited permissions.
+
 ## Running
 
 Requirements: Chez Scheme 10, SDL 3.2 or later, and `libcairo2` (usually
 installed already on a Linux desktop). On Debian 13, SDL3 is `sudo apt
 install libsdl3-0`. SDL chooses between Wayland and X11 by itself;
 `SDL_VIDEO_DRIVER=x11 ./schevana` (or `wayland`) chooses for it.
+
+On a Mac, install all three from [Homebrew](https://brew.sh):
+
+```bash
+brew install chezscheme sdl3 cairo
+```
+
+Homebrew's Chez Scheme is the command `chez`, not `scheme`: `./schevana`
+runs whichever of the two it finds, and finds Homebrew's libraries in
+`/opt/homebrew/lib` (Apple silicon) or `/usr/local/lib` (Intel). To run
+the tests below on Apple silicon, type `chez` for `scheme` and put
+`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` before it.
 
 ```bash
 ./schevana
