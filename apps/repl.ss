@@ -950,6 +950,11 @@
         (when (and c (memq key '(backspace delete)))
           (refresh-completion! r)))))
 
+;; The pointer over the REPL: the completion list's where it is, else an
+;; I-beam with nothing to say (the REPL has no use for the buttons); #t
+;; when the list's row under it changed.
+(define (repl-pointer! r win) (complete-pointer! r win 'ibeam '()))
+
 ;; A press goes to the completion list; the REPL has no other use for it.
 (define (repl-mouse-down r)
   (lambda (win x y button clicks)
@@ -1255,7 +1260,8 @@
       (when c
         (complete-show c caret (* cw (- (repl-point r) (complete-start c)))
                        lh w h (lambda (name) (name-kind name env))
-                       (lambda (item) (completion-description r c item)))))))
+                       (lambda (item) (completion-description r c item)))))
+    (repl-pointer! r win)))
 
 (define (vector-fill-range! v a b x)
   (do ([i a (+ i 1)]) ((>= i (min b (vector-length v)))) (vector-set! v i x)))
@@ -1338,6 +1344,8 @@
                (repl-scroll-set! r (max 0 (+ (repl-scroll r) (* 3 dy)))))
              (invalidate! win))
     'mouse-down (repl-mouse-down r)
+    'mouse-move (lambda (win x y)
+                  (when (repl-pointer! r win) (invalidate! win)))
     'blur (repl-blur r)
     'tick (lambda (win)
             (repl-drain! r)

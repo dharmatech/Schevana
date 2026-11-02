@@ -1955,9 +1955,14 @@
 
 ;; The entry chosen in a menu or a list; with outline (a menu's
 ;; menu-hover), a 1-pixel box, and pressed, filled: inverted. With hover,
-;; one under the pointer, not chosen (Settings' list).
+;; one under the pointer, not chosen: filled (Settings' list), or with
+;; popup, on a popup's panel, a 1-pixel box, as a card or a field under
+;; the pointer (the completion list).
 (define-part (ui-draw-highlight x y w h flags)
-  (cond [(memq 'hover flags) (fill-round-rect x y w h 5 'bg-2)]
+  (cond [(memq 'hover flags)
+         (if (memq 'popup flags)
+             (stroke-round-rect x y w h 5 'text-faint)
+             (fill-round-rect x y w h 5 'bg-2))]
         [(not (memq 'outline flags))
          (fill-round-rect x y w h 5 (alpha 'accent 0.22))]
         [(memq 'pressed flags) (px-fill x y w h 'text)]

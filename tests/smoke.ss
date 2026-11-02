@@ -352,6 +352,35 @@
                (and (> n (* 2 complete-rows)) (eqv? next complete-rows)
                     (eqv? back last-page) (eqv? (sel) 0)
                     (string=? input (repl-input r)))))))
+  ;; Under the pointer a row shows it takes a click: a box, a hand and
+  ;; the mouse documentation's words; off the list the REPL's own again,
+  ;; and so once the list closes under a still pointer.
+  (fresh! "(set-th")
+  (press! 'tab)
+  (steps 1)
+  (let-values ([(cx cy cw ch) (content-rect w)])
+    (let* ([box (complete-box (complete-of r))]
+           [move! (lambda (x y) (inject! `(mouse-move ,x ,y)) (steps 1))]
+           [state (lambda ()
+                    (let ([c (complete-of r)])
+                      (list (and c (complete-hover c)) (window-ref w 'cursor)
+                            (mouse-doc))))]
+           [row-x (+ cx (car box) 20)]
+           [row-y (+ cy (list-ref box 5) (* 3/2 (complete-row-height)))])
+      (move! row-x row-y)
+      (let ([over (state)])
+        (screenshot (string-append out-dir "/completion-hover.png"))
+        (move! (+ cx cw -10) (+ cy 10))
+        (let ([off (state)])
+          (move! row-x row-y)
+          (press! 'escape)
+          (steps 1)
+          (check "a row under the pointer shows it, with a hand and what a \
+                  click does; off the list, and once it closes, the REPL's \
+                  own again"
+                 (and (equal? over '(1 hand ((L . "Complete") (W . "Scroll"))))
+                      (equal? off '(#f ibeam ((L . "Close the list"))))
+                      (equal? (state) '(#f ibeam ()))))))))
   (fresh! "(set-th")
   (press! 'tab)
   (steps 1)
@@ -359,7 +388,7 @@
     (let* ([c (complete-of r)] [box (complete-box c)]
            [second (car (vector-ref (complete-items c) 1))])
       (click! (+ cx (car box) 20)
-              (+ cy (cadr box) 4 (* 3/2 (complete-row-height))))
+              (+ cy (list-ref box 5) (* 3/2 (complete-row-height))))
       (check "a click on a row takes it"
              (and (string=? (string-append "(" second) (repl-input r))
                   (not (offered))))))
@@ -473,6 +502,32 @@
                   (= (+ (complete-top c) (list-ref (complete-box c) 4))
                      (vector-length (complete-items c)))
                   (> (list-ref (complete-box c) 4) shown)))))
+  ;; Above the line the description goes over the rows, so that they stay
+  ;; put as Tab pages through descriptions of other lengths.
+  (do ([i 0 (+ i 1)]) ((= i 40)) (repl-add! r 'info ""))
+  (fresh! "(set-")
+  (press! 'tab)
+  (steps 1)
+  (let ([pages
+         (map (lambda (k)
+                (let* ([c (complete-of r)] [box (and c (complete-box c))]
+                       [rows-end (and box (+ (list-ref box 5)
+                                             (* (list-ref box 4)
+                                                (complete-row-height))))])
+                  (when (= k 1)
+                    (screenshot (string-append out-dir
+                                               "/completion-above.png")))
+                  (press! 'tab)
+                  (steps 1)
+                  (and box (list (cadr box) (list-ref box 5) rows-end
+                                 (+ (cadr box) (cadddr box))))))
+              (iota 4))])
+    (check "above the line the description is over the rows, which stay \
+            put from page to page"
+           (and (for-all (lambda (p) p) pages)
+                (for-all (lambda (p) (= (+ (caddr p) 4) (cadddr p))) pages)
+                (for-all (lambda (p) (= (cadr p) (cadar pages))) pages)
+                (exists (lambda (p) (not (= (car p) (caar pages)))) pages))))
   (let ([owner (list 'field)])
     (complete-open! owner 'symbols 0 (vector))
     (check "a list opened with no items is closed"

@@ -7,9 +7,11 @@
 ;;; them opens under or over the caret's line; with nothing to add, a
 ;;; popup says so. The field narrows the list as its text changes
 ;;; (complete-narrow!); keys, the wheel and clicks choose from it, and the
-;;; field puts the chosen one in. The field keeps what is its own: where
-;;; the word starts, the choices, their kinds and descriptions, and
-;;; putting one in. An owner shows one list or popup at a time.
+;;; field puts the chosen one in. Under the pointer a row shows it can be
+;;; clicked, and says what a click does (complete-pointer!). The field
+;;; keeps what is its own: where the word starts, the choices, their kinds
+;;; and descriptions, and putting one in. An owner shows one list or popup
+;;; at a time.
 ;;;
 ;;; An item is (name kind matched): kind is a string, or #f for one the
 ;;; field works out only when the item shows; matched are the indices of
@@ -30,7 +32,8 @@
           (mutable top)  ; the first row shown
           message        ; #f for a list; else a popup's text, over the
                          ; description of its item, if it has one
-          (mutable box)))  ; (x y w h rows) as last drawn, or #f
+          (mutable box)    ; (x y w h rows rows-y) as last drawn, or #f
+          (mutable hover)))  ; the item under the pointer, or #f
 
 (defvar *complete-open* (make-weak-eq-hashtable))   ; owner -> its list
 
@@ -48,13 +51,13 @@
   (if (= 0 (vector-length items))
       (complete-close! owner)
       (hashtable-set! *complete-open* owner
-                      (make-complete context start items 0 0 #f #f))))
+                      (make-complete context start items 0 0 #f #f #f))))
 
 ;; A popup instead: message, over the description of items' first one,
 ;; if there is one.
 (define (complete-say! owner message context start items)
   (hashtable-set! *complete-open* owner
-                  (make-complete context start items 0 0 message #f)))
+                  (make-complete context start items 0 0 message #f #f)))
 
 ;; A page: the rows the last draw showed (fewer in a small window).
 (define (complete-page c)
@@ -172,11 +175,52 @@
        (complete-close! owner)
        #f]
       [else
-       (let ([row (exact (floor (/ (- y (cadr box) 4)
-                                   (complete-row-height))))])
-         (when (and (eq? button 'left) (<= 0 row) (< row (list-ref box 4)))
-           (accept! (vector-ref (complete-items c) (+ (complete-top c) row))))
+       (let ([i (complete-item-at c x y)])
+         (when (and i (eq? button 'left))
+           (accept! (vector-ref (complete-items c) i)))
          #t)])))
+
+;; The pointer's shape and the mouse documentation in win, owner's
+;; window, for where the pointer is: over a row a hand and what a click
+;; does, over the rest of the list an arrow, elsewhere cursor and doc,
+;; the field's own. Called as the pointer moves and after each draw (the
+;; list opens, moves or closes under a still pointer); #t when the item
+;; under the pointer changed, to redraw.
+(define (complete-pointer! owner win cursor doc)
+  (let* ([c (complete-of owner)] [at (complete-pointer-at win)]
+         [box (and c at (complete-box c))]
+         [in? (and box (point-in? (car at) (cdr at) (car box) (cadr box)
+                                  (caddr box) (cadddr box)))]
+         [i (and in? (complete-item-at c (car at) (cdr at)))]
+         [shape (cond [i 'hand] [in? 'arrow] [else cursor])])
+    ;; no redraw for either
+    (hashtable-set! (window-props win) 'mouse-doc
+                    (cond [i '((L . "Complete") (W . "Scroll"))]
+                          [(not c) doc]
+                          [(complete-message c) '((L . "Close"))]
+                          [in? '((W . "Scroll"))]
+                          [else '((L . "Close the list"))]))
+    (unless (eq? shape (window-ref win 'cursor 'arrow))
+      (hashtable-set! (window-props win) 'cursor shape)
+      (when at (host-set-cursor! shape)))
+    (and c (not (eqv? i (complete-hover c)))
+         (begin (complete-hover-set! c i) #t))))
+
+;; The pointer over win's content, in its coordinates, (x . y), or #f.
+(define (complete-pointer-at win)
+  (and win (memq (window-hover win) '(content scrollbar))
+       (let-values ([(x y) (window-local win *mouse-x* *mouse-y*)])
+         (cons x y))))
+
+;; The item on the row of c's list at (x, y), as last drawn, or #f.
+(define (complete-item-at c x y)
+  (let ([box (complete-box c)])
+    (and box (not (complete-message c))
+         (point-in? x y (car box) (cadr box) (caddr box) (cadddr box))
+         (let ([row (exact (floor (/ (- y (list-ref box 5))
+                                     (complete-row-height))))])
+           (and (<= 0 row) (< row (list-ref box 4))
+                (+ (complete-top c) row))))))
 
 ;;; ------------------------------------------------------------------
 ;;; matching
@@ -390,7 +434,9 @@
             (* lines (+ (font-line-height 'ui-small) 2)))))
 
 ;; Draws c, owner's list or popup, beside the caret at (x . y), or
-;; nothing when that is out of view (#f), and keeps where, for clicks.
+;; nothing when that is out of view (#f), and keeps where, for clicks and
+;; the pointer. The description goes on the far side of the rows from
+;; the line, so that the rows stay put as it changes.
 ;; The word before the caret is word-w wide, its line line-h high, the
 ;; window w × h. kind-of gives the kind of an item's name that has none;
 ;; describe an item's (values signature doc).
@@ -444,16 +490,35 @@
                                           2))))))]
          [(pw ph) (complete-size flags shown sig doc k (- w 8))]
          [(px) (clamp (- (car caret) word-w 10) 4 (max 4 (- w pw 4)))]
-         [(py) (if below? below (max 4 (- (cdr caret) ph 2)))])
+         [(py) (if below? below (max 4 (- (cdr caret) ph 2)))]
+         [(flags) (if below? flags (cons 'above flags))])
       (unless message (complete-top-set! c top))
-      (complete-box-set! c (list px py pw ph rows))
-      (complete-draw-list px py pw ph flags shown top n sig doc k))))
+      (complete-box-set! c (list px py pw ph rows
+                                 (complete-rows-y py ph rows flags)))
+      ;; the item under the pointer, as the list lies now
+      (complete-hover-set!
+       c (let ([at (complete-pointer-at (current-window))])
+           (and at (complete-item-at c (car at) (cdr at)))))
+      (complete-draw-list px py pw ph flags
+                          (map (lambda (row i)
+                                 (append row (list (eqv? (+ top i)
+                                                         (complete-hover c)))))
+                               shown (iota (length shown)))
+                          top n sig doc k))))
+
+;; Where the rows of a list at y, h high, start, count of them: at its
+;; top, or with above in flags at its bottom, under its description.
+(define (complete-rows-y y h count flags)
+  (if (memq 'above flags)
+      (- (+ y h) 4 (* count (complete-row-height)))
+      (+ y 4)))
 
 ;;; ------------------------------------------------------------------
 ;;; drawing
-;;; rows: ((name kind matched selected?) ...), those shown, from top of
-;;; n; with message in flags, one row: a popup's text. Under them the
-;;; signature, unless it is "", and the first k lines of doc.
+;;; rows: ((name kind matched selected? hover?) ...), those shown, from
+;;; top of n; with message in flags, one row: a popup's text. Under them
+;;; (over them with above in flags) the signature, unless it is "", and
+;;; the first k lines of doc.
 
 ;; The widest kind, and room around it.
 (define (complete-kinds-width rows)
@@ -485,15 +550,19 @@
                     (length (complete-doc-lines sig doc w k))))))))
 
 (define (complete-draw-list x y w h flags rows top n sig doc k)
-  (let ([rh (complete-row-height)] [cw (font-char-width 'mono)]
-        [small-lh (font-line-height 'ui-small)]
-        [kind-w (complete-kinds-width rows)]
-        [count (length rows)])
+  (let* ([rh (complete-row-height)] [cw (font-char-width 'mono)]
+         [small-lh (font-line-height 'ui-small)]
+         [kind-w (complete-kinds-width rows)]
+         [count (length rows)] [above? (memq 'above flags)]
+         [rows-y (complete-rows-y y h count flags)])
     (ui-draw-panel x y w h '(menu))
     (for-each
      (lambda (row i)
-       (let ([ry (+ y 4 (* i rh))] [name (car row)] [selected? (cadddr row)])
-         (when selected? (ui-draw-highlight (+ x 4) ry (- w 8) rh '()))
+       (let ([ry (+ rows-y (* i rh))] [name (car row)]
+             [selected? (cadddr row)])
+         (cond [selected? (ui-draw-highlight (+ x 4) ry (- w 8) rh '())]
+               [(list-ref row 4)
+                (ui-draw-highlight (+ x 4) ry (- w 8) rh '(hover popup))])
          (if (memq 'message flags)
              (draw-text (+ x 10) (+ ry (/ (- rh (font-line-height 'ui)) 2))
                         name 'text-dim 'ui)
@@ -516,17 +585,18 @@
         (ui-draw-scrollbar (if (eq? (theme 'scrollbar-side) 'left)
                                x
                                (+ x w (- bw)))
-                           (+ y 4) bw (* count rh) '() (/ top n)
+                           rows-y bw (* count rh) '() (/ top n)
                            (/ count n))))
     (unless (string=? sig "")
-      (let ([dy (+ y 4 (* count rh) 4)]
-            [lines (complete-doc-lines sig doc w k)])
-        (ui-draw-separator (+ x 6) dy (- w 12) 1 '())
-        (draw-text (+ x 10) (+ dy 5) (fit-text sig (- w 20) 'mono-small)
+      (let* ([lines (complete-doc-lines sig doc w k)]
+             [sep-y (if above? (- rows-y 5) (+ rows-y (* count rh) 4))]
+             [ty (if above? (+ y 6) (+ sep-y 5))])
+        (ui-draw-separator (+ x 6) sep-y (- w 12) 1 '())
+        (draw-text (+ x 10) ty (fit-text sig (- w 20) 'mono-small)
                    'text 'mono-small)
         (for-each (lambda (line i)
                     (draw-text (+ x 10)
-                               (+ dy 5 (font-line-height 'mono-small) 3
+                               (+ ty (font-line-height 'mono-small) 3
                                   (* i (+ small-lh 2)))
                                line 'text-faint 'ui-small))
                   lines (iota (length lines)))))))
