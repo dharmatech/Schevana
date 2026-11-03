@@ -35,8 +35,13 @@
 
 (define (vec-dot a b) (+ (* (vec-x a) (vec-x b)) (* (vec-y a) (vec-y b))))
 
-;; The squared distance, so neighbor checks need no square root.
-(define (vec-dist2 a b) (let ([d (vec- a b)]) (vec-dot d d)))
+;; The squared distance, so neighbor checks need no square root. Every
+;; pair of boids is checked, so it is worked out on the components, in
+;; flonums: a vec for the difference, and the flonums Chez boxes for it,
+;; were most of what a step allocated (99 MB at 500 boids).
+(define (vec-dist2 a b)
+  (let ([dx (fl- (vec-x a) (vec-x b))] [dy (fl- (vec-y a) (vec-y b))])
+    (fl+ (fl* dx dx) (fl* dy dy))))
 
 ;; The centroid of a non-empty list of points.
 (define (vec-mean vs) (vec/ (fold-left vec+ vec-zero vs) (inexact (length vs))))
@@ -66,10 +71,11 @@
 
 ;; The boids in flock that b can see closer than r, not counting itself.
 (define (boid-neighbors b flock r fov)
-  (filter (lambda (other)
-            (let ([d2 (vec-dist2 (boid-position b) (boid-position other))])
-              (and (> d2 0.0) (< d2 (* r r)) (boid-sees? b other fov))))
-          flock))
+  (let ([r2 (* r r)])
+    (filter (lambda (other)
+              (let ([d2 (vec-dist2 (boid-position b) (boid-position other))])
+                (and (> d2 0.0) (< d2 r2) (boid-sees? b other fov))))
+            flock)))
 
 ;; The rules' raw pushes. boid-steer weighs them and adds them up.
 
@@ -88,10 +94,10 @@
 ;; Away from every boid in flock closer than r, seen or not: you feel a
 ;; bump from behind.
 (define (boid-separate b flock r)
-  (let ([p (boid-position b)])
+  (let ([p (boid-position b)] [r2 (* r r)])
     (fold-left (lambda (sum other)
                  (let ([d2 (vec-dist2 p (boid-position other))])
-                   (if (and (> d2 0.0) (< d2 (* r r)))
+                   (if (and (> d2 0.0) (< d2 r2))
                        (vec+ sum (vec- p (boid-position other)))
                        sum)))
                vec-zero flock)))
@@ -386,12 +392,13 @@
 ;;; reads and sets the flock window's properties, so it shows them as they
 ;;; are, whoever changed them: a key, a button or the REPL.
 
-;; A step's cost grows as the count squared. At 300, measured here, a
-;; step takes about 16 ms with the default rules and 30 with the heaviest
-;; (both blocker rules, 360°, radii of 200): about a 60 Hz frame, and two.
+;; A step's cost grows as the count squared. At 450, measured here, a
+;; step takes about 16 ms with the default rules (19 in the status line,
+;; among the frames' own work) and 38 with the heaviest (both blocker
+;; rules, 360°, radii of 200): about a 60 Hz frame, and two or three.
 ;; Niva's slider stops at 500 for the same reason, where its steps took
 ;; 12 and 17.
-(define boids-max-count 300)
+(define boids-max-count 450)
 
 ;; A rule's name as its row shows it: cohesion-radius as cohesion radius.
 (define (boids-setting-label key)
