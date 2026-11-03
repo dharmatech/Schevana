@@ -1,6 +1,7 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
-;;; context, pixmaps, Life's generations and grid, Boids' flocking, and
-;;; invalidation; the edit kit (editing, rows and their lazy layout), the
+;;; context, pixmaps, Life's generations and grid, Boids' flocking,
+;;; Springies' physics, and invalidation; the edit kit (editing, rows and
+;;; their lazy layout), the
 ;;; widget kit's dates and layout, Tasks' own procedures, the window
 ;;; manager's surfaces and strips, and styles: derived ones, parts by
 ;;; name, a window's own; the shared drawing primitives and the behaviors
@@ -1158,6 +1159,174 @@
            (and (< (window-x win) 400)
                 (= (+ (window-x win) (window-w win) 12) (window-x rw)))))
   (close-window! win))
+
+;;; ------------------------------------------------------------------ Springies
+;;; The springs' laws as XSpringies has them, Runge-Kutta against motion
+;;; known exactly, the walls, and the ball.
+
+(define (test-particle x y vx vy m e)
+  (make-particle (make-pt x y) (make-pt vx vy) m e))
+
+(define (test-close? a b tolerance) (<= (abs (- a b)) tolerance))
+
+(define (test-pt-close? p x y tolerance)
+  (and (test-close? (pt-x p) x tolerance) (test-close? (pt-y p) y tolerance)))
+
+;; Two particles 10 apart on x, the first moving at (vx, vy), and a spring
+;; between them of stiffness 100, damping 2 and the rest length given:
+;; the force it pulls the first with.
+(define (test-spring-pull rest vx vy)
+  (spring-force (make-spring 0 1 100.0 2.0 rest)
+                (vector (test-particle 0.0 0.0 vx vy 1.0 1.0)
+                        (test-particle 10.0 0.0 0.0 0.0 1.0 1.0))))
+
+(check "Springies: a spring at rest pulls nothing; stretched it pulls its \
+        ends together, squeezed it pushes them apart"
+       (and (test-pt-close? (test-spring-pull 10.0 0.0 0.0) 0.0 0.0 1e-12)
+            (test-pt-close? (test-spring-pull 8.0 0.0 0.0) 200.0 0.0 1e-12)
+            (test-pt-close? (test-spring-pull 12.0 0.0 0.0) -200.0 0.0 1e-12)))
+
+(check "Springies: damping resists ends moving apart, not moving sideways"
+       (and (test-pt-close? (test-spring-pull 10.0 -3.0 0.0) 6.0 0.0 1e-12)
+            (test-pt-close? (test-spring-pull 10.0 0.0 5.0) 0.0 0.0 1e-12)))
+
+(check "Springies: a spring of no length pulls nothing"
+       (let ([ps (vector (test-particle 5.0 5.0 1.0 0.0 1.0 1.0)
+                         (test-particle 5.0 5.0 0.0 0.0 1.0 1.0))])
+         (and (eq? (spring-force (make-spring 0 1 100.0 2.0 10.0) ps) pt-zero)
+              (eq? (spring-force (make-spring 0 1 100.0 2.0 0.0) ps)
+                   pt-zero))))
+
+(check "Springies: gravity pulls light and heavy alike"
+       (let ([rate (springies-rate
+                    (vector (test-particle 0.0 0.0 0.0 0.0 1.0 1.0)
+                            (test-particle 9.0 0.0 0.0 0.0 10.0 1.0))
+                    '() (make-pt 0.0 -980.0))])
+         (for-all (lambda (p) (test-pt-close? (particle-velocity p)
+                                              0.0 -980.0 0.0))
+                  (vector->list rate))))
+
+;; Six particles of random masses and springs between them all, moving at
+;; random: m a summed over them is the springs' forces, which cancel.
+(check "Springies: springs pull equal and opposite: momentum holds"
+       (let* ([ps (list->vector
+                   (map (lambda (i)
+                          (test-particle (random 100.0) (random 100.0)
+                                         (- (random 20.0) 10.0)
+                                         (- (random 20.0) 10.0)
+                                         (+ 0.5 (random 5.0)) 1.0))
+                        (iota 6)))]
+              [ss (apply append
+                         (map (lambda (a)
+                                (map (lambda (b)
+                                       (make-spring a b (random 500.0)
+                                                    (random 5.0)
+                                                    (random 50.0)))
+                                     (iota a)))
+                              (iota 6)))]
+              [rate (springies-rate ps ss pt-zero)]
+              [sum (fold-left pt+ pt-zero
+                              (map (lambda (p r)
+                                     (pt* (particle-velocity r)
+                                          (particle-mass p)))
+                                   (vector->list ps) (vector->list rate)))])
+         (test-pt-close? sum 0.0 0.0 1e-9)))
+
+;; With gravity alone the acceleration is constant, which Runge-Kutta
+;; follows exactly: x0 + v0 t + g t²/2.
+(check "Springies: a fall under gravity is the parabola, to rounding"
+       (let loop ([ps (vector (test-particle 100.0 100.0 3.0 40.0 1.0 1.0))]
+                  [i 0])
+         (if (< i 10)
+             (loop (springies-rk4 (lambda (s)
+                                    (springies-rate s '()
+                                                    (make-pt 0.0 -980.0)))
+                                  ps 0.05)
+                   (+ i 1))
+             (let ([p (vector-ref ps 0)])   ; half a second on
+               (and (test-pt-close? (particle-position p)
+                                    101.5 (+ 100.0 20.0 -122.5) 1e-9)
+                    (test-pt-close? (particle-velocity p)
+                                    3.0 (- 40.0 490.0) 1e-9))))))
+
+;; Two particles of mass 1 on a spring of stiffness 100, stretched by 1
+;; and let go: they swing at ω = √(k/μ), μ = 1/2 the reduced mass. Half a
+;; period on, the spring is squeezed by 1.
+(check "Springies: two particles on a spring swing at its period"
+       (let* ([ss (list (make-spring 0 1 100.0 0.0 10.0))]
+              [half-period (/ pi (sqrt 200.0))]
+              [n 1000])
+         (let loop ([ps (vector (test-particle 500.0 500.0 0.0 0.0 1.0 1.0)
+                                (test-particle 511.0 500.0 0.0 0.0 1.0 1.0))]
+                    [i 0])
+           (if (< i n)
+               (loop (springies-step ps ss pt-zero (/ half-period n) 1e6 1e6)
+                     (+ i 1))
+               (let ([a (particle-position (vector-ref ps 0))]
+                     [b (particle-position (vector-ref ps 1))])
+                 (test-close? (pt-norm (pt- b a)) 9.0 1e-6))))))
+
+;; Radius 3, elasticity 1/2, in a 100 × 100 box.
+(check "Springies: a particle past a wall is put back on it, and turns \
+        back if it was moving out, keeping its elasticity of its speed"
+       (let ([down (particle-bounce (test-particle 10.0 -2.0 4.0 -10.0 1.0 0.5)
+                                    100.0 100.0)]
+             [in (particle-bounce (test-particle 99.0 50.0 -6.0 2.0 1.0 0.5)
+                                  100.0 100.0)]
+             [free (test-particle 50.0 50.0 -6.0 2.0 1.0 0.5)])
+         (and (test-pt-close? (particle-position down) 10.0 3.0 0.0)
+              (test-pt-close? (particle-velocity down) 2.0 5.0 0.0)
+              (test-pt-close? (particle-position in) 97.0 50.0 0.0)
+              (test-pt-close? (particle-velocity in) -3.0 1.0 0.0)
+              (eq? (particle-bounce free 100.0 100.0) free))))
+
+(check "Springies: the ball's springs join particles it has, each at rest"
+       (let* ([m (springies-ball 760.0 520.0)]
+              [ps (springies-model-particles m)])
+         (for-all (lambda (s)
+                    (and (< -1 (spring-a s) (vector-length ps))
+                         (< -1 (spring-b s) (vector-length ps))
+                         (not (= (spring-a s) (spring-b s)))
+                         (= (spring-rest-length s)
+                            (pt-norm (pt- (particle-position
+                                           (vector-ref ps (spring-a s)))
+                                          (particle-position
+                                           (vector-ref ps (spring-b s))))))))
+                  (springies-model-springs m))))
+
+;; 5 seconds at 60 frames a second.
+(check "Springies: the ball bounces about and stays in its box, whole"
+       (let ([m (springies-ball 760.0 520.0)])
+         (let loop ([ps (springies-model-particles m)] [i 0])
+           (if (< i 300)
+               (loop (springies-frame ps (springies-model-springs m)
+                                      (springies-model-settings m)
+                                      760.0 520.0)
+                     (+ i 1))
+               (for-all (lambda (p)
+                          (let ([q (particle-position p)]
+                                [r (particle-radius p)])
+                            (and (<= r (pt-x q) (- 760.0 r))
+                                 (<= r (pt-y q) (- 520.0 r)))))
+                        (vector->list ps))))))
+
+(check "Springies: a frame leaves the particles it steps as they were"
+       (let* ([m (springies-ball 760.0 520.0)]
+              [ps (springies-model-particles m)]
+              [before (vector->list ps)])
+         (springies-frame ps (springies-model-springs m)
+                          (springies-model-settings m) 760.0 520.0)
+         (for-all eq? (vector->list ps) before)))
+
+;; The record types are nongenerative, as Boids' are.
+(check "Springies: particles made before the file loads again still work"
+       (let ([m (springies-ball 760.0 520.0)])
+         (load-source "apps/springies.ss")
+         (and (particle? (vector-ref (springies-model-particles m) 0))
+              (vector? (springies-frame (springies-model-particles m)
+                                        (springies-model-springs m)
+                                        (springies-model-settings m)
+                                        760.0 520.0)))))
 
 ;;; ------------------------------------------------------------------
 ;;; invalidation

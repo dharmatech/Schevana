@@ -1,0 +1,296 @@
+;;; apps/springies.ss — Springies: masses joined by springs, falling,
+;;; bouncing and wobbling. Ported from Springies in Agave
+;;; (github.com/dharmatech/agave, demos/springies.sls), which followed
+;;; Douglas DeCarlo's XSpringies (1991). The physics is written from
+;;; XSpringies' behavior, not copied from its (GPL) source, and the models
+;;; are made here, in code, not read from its example files.
+;;;
+;;; The simulation is pure: the particles are a vector, and a step makes a
+;;; new one. The world is y-up, as XSpringies' is; only drawing flips it.
+
+;;; ------------------------------------------------------------------ points
+
+;; A 2D vector of flonums: a position, a velocity, an acceleration or a
+;; force. The names are Agave's.
+(define-record-type pt
+  (nongenerative schevana-springies-pt)
+  (fields x y))
+
+(record-writer (record-type-descriptor pt)
+  (lambda (p port wr) (fprintf port "#<pt ~a ~a>" (pt-x p) (pt-y p))))
+
+(define pt-zero (make-pt 0.0 0.0))
+
+(define (pt+ a b) (make-pt (+ (pt-x a) (pt-x b)) (+ (pt-y a) (pt-y b))))
+(define (pt- a b) (make-pt (- (pt-x a) (pt-x b)) (- (pt-y a) (pt-y b))))
+(define (pt* p k) (make-pt (* (pt-x p) k) (* (pt-y p) k)))
+
+(define (pt-dot a b) (+ (* (pt-x a) (pt-x b)) (* (pt-y a) (pt-y b))))
+(define (pt-norm p) (sqrt (pt-dot p p)))
+
+;;; ------------------------------------------------------------------ particles
+
+;; A point mass: where it is, how it moves, its mass, and how much of its
+;; speed it keeps when it bounces off a wall (1.0 all of it, 0.0 none).
+(define-record-type particle
+  (nongenerative schevana-springies-particle)
+  (fields position velocity mass elasticity))
+
+(record-writer (record-type-descriptor particle)
+  (lambda (p port wr)
+    (let ([x (particle-position p)] [v (particle-velocity p)])
+      (fprintf port "#<particle at ~a ~a moving ~a ~a>"
+               (pt-x x) (pt-y x) (pt-x v) (pt-y v)))))
+
+;; Its size on the screen and against the walls: the heavier, the bigger.
+(define (particle-radius p) (* 3.0 (sqrt (particle-mass p))))
+
+;; Past a wall of the w × h box, a particle is put back on it, and if it
+;; was moving out it turns back. Either way it keeps its elasticity of
+;; its speed, across the wall and along it (the loss along is friction).
+(define (particle-bounce p w h)
+  (let* ([r (particle-radius p)] [e (particle-elasticity p)]
+         [x (pt-x (particle-position p))] [y (pt-y (particle-position p))]
+         [vx (pt-x (particle-velocity p))] [vy (pt-y (particle-velocity p))]
+         [side? (or (< x r) (> x (- w r)))]
+         [floor? (or (< y r) (> y (- h r)))])
+    ;; a coordinate c moving at v, put back between lo and hi, and v
+    ;; turned back if it was taking c farther out
+    (define (inside c lo hi) (max lo (min hi c)))
+    (define (back c v lo hi)
+      (if (or (and (< c lo) (< v 0.0)) (and (> c hi) (> v 0.0)))
+          (- (* v e))
+          (* v e)))
+    (if (not (or side? floor?))
+        p
+        (make-particle
+         (make-pt (inside x r (- w r)) (inside y r (- h r)))
+         (make-pt (if side? (back x vx r (- w r)) (* vx e))
+                  (if floor? (back y vy r (- h r)) (* vy e)))
+         (particle-mass p) e))))
+
+;;; ------------------------------------------------------------------ springs
+
+;; A spring between two particles, by their place in the vector: how stiff
+;; it is (Hooke's k), how much it damps, and its length at rest.
+(define-record-type spring
+  (nongenerative schevana-springies-spring)
+  (fields a b stiffness damping rest-length))
+
+(record-writer (record-type-descriptor spring)
+  (lambda (s port wr)
+    (fprintf port "#<spring ~a-~a at rest ~a>"
+             (spring-a s) (spring-b s) (spring-rest-length s))))
+
+;; The force spring s pulls its particle a with (b feels the opposite):
+;; Hooke's, along the spring, and damping, against how fast its ends move
+;; apart along it. A spring of no length has no direction: no force.
+(define (spring-force s particles)
+  (let* ([a (vector-ref particles (spring-a s))]
+         [b (vector-ref particles (spring-b s))]
+         [d (pt- (particle-position a) (particle-position b))]   ; b to a
+         [len (pt-norm d)])
+    (if (= len 0.0)
+        pt-zero
+        (let ([stretch (- len (spring-rest-length s))]
+              [apart (/ (pt-dot (pt- (particle-velocity a)
+                                     (particle-velocity b))
+                                d)
+                        len)])
+          (pt* d (/ (- (+ (* (spring-stiffness s) stretch)
+                          (* (spring-damping s) apart)))
+                    len))))))
+
+;;; ------------------------------------------------------------------ motion
+;;; A state is the particles, a vector of them. Runge-Kutta needs states
+;;; to add and scale, as vectors do, and a state's rate of change to be a
+;;; state too: so it is, each particle's position changing at its
+;;; velocity, its velocity at its acceleration.
+
+;; The springs' forces on each particle, summed: a vector like particles.
+(define (springies-forces particles springs)
+  (let ([forces (make-vector (vector-length particles) pt-zero)])
+    (define (push! i f) (vector-set! forces i (pt+ (vector-ref forces i) f)))
+    (for-each (lambda (s)
+                (let ([f (spring-force s particles)])
+                  (push! (spring-a s) f)
+                  (push! (spring-b s) (pt* f -1.0))))
+              springs)
+    forces))
+
+;; How the particles change. Gravity is an acceleration, so it pulls
+;; light and heavy alike; a spring's force moves a light particle more.
+(define (springies-rate particles springs gravity)
+  (vector-map (lambda (p f)
+                (make-particle (particle-velocity p)
+                               (pt+ gravity (pt* f (/ 1.0 (particle-mass p))))
+                               (particle-mass p) (particle-elasticity p)))
+              particles (springies-forces particles springs)))
+
+;; States add and scale through their positions and velocities; mass and
+;; elasticity ride along.
+(define (particle+ p q)
+  (make-particle (pt+ (particle-position p) (particle-position q))
+                 (pt+ (particle-velocity p) (particle-velocity q))
+                 (particle-mass p) (particle-elasticity p)))
+
+(define (particle* p k)
+  (make-particle (pt* (particle-position p) k) (pt* (particle-velocity p) k)
+                 (particle-mass p) (particle-elasticity p)))
+
+(define (state+ s . more)
+  (fold-left (lambda (a b) (vector-map particle+ a b)) s more))
+
+(define (state* s k) (vector-map (lambda (p) (particle* p k)) s))
+
+;; The state h seconds on from s, by the classic fourth-order Runge-Kutta:
+;; rate gives a state's rate of change.
+(define (springies-rk4 rate s h)
+  (let* ([k1 (rate s)]
+         [k2 (rate (state+ s (state* k1 (/ h 2.0))))]
+         [k3 (rate (state+ s (state* k2 (/ h 2.0))))]
+         [k4 (rate (state+ s (state* k3 h)))])
+    (state+ s (state* (state+ k1 (state* k2 2.0) (state* k3 2.0) k4)
+                      (/ h 6.0)))))
+
+;; The particles dt seconds on, in a w × h box: Runge-Kutta, then the walls.
+(define (springies-step particles springs gravity dt w h)
+  (vector-map (lambda (p) (particle-bounce p w h))
+              (springies-rk4 (lambda (s) (springies-rate s springs gravity))
+                             particles dt)))
+
+;;; ------------------------------------------------------------------ settings
+
+;; How a model runs, as a plist: gravity's pull, down, in pixels a second
+;; squared (980: a pixel a centimeter), whether it is on, the time a step
+;; takes, in seconds, and how many steps a frame makes. A frame comes
+;; about 60 times a second, so 4 steps of 1/240 s keep the time real.
+(define springies-default-settings
+  '(gravity 980.0 gravity? #t time-step 0.004 steps 4))
+
+(define (springies-setting settings key)
+  (let ([v (plist-ref settings key 'none)])
+    (if (eq? v 'none) (errorf 'springies-setting "no setting ~s" key) v)))
+
+(define (springies-gravity settings)
+  (if (springies-setting settings 'gravity?)
+      (make-pt 0.0 (- (springies-setting settings 'gravity)))
+      pt-zero))
+
+;; One frame in a w × h box: the settings' steps.
+(define (springies-frame particles springs settings w h)
+  (let ([g (springies-gravity settings)]
+        [dt (springies-setting settings 'time-step)])
+    (let loop ([ps particles] [n (springies-setting settings 'steps)])
+      (if (= n 0)
+          ps
+          (loop (springies-step ps springs g dt w h) (- n 1))))))
+
+;;; ------------------------------------------------------------------ models
+;;; Each made in code to fit a w × h box: particles placed by geometry, and
+;;; springs between them, each at rest at the length it starts at.
+
+;; A model as it starts: its particles, its springs, and the settings it
+;; runs best with.
+(define-record-type springies-model
+  (nongenerative schevana-springies-model)
+  (fields particles springs settings))
+
+;; n points evenly around a circle of radius r about c.
+(define (springies-ring c r n)
+  (map (lambda (i)
+         (let ([a (/ (* 2.0 pi i) n)])
+           (pt+ c (make-pt (* r (cos a)) (* r (sin a))))))
+       (iota n)))
+
+;; Particles of mass m and elasticity e at points, moving as one body
+;; would: at velocity v, and turning about c at spin radians a second,
+;; counterclockwise.
+(define (springies-body points c v spin m e)
+  (map (lambda (q)
+         (let ([r (pt- q c)])
+           (make-particle q
+                          (pt+ v (make-pt (* (- spin) (pt-y r))
+                                          (* spin (pt-x r))))
+                          m e)))
+       points))
+
+;; Springs of stiffness k and damping d between particles, one for each
+;; pair of indexes (a b), at rest at the length they start at.
+(define (springies-springs particles pairs k d)
+  (map (lambda (pair)
+         (let ([a (car pair)] [b (cadr pair)])
+           (make-spring a b k d
+                        (pt-norm (pt- (particle-position
+                                       (vector-ref particles a))
+                                      (particle-position
+                                       (vector-ref particles b)))))))
+       pairs))
+
+;; A ball: two rings of n particles, the inner half the outer's size. Each
+;; particle is joined to its neighbors on its ring and to the two nearest
+;; it on the other: the band between the rings is braced quads, so it
+;; holds its shape. Thrown up and to the right, spinning.
+(define (springies-ball w h)
+  (let* ([n 12] [r (/ (min w h) 7.0)] [c (make-pt (* w 0.3) (* h 0.5))]
+         [particles
+          (list->vector
+           (springies-body (append (springies-ring c r n)
+                                   (springies-ring c (/ r 2.0) n))
+                           c (make-pt 150.0 250.0) 2.0 1.0 0.9))])
+    (define (outer i) (mod i n))
+    (define (inner i) (+ n (mod i n)))
+    (make-springies-model
+     particles
+     (springies-springs particles
+                        (apply append
+                               (map (lambda (i)
+                                      (list (list (outer i) (outer (+ i 1)))
+                                            (list (inner i) (inner (+ i 1)))
+                                            (list (outer i) (inner i))
+                                            (list (outer i) (inner (+ i 1)))
+                                            (list (outer (+ i 1)) (inner i))))
+                                    (iota n)))
+                        10000.0 12.0)
+     springies-default-settings)))
+
+;;; ------------------------------------------------------------------ the app
+
+;; How often a frame steps, in ms: about 60 times a second, however often
+;; the window ticks.
+(define springies-step-ms 15)
+
+;; The springs as lines, then the particles over them as dots. The box is
+;; h high: the world is y-up, the screen y-down.
+(define (draw-springies particles springs h)
+  (define (at p)
+    (let ([q (particle-position p)]) (values (pt-x q) (- h (pt-y q)))))
+  (for-each (lambda (s)
+              (let-values ([(x1 y1) (at (vector-ref particles (spring-a s)))]
+                           [(x2 y2) (at (vector-ref particles (spring-b s)))])
+                (draw-line x1 y1 x2 y2 'teal 1.5)))
+            springs)
+  (vector-for-each (lambda (p)
+                     (let-values ([(x y) (at p)])
+                       (fill-circle x y (particle-radius p) 'yellow)))
+                   particles))
+
+(define-app (springies) "Springies"
+  (let* ([w 760] [h 520] [model (springies-ball w h)] [last-step 0])
+    (open-window "Springies"
+      'size (cons w h)
+      'particles (springies-model-particles model)
+      'springs (springies-model-springs model)
+      'settings (springies-model-settings model)
+      'tick (lambda (win)
+              (when (>= (- (now-ms) last-step) springies-step-ms)
+                (set! last-step (now-ms))
+                (let-values ([(w h) (window-content-size win)])
+                  (window-set! win 'particles
+                    (springies-frame (window-ref win 'particles)
+                                     (window-ref win 'springs)
+                                     (window-ref win 'settings) w h)))))
+      'draw (lambda (win w h)
+              (fill-rect 0 0 w h 'bg-0)
+              (draw-springies (window-ref win 'particles)
+                              (window-ref win 'springs) h)))))
