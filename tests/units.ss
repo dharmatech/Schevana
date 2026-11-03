@@ -988,6 +988,90 @@
              (and held? (not (eq? (flock) before))))))
   (close-window! win))
 
+(check "Boids: setting a rule keeps the others, and their order"
+       (let ([rules (boids-set-rule boids-default-rules 'view-angle 270.0)])
+         (and (= (boids-rule rules 'view-angle) 270.0)
+              (equal? (plist-keys rules) (plist-keys boids-default-rules))
+              (= (boids-rule rules 'cohesion)
+                 (boids-rule boids-default-rules 'cohesion)))))
+
+(check "Boids: min and max speed can't cross; the one set pushes the other"
+       (let ([faster (boids-set-rule boids-default-rules 'min-speed 4.5)]
+             [slower (boids-set-rule boids-default-rules 'max-speed 0.6)])
+         (and (= (boids-rule faster 'max-speed) 4.5)
+              (= (boids-rule slower 'min-speed) 0.6)
+              (= (boids-rule (boids-set-rule boids-default-rules
+                                             'min-speed 2.0)
+                             'max-speed)
+                 4.0))))
+
+(check "Boids: a weight's slider is a cube, the others straight"
+       (let ([cohesion (assq 'cohesion boids-ranges)]
+             [radius (assq 'cohesion-radius boids-ranges)])
+         (and (< (abs (- (boids-slider-value cohesion 0.5) 0.025)) 1e-12)
+              (< (abs (- (boids-slider-t cohesion 0.025) 0.5)) 1e-12)
+              (= (boids-slider-value radius 0.5) 100.0)
+              (= (boids-slider-t radius 100.0) 0.5))))
+
+;; The rules window, opened with the flock, where both fit.
+(let* ([win (parameterize ([new-window-position '(40 . 60)]) (boids))]
+       [rules-win (lambda () (find-window "Boids — Rules"))]
+       [press! (lambda (rw id)   ; the middle of the widget id
+                 (let ([r (ui-find (window-ref rw 'ui) id)])
+                   (let ([x (+ (ui-region-x r) (/ (ui-region-w r) 2))]
+                         [y (+ (ui-region-y r) (/ (ui-region-h r) 2))])
+                     (window-call rw 'mouse-down x y 'left 1)
+                     (window-call rw 'mouse-up x y 'left))))])
+  (render-frame!)
+  (check "Boids: the rules window opens beside the flock, which has the keys"
+         (let ([rw (rules-win)])
+           (and rw (eq? (focused-window) win)
+                (= (window-x rw) (+ (window-x win) (window-w win) 12))
+                (= (window-y rw) (window-y win)))))
+  (check "Boids: the rules window has room for all its rows"
+         (let-values ([(w h) (window-content-size (rules-win))])
+           (let* ([bottom #f]
+                  [s (image (exact (ceiling w)) (exact (ceiling h)) 1
+                            (lambda ()
+                              (let ([ui (make-ui)])
+                                (ui-begin! ui)
+                                (set! bottom (boids-draw-rules ui win w)))))])
+             (cairo-surface-destroy s)
+             (<= bottom h))))
+  (check "Boids: its slider sets the flock's rule, on a weight's cube"
+         (begin
+           (press! (rules-win) 'cohesion)
+           (< (abs (- (boids-rule (window-ref win 'rules) 'cohesion) 0.025))
+              1e-9)))
+  (check "Boids: its buttons and keys act on the flock"
+         (begin
+           (press! (rules-win) 'randomize)
+           (and (not (eq? (window-ref win 'rules) boids-default-rules))
+                (begin (window-call (rules-win) 'key #\d '())
+                       (eq? (window-ref win 'rules) boids-default-rules)))))
+  (check "Boids: its count slider resizes the flock"
+         (begin
+           (press! (rules-win) 'count)
+           (= (length (window-ref win 'flock))
+              (round (+ 10 (/ (- boids-max-count 10) 2))))))
+  (check "Boids: H closes the rules window and opens it again"
+         (begin
+           (window-call win 'key #\h '())
+           (and (not (rules-win))
+                (begin (window-call win 'key #\h '())
+                       (rules-win) #t))))
+  (check "Boids: closing the flock closes its rules window"
+         (begin (close-window! win) (not (rules-win)))))
+
+;; Opened far to the right, the rules window is moved to fit, and the
+;; flock moves left to clear it.
+(let ([win (parameterize ([new-window-position '(400 . 60)]) (boids))])
+  (check "Boids: opened where the rules can't fit beside, the flock moves"
+         (let ([rw (find-window "Boids — Rules")])
+           (and (< (window-x win) 400)
+                (= (+ (window-x win) (window-w win) 12) (window-x rw)))))
+  (close-window! win))
+
 ;;; ------------------------------------------------------------------
 ;;; invalidation
 

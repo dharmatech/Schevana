@@ -13,7 +13,8 @@
 ;;; new one. The window keeps the flock and its rules, as plain data:
 ;;; (window-ref win 'flock) => (#<boid at 451.2 87.0 moving 1.6 -3.1> ...)
 ;;; (window-set! win 'rules (boids-random-rules))
-;;; R: random rules · D: the defaults · S: scatter · Space: pause
+;;; R: random rules · D: the defaults · S: scatter · H: the rules window
+;;; · Space: pause
 
 ;;; ------------------------------------------------------------------ vectors
 
@@ -179,6 +180,23 @@
             range))
    '() boids-ranges))
 
+;; Rules with key's value v, the others as they were. Min and max speed
+;; can't cross: setting one past the other pushes the other along.
+(define (boids-set-rule rules key v)
+  (define (with rules key v)
+    (cond [(null? rules) (errorf 'boids-set-rule "no rule ~s" key)]
+          [(eq? (car rules) key) (cons* key v (cddr rules))]
+          [else (cons* (car rules) (cadr rules) (with (cddr rules) key v))]))
+  (let ([rules (with rules key v)])
+    (case key
+      [(min-speed) (if (> v (boids-rule rules 'max-speed))
+                       (with rules 'max-speed v)
+                       rules)]
+      [(max-speed) (if (< v (boids-rule rules 'min-speed))
+                       (with rules 'min-speed v)
+                       rules)]
+      [else rules])))
+
 ;;; ------------------------------------------------------------------ flocks
 
 ;; b's next state, given everyone's current state.
@@ -275,8 +293,27 @@
 
 ;; The status line under the flock.
 (define (boids-status-text n step-ms running?)
-  (format "~a boids   ~a   r random · d defaults · s scatter · space pause"
+  (format "~a boids   ~a   r random · d defaults · s scatter · h rules · \
+           space pause"
           n (if running? (format "~,1f ms a step" step-ms) "paused")))
+
+;; The flock's field in win: its content above the status line.
+(define (boids-field-size win)
+  (let-values ([(w h) (window-content-size win)])
+    (values w (max 1 (- h (boids-bar-height))))))
+
+;; What the keys and the rules window's buttons do to the flock in win.
+(define (boids-randomize! win) (window-set! win 'rules (boids-random-rules)))
+(define (boids-defaults! win) (window-set! win 'rules boids-default-rules))
+
+(define (boids-scatter! win)
+  (let-values ([(w h) (boids-field-size win)])
+    (window-set! win 'flock
+      (boids-scatter (length (window-ref win 'flock)) w h))))
+
+(define (boids-resize! win n)
+  (let-values ([(w h) (boids-field-size win)])
+    (window-set! win 'flock (boids-resize (window-ref win 'flock) n w h))))
 
 ;; A dot, with a line toward where it's heading.
 (define (draw-boid b)
@@ -285,44 +322,197 @@
     (fill-circle (vec-x p) (vec-y p) 3 'yellow)))
 
 (define-app (boids) "Boids"
-  (let ([w 900] [h 600]
+  (let ([w 760] [h 520]
         [running? #t] [last-step 0]
-        [step-ms 0.0])   ; a step's time, smoothed
-    ;; the flock's field: the content above the status line
-    (define (field-size win)
-      (let-values ([(w h) (window-content-size win)])
-        (values w (max 1 (- h (boids-bar-height))))))
+        [step-ms 0.0]      ; a step's time, smoothed
+        [rules-win #f])    ; the rules window, while it is open
     (define (step! win)
-      (let-values ([(w h) (field-size win)])
+      (let-values ([(w h) (boids-field-size win)])
         (let ([t0 (current-time 'time-monotonic)])
           (window-set! win 'flock
             (boids-step-on (window-ref win 'flock) (window-ref win 'rules)
                            w h))
           ;; one step's time jumps around (collections): over about 20
           (set! step-ms (+ (* step-ms 0.95) (* (ms-since t0) 0.05))))))
-    (open-window "Boids"
-      'size (cons w (+ h (boids-bar-height)))
-      'flock (boids-scatter boids-count w h)
-      'rules boids-default-rules
-      'tick (lambda (win)
-              (when (and running? (>= (- (now-ms) last-step) boids-step-ms))
-                (set! last-step (now-ms))
-                (step! win)))
-      'draw (lambda (win w h)
-              (let ([bar (boids-bar-height)] [flock (window-ref win 'flock)])
-                (fill-rect 0 0 w (- h bar) 'bg-0)
-                (for-each draw-boid flock)
-                (fill-rect 0 (- h bar) w bar 'bg-1)
-                (draw-text 10 (+ (- h bar) 5)
-                           (boids-status-text (length flock) step-ms running?)
-                           'text-faint 'ui-small)))
-      'key (lambda (win key mods)
-             (case key
-               [(#\r) (window-set! win 'rules (boids-random-rules))]
-               [(#\d) (window-set! win 'rules boids-default-rules)]
-               [(#\s) (let-values ([(w h) (field-size win)])
-                        (window-set! win 'flock
-                          (boids-scatter (length (window-ref win 'flock))
-                                         w h)))]
-               [(#\space) (set! running? (not running?))])
-             (invalidate! win)))))
+    (define (toggle-rules! win)
+      (if rules-win
+          (close-window! rules-win)
+          (set! rules-win
+                (boids-open-rules win (lambda () (set! rules-win #f))))))
+    (let ([win
+           (open-window "Boids"
+             'size (cons w (+ h (boids-bar-height)))
+             'flock (boids-scatter boids-count w h)
+             'rules boids-default-rules
+             'tick (lambda (win)
+                     (when (and running?
+                                (>= (- (now-ms) last-step) boids-step-ms))
+                       (set! last-step (now-ms))
+                       (step! win)))
+             'draw (lambda (win w h)
+                     (let ([bar (boids-bar-height)]
+                           [flock (window-ref win 'flock)])
+                       (fill-rect 0 0 w (- h bar) 'bg-0)
+                       (for-each draw-boid flock)
+                       (fill-rect 0 (- h bar) w bar 'bg-1)
+                       (draw-text 10 (+ (- h bar) 5)
+                                  (boids-status-text (length flock) step-ms
+                                                     running?)
+                                  'text-faint 'ui-small)))
+             'key (lambda (win key mods)
+                    (case key
+                      [(#\r) (boids-randomize! win)]
+                      [(#\d) (boids-defaults! win)]
+                      [(#\s) (boids-scatter! win)]
+                      [(#\h) (toggle-rules! win)]
+                      [(#\space) (set! running? (not running?))])
+                    (invalidate! win))
+             'close (lambda (win) (when rules-win (close-window! rules-win))))])
+      ;; the rules show at first, as Niva's panel does. Moved to fit on
+      ;; the desktop, they'd cover the flock: it moves left to clear them.
+      (toggle-rules! win)
+      (let-values ([(dx dy dw dh) (desktop-rect)])
+        (let ([short (- (+ (window-x win) (window-w win) 12)
+                        (window-x rules-win))])
+          (when (> short 0)
+            (move-window! win (max dx (- (window-x win) short))
+                          (window-y win)))))
+      (focus-window! win)   ; the flock has the keyboard
+      win)))
+
+;;; ------------------------------------------------------------------
+;;; the rules window
+;;; A slider for the count and for each rule, and the keys' buttons. It
+;;; reads and sets the flock window's properties, so it shows them as they
+;;; are, whoever changed them: a key, a button or the REPL.
+
+;; A step's cost grows as the count squared. At 300, measured here, a
+;; step takes about 16 ms with the default rules and 30 with the heaviest
+;; (both blocker rules, 360°, radii of 200): about a 60 Hz frame, and two.
+;; Niva's slider stops at 500 for the same reason, where its steps took
+;; 12 and 17.
+(define boids-max-count 300)
+
+;; A rule's name as its row shows it: cohesion-radius as cohesion radius.
+(define (boids-setting-label key)
+  (list->string (map (lambda (c) (if (char=? c #\-) #\space c))
+                     (string->list (symbol->string key)))))
+
+(define (boids-weight? range) (pair? (cdddr range)))
+
+;; Where v sits on range's slider, from 0 to 1, and back. A weight's
+;; slider is a cube: its middle is an eighth of its top, so the small
+;; weights that matter get most of it, as on Niva's log slider.
+(define (boids-slider-t range v)
+  (let ([t (/ (- v (cadr range)) (- (caddr range) (cadr range)))])
+    (if (boids-weight? range) (expt (max t 0.0) 1/3) t)))
+
+(define (boids-slider-value range t)
+  (+ (cadr range)
+     (* (- (caddr range) (cadr range))
+        (if (boids-weight? range) (* t t t) t))))
+
+;; A rule's value as its row shows it.
+(define (boids-readout range v)
+  (case (car range)
+    [(min-speed max-speed) (format "~,1f" v)]
+    [(view-angle blocker-cone) (format "~a°" (exact (round v)))]
+    [else (if (boids-weight? range)
+              (format "~,4f" v)
+              (format "~a" (exact (round v))))]))
+
+(define (boids-label-width)
+  (+ 12 (widest-text (cons "boids"
+                           (map (lambda (r) (boids-setting-label (car r)))
+                                boids-ranges))
+                     'ui)))
+
+(define (boids-readout-width) (+ 12 (text-width "0.0000" 'ui)))
+
+(define boids-buttons '("Randomize (R)" "Defaults (D)" "Scatter (S)"))
+
+;; The rules window's content size: room for its rows (as
+;; boids-draw-rules lays them out), with sliders 140 wide, and for three
+;; buttons as wide as the widest label.
+(define (boids-rules-size)
+  (let ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)])
+    (values (+ pad pad
+               (max (+ (boids-label-width) 140 (boids-readout-width))
+                    (+ (* 3 (+ 32 (widest-text boids-buttons 'ui)))
+                       (* 2 gap))))
+            (+ pad (+ sh gap) (+ (ui-control-height) (* 3 gap))
+               (* (length boids-ranges) (+ sh gap))
+               gap (font-line-height 'ui-small) pad))))
+
+;; The rows, top to bottom: the count, the buttons, a slider for each
+;; rule, and a hint. Returns the y below them.
+(define (boids-draw-rules ui flock-win w)
+  (let* ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)]
+         [lw (boids-label-width)] [rw (boids-readout-width)]
+         [rules (window-ref flock-win 'rules)]
+         [n (length (window-ref flock-win 'flock))])
+    (define (row y id label t readout set)
+      (ui-draw-label pad y lw sh '(dim) label)
+      (ui-slider ui id (+ pad lw) y (- w pad lw rw pad) t 0.0 1.0 set)
+      (ui-draw-label (- w pad rw) y rw sh '(right) readout)
+      (+ y sh gap))
+    (let* ([y (row pad 'count "boids"
+                   (/ (- n 10) (- boids-max-count 10.0))
+                   (number->string n)
+                   (lambda (t)
+                     (boids-resize! flock-win
+                       (exact (round (+ 10 (* t (- boids-max-count 10))))))))]
+           [y (let ([bw (/ (- w pad pad gap gap) 3)] [ch (ui-control-height)])
+                (for-each (lambda (i label id act!)
+                            (ui-button ui id (+ pad (* i (+ bw gap))) y bw ch
+                                       label (lambda () (act! flock-win))))
+                          '(0 1 2) boids-buttons '(randomize defaults scatter)
+                          (list boids-randomize! boids-defaults!
+                                boids-scatter!))
+                (+ y ch (* 3 gap)))]
+           [y (fold-left
+               (lambda (y range)
+                 (let* ([key (car range)] [v (boids-rule rules key)])
+                   (row y key (boids-setting-label key)
+                        (boids-slider-t range v) (boids-readout range v)
+                        ;; the rules as they are then, not as drawn
+                        (lambda (t)
+                          (window-set! flock-win 'rules
+                            (boids-set-rule (window-ref flock-win 'rules) key
+                                            (boids-slider-value range t)))))))
+               y boids-ranges)])
+      (ui-draw-label pad (+ y gap) (- w pad pad) (font-line-height 'ui-small)
+                     '(hint) "h hides this window · space pauses")
+      (+ y gap (font-line-height 'ui-small) pad))))
+
+;; Opens the rules window for the flock in flock-win, beside it, and
+;; returns it; on-close is called when it closes. Its keys are the
+;; flock's.
+(define (boids-open-rules flock-win on-close)
+  (let ([ui (make-ui)]
+        [shown #f])   ; the rules and the count it last drew
+    (define (now-shown)
+      (cons (window-ref flock-win 'rules)
+            (length (window-ref flock-win 'flock))))
+    (let-values ([(w h) (boids-rules-size)])
+      (parameterize ([new-window-position
+                      (cons (+ (window-x flock-win) (window-w flock-win) 12)
+                            (window-y flock-win))])
+        (apply open-window "Boids — Rules"
+               'size (cons w h)
+               'app #f
+               'draw (lambda (win w h)
+                       (set! shown (now-shown))
+                       (ui-begin! ui)
+                       (boids-draw-rules ui flock-win w)
+                       (ui-end! ui w h))
+               'close (lambda (win) (on-close))
+               (append
+                (ui-handlers ui 'key (lambda (win key mods)
+                                       (window-call flock-win 'key key mods)
+                                       #t))
+                ;; the kit's tick, then: a change from elsewhere shows
+                (list 'tick (lambda (win)
+                              (ui-tick ui win)
+                              (unless (equal? shown (now-shown))
+                                (invalidate! win))))))))))
