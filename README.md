@@ -222,8 +222,9 @@ styles and palettes with the others, and the saved look may name them.
 apps/        ordinary procedures: repl  clock  life  sketch  monitor
              settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
-palettes/    named colors: catppuccin  genera  gruvbox  interlisp  nord
-             paper  tokyo-night
+palettes/    named colors: catppuccin  crayons  forest  genera  gruvbox
+             interlisp  neon  nord  paper  phosphor  sakura  sunset
+             terracotta  tokyo-night
 styles/      styles: cadr  cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
