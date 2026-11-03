@@ -10,7 +10,10 @@
 ;;; description, not copied from his (GPL) source.
 ;;;
 ;;; The simulation is pure: a flock is a list of boids, and a step makes a
-;;; new one. Only the window keeps state.
+;;; new one. The window keeps the flock and its rules, as plain data:
+;;; (window-ref win 'flock) => (#<boid at 451.2 87.0 moving 1.6 -3.1> ...)
+;;; (window-set! win 'rules (boids-random-rules))
+;;; R: random rules · D: the defaults · S: scatter · Space: pause
 
 ;;; ------------------------------------------------------------------ vectors
 
@@ -148,6 +151,34 @@
 (define (boids-rule rules key)
   (or (plist-ref rules key #f) (errorf 'boids-rule "no rule ~s" key)))
 
+;; Each rule's range, in the order the rules window shows them. A weight
+;; starts at 0, and its useful values span orders of magnitude.
+(define boids-ranges
+  '((cohesion 0.0 0.2 weight)    (cohesion-radius 0.0 200.0)
+    (alignment 0.0 1.0 weight)   (alignment-radius 0.0 200.0)
+    (separation 0.0 1.0 weight)  (separation-radius 0.0 50.0)
+    (view-angle 0.0 360.0)
+    (clear-view 0.0 1.0 weight)  (back-off 0.0 1.0 weight)
+    (blocker-radius 0.0 100.0)   (blocker-cone 0.0 180.0)
+    (min-speed 0.0 5.0)          (max-speed 0.5 10.0)))
+
+;; Rules picked at random within their ranges. A weight is picked on a
+;; cube, so that small ones come up about as often as they would on a
+;; log scale. Max speed comes after min speed and is picked from it up,
+;; so the two never cross.
+(define (boids-random-rules)
+  (fold-left
+   (lambda (rules range)
+     (apply (lambda (key lo hi . weight)
+              (let* ([lo (if (eq? key 'max-speed)
+                             (max lo (boids-rule rules 'min-speed))
+                             lo)]
+                     [r (random 1.0)]
+                     [t (if (null? weight) r (* r r r))])
+                (append rules (list key (+ lo (* t (- hi lo)))))))
+            range))
+   '() boids-ranges))
+
 ;;; ------------------------------------------------------------------ flocks
 
 ;; b's next state, given everyone's current state.
@@ -240,25 +271,58 @@
 
 (define boids-count 150)
 
+(define (boids-bar-height) (max 26 (round (+ (font-line-height 'ui-small) 13))))
+
+;; The status line under the flock.
+(define (boids-status-text n step-ms running?)
+  (format "~a boids   ~a   r random · d defaults · s scatter · space pause"
+          n (if running? (format "~,1f ms a step" step-ms) "paused")))
+
 ;; A dot, with a line toward where it's heading.
 (define (draw-boid b)
   (let* ([p (boid-position b)] [tip (vec+ p (vec* (boid-velocity b) 4.0))])
-    (draw-line (vec-x p) (vec-y p) (vec-x tip) (vec-y tip) 'orange 2)
+    (draw-line (vec-x p) (vec-y p) (vec-x tip) (vec-y tip) 'red 2)
     (fill-circle (vec-x p) (vec-y p) 3 'yellow)))
 
 (define-app (boids) "Boids"
-  (let* ([w 900] [h 600]
-         [flock (boids-scatter boids-count w h)]
-         [rules boids-default-rules]
-         [last-step 0])
+  (let ([w 900] [h 600]
+        [running? #t] [last-step 0]
+        [step-ms 0.0])   ; a step's time, smoothed
+    ;; the flock's field: the content above the status line
+    (define (field-size win)
+      (let-values ([(w h) (window-content-size win)])
+        (values w (max 1 (- h (boids-bar-height))))))
+    (define (step! win)
+      (let-values ([(w h) (field-size win)])
+        (let ([t0 (current-time 'time-monotonic)])
+          (window-set! win 'flock
+            (boids-step-on (window-ref win 'flock) (window-ref win 'rules)
+                           w h))
+          ;; one step's time jumps around (collections): over about 20
+          (set! step-ms (+ (* step-ms 0.95) (* (ms-since t0) 0.05))))))
     (open-window "Boids"
-      'size (cons w h)
+      'size (cons w (+ h (boids-bar-height)))
+      'flock (boids-scatter boids-count w h)
+      'rules boids-default-rules
       'tick (lambda (win)
-              (when (>= (- (now-ms) last-step) boids-step-ms)
+              (when (and running? (>= (- (now-ms) last-step) boids-step-ms))
                 (set! last-step (now-ms))
-                (let-values ([(w h) (window-content-size win)])
-                  (set! flock (boids-step-on flock rules w h)))
-                (invalidate! win)))
+                (step! win)))
       'draw (lambda (win w h)
-              (fill-rect 0 0 w h 'bg-0)
-              (for-each draw-boid flock)))))
+              (let ([bar (boids-bar-height)] [flock (window-ref win 'flock)])
+                (fill-rect 0 0 w (- h bar) 'bg-0)
+                (for-each draw-boid flock)
+                (fill-rect 0 (- h bar) w bar 'bg-1)
+                (draw-text 10 (+ (- h bar) 5)
+                           (boids-status-text (length flock) step-ms running?)
+                           'text-faint 'ui-small)))
+      'key (lambda (win key mods)
+             (case key
+               [(#\r) (window-set! win 'rules (boids-random-rules))]
+               [(#\d) (window-set! win 'rules boids-default-rules)]
+               [(#\s) (let-values ([(w h) (field-size win)])
+                        (window-set! win 'flock
+                          (boids-scatter (length (window-ref win 'flock))
+                                         w h)))]
+               [(#\space) (set! running? (not running?))])
+             (invalidate! win)))))

@@ -946,6 +946,48 @@
          (and (boid? b) (vec? (boid-position b))
               (= (length (boids-step (list b) boids-default-rules)) 1))))
 
+(check "Boids: random rules are the rules, each within its range"
+       (let loop ([i 0])
+         (or (= i 500)
+             (let ([rules (boids-random-rules)])
+               (and (equal? (plist-keys rules)
+                            (plist-keys boids-default-rules))
+                    (for-all (lambda (range)
+                               (<= (cadr range) (boids-rule rules (car range))
+                                   (caddr range)))
+                             boids-ranges)
+                    (<= (boids-rule rules 'min-speed)
+                        (boids-rule rules 'max-speed))
+                    (loop (+ i 1)))))))
+
+;; The keys, through the window's own handler. A clock moved a second on
+;; lets a tick step whether or not the last one was long ago.
+(let ([win (boids)])
+  (define (key! k) (window-call win 'key k '()))
+  (define (flock) (window-ref win 'flock))
+  (define (tick-later!)
+    (fluid-let ([now-ms (let ([t (now-ms)]) (lambda () (+ t 1000)))])
+      (steps 1)))
+  (check "Boids: R picks random rules, D the defaults again"
+         (begin
+           (key! #\r)
+           (and (not (equal? (window-ref win 'rules) boids-default-rules))
+                (begin (key! #\d)
+                       (eq? (window-ref win 'rules) boids-default-rules)))))
+  (check "Boids: S scatters as many boids anew"
+         (let ([before (flock)])
+           (key! #\s)
+           (and (= (length (flock)) (length before))
+                (not (exists eq? (flock) before)))))
+  (check "Boids: Space holds the flock still, and again sets it going"
+         (let ([before (begin (key! #\space) (flock))])
+           (tick-later!)
+           (let ([held? (eq? (flock) before)])
+             (key! #\space)
+             (tick-later!)
+             (and held? (not (eq? (flock) before))))))
+  (close-window! win))
+
 ;;; ------------------------------------------------------------------
 ;;; invalidation
 
