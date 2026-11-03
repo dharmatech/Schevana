@@ -7,7 +7,6 @@
 ;;; (set-style! 'genera)            the one switch: frames, palette, ...
 ;;; (set-theme! 'accent #xff9e64)   your change, remembered for this style
 ;;; (override! 'ui-font-size 15)    on top of every style that honors it
-;;; (theme-source 'accent)          which layer gives it
 ;;;
 ;;; A rule is a setting computed from others when the table is built:
 ;;; 'selection (theme-rule (mix 'accent 'bg-1 0.65)). A part is a setting
@@ -184,13 +183,6 @@
 ;; files register again)
 (define (palette-colors name)
   (let ([p (assq name *palettes*)]) (or (and p (caddr p)) '())))
-
-;; The colors and wallpaper the chosen style shows in palette name.
-(define (palette-preview name)
-  (let ([t (resolve-theme *style-name* '() (list 'palette name))])
-    (fluid-let ([*theme* t])
-      (apply append (map (lambda (k) (list k (theme k)))
-                         (append color-keys '(wallpaper)))))))
 
 ;;; ------------------------------------------------------------------
 ;;; styles
@@ -405,22 +397,6 @@
                              (vector->list (hashtable-keys new))))
       (wm-chrome-changed!))
     (invalidate!)))
-
-;; Which layer gives key: (overrides v), (changes mac v), (style genera
-;; v), (palette nord v) or (built-in v); #f if none.
-(define (theme-source key)
-  (let* ([name *style-name*] [chain (style-chain name)]
-         [yours? (lambda (p) (and (honored? chain key) (plist-has? p key)))]
-         [style (find (lambda (s) (plist-has? (style-settings s) key))
-                      chain)]
-         [palette (theme 'palette)])
-    (cond [(yours? *theme-overrides*) (list 'overrides (theme key))]
-          [(yours? (style-changes-of name)) (list 'changes name (theme key))]
-          [style (list 'style (style-name style) (theme key))]
-          [(plist-has? (palette-colors palette) key)
-           (list 'palette palette (theme key))]
-          [(plist-has? default-theme key) (list 'built-in (theme key))]
-          [else #f])))
 
 ;;; ------------------------------------------------------------------
 ;;; the frame

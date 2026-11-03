@@ -20,9 +20,7 @@
 ;; White by the difference operator: what is there, inverted, in any
 ;; palette (the CADR complemented its screen; Medley flashes the window).
 (define-part (draw-bell-flash x y w h)
-  (cairo-set-operator *cr* CAIRO_OPERATOR_DIFFERENCE)
-  (fill-rect x y w h #xffffff)
-  (cairo-set-operator *cr* CAIRO_OPERATOR_OVER))
+  (call-with-operator 'difference (lambda () (fill-rect x y w h #xffffff))))
 
 (define (bell-draw) (when *bell* (apply draw-bell-flash (cdr *bell*))))
 

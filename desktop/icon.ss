@@ -41,12 +41,7 @@
 
 ;; The app icon as a PNG file, size pixels square.
 (define (write-app-icon! path size)
-  (let* ([surface (cairo-image-surface-create CAIRO_FORMAT_ARGB32 size size)]
-         [cr (cairo-create surface)])
-    (fluid-let ([*cr* cr]) (draw-app-icon size))
-    (cairo-destroy cr)
-    (cairo-surface-write-to-png surface path)
-    (cairo-surface-destroy surface)))
+  (write-image-png path size size (lambda () (draw-app-icon size))))
 
 ;; Returns the files it wrote.
 (define (install-desktop-entry!)

@@ -591,7 +591,7 @@
 ;; A color, key (the accent): the palette's colors as swatches. => the y
 ;; below.
 (define (settings-accent ui x y w key)
-  (let ([colors (palette-preview (theme 'palette))]
+  (let ([colors (theme-palette-preview (theme 'palette))]
         [per-row (max 1 (exact (floor (/ (+ w 8) 36))))])
     (let loop ([ks (theme 'accent-choices)] [i 0])
       (if (null? ks)
@@ -868,8 +868,8 @@
          [focused? (equal? (ui-focused ui) 'hex)])
     (define (update! i v)
       (vector-set! hsl i v)
-      (let ([c (hsl->color (vector-ref hsl 2) (vector-ref hsl 3)
-                           (vector-ref hsl 4))])
+      (let ([c (color-from-hsl (vector-ref hsl 2) (vector-ref hsl 3)
+                               (vector-ref hsl 4))])
         (vector-set! hsl 1 c)
         (settings-set! key c)))
     (define (slider-row ry label id v lo hi readout paint on-change)
@@ -909,16 +909,16 @@
            [y1 (slider-row row0 "Hue" 'hue hh 0 360
                            (format "~a°" (exact (round hh)))
                            (track (lambda (t)
-                                    (hsl->color (* 360 t) (max ss 0.4)
-                                                (clamp ll 0.35 0.65))))
+                                    (color-from-hsl (* 360 t) (max ss 0.4)
+                                                    (clamp ll 0.35 0.65))))
                            (lambda (v) (update! 2 v)))]
            [y2 (slider-row y1 "Saturation" 'saturation ss 0 1
                            (format "~a%" (exact (round (* 100 ss))))
-                           (track (lambda (t) (hsl->color hh t ll)))
+                           (track (lambda (t) (color-from-hsl hh t ll)))
                            (lambda (v) (update! 3 v)))]
            [y3 (slider-row y2 "Lightness" 'lightness ll 0 1
                            (format "~a%" (exact (round (* 100 ll))))
-                           (track (lambda (t) (hsl->color hh ss t)))
+                           (track (lambda (t) (color-from-hsl hh ss t)))
                            (lambda (v) (update! 4 v)))])
       ;; rgb and the expression that reads this key, on two lines if need be
       (let*-values ([(r g b a) (color-rgba rgbv)]

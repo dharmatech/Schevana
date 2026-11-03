@@ -2,7 +2,9 @@
 ;;;
 ;;; SDL3 gives us a host window, input events and a clipboard.
 ;;; Cairo gives us 2D drawing into an in-memory image.
-;;; Everything above this file is plain Scheme.
+;;; Everything above this file is plain Scheme, and only the core (src/)
+;;; uses these bindings: the folders draw, measure and save through the
+;;; core's procedures (tests/sources.ss checks it).
 
 (define (load-first-library names)
   (let loop ([ns names])
@@ -180,6 +182,7 @@
 (define CAIRO_OPERATOR_CLEAR 0)
 (define CAIRO_OPERATOR_SOURCE 1)
 (define CAIRO_OPERATOR_OVER 2)
+(define CAIRO_OPERATOR_ADD 12)
 (define CAIRO_OPERATOR_DIFFERENCE 23)
 (define-foreign cairo-set-operator "cairo_set_operator" (uptr int) void)
 (define-foreign cairo-set-source-rgba "cairo_set_source_rgba"

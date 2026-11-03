@@ -35,7 +35,7 @@
 
 ;; The y nearest to v on a whole device pixel, however *cr* is scaled.
 (define (fold-snap v)
-  (let-values ([(k ox oy) (px-device)])
+  (let-values ([(k ox oy) (device-transform)])
     (/ (- (round (+ (* k v) oy)) oy) k)))
 
 ;; (values baseline middle): where the title stands so that the middle of

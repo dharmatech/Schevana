@@ -5,18 +5,11 @@
 ;;; rule), so nothing is antialiased: at 150 % a 1-pixel line is 1 or 2
 ;;; device pixels by turns, always in its own color.
 
-;; (values s ox oy): device pixels per logical pixel where we draw, and
-;; where the logical origin is in device pixels, from the cairo matrix.
-(define (px-device)
-  (cairo-get-matrix *cr* *scratch*)
-  (values (foreign-ref 'double *scratch* 0) (foreign-ref 'double *scratch* 32)
-          (foreign-ref 'double *scratch* 40)))
-
 ;; (values x y) moved to the nearest device pixel corner (half up), in
 ;; exact arithmetic, so that a tie is one at any scale (50 · 1.13 is 56.5;
 ;; in floating point it is a hair less), as stipples' tiles take it.
 (define (px-snap x y)
-  (let-values ([(s ox oy) (px-device)])
+  (let-values ([(s ox oy) (device-transform)])
     (define (exactly v) (rationalize (exact v) 1/100000))
     (define (snap v o)
       (let ([s (exactly s)] [o (exactly o)])
@@ -27,7 +20,7 @@
 ;; the scale and translation where we draw: on the screen, and in
 ;; Settings' half-size miniatures.
 (define (px-baseline y snap)
-  (let*-values ([(s ox oy) (px-device)] [(f) (- oy (floor oy))])
+  (let*-values ([(s ox oy) (device-transform)] [(f) (- oy (floor oy))])
     (/ (- (snap (+ (* y s) f)) f) s)))
 
 ;; Fills the logical rectangle, its corners snapped: never antialiased.
@@ -106,7 +99,6 @@
 ;; what is drawn there shows in reverse video, in any palette. A pixel p
 ;; becomes ink + paper - p, a channel at a time: 255 - p, less what ink
 ;; and paper fall short of 255, plus what they pass it by.
-(define px-operator-add 12)   ; CAIRO_OPERATOR_ADD
 (define (px-invert x y w h)
   (let* ([ink (color->pixel 'text)] [paper (color->pixel 'window-bg)]
          [k (lambda (f)   ; f of ink + paper - 255, in each channel
@@ -119,13 +111,12 @@
                          0 '(16 8 0)))]
          [short (k (lambda (d) (max 0 (- d))))]
          [over (k (lambda (d) (max 0 d)))])
-    (cairo-set-operator *cr* CAIRO_OPERATOR_DIFFERENCE)
-    (px-fill x y w h #xffffff)
-    (unless (zero? short) (px-fill x y w h short))
+    (call-with-operator 'difference
+      (lambda ()
+        (px-fill x y w h #xffffff)
+        (unless (zero? short) (px-fill x y w h short))))
     (unless (zero? over)
-      (cairo-set-operator *cr* px-operator-add)
-      (px-fill x y w h over))
-    (cairo-set-operator *cr* CAIRO_OPERATOR_OVER)))
+      (call-with-operator 'add (lambda () (px-fill x y w h over))))))
 
 ;;; Bitmap text: a font of cells w × h pixels, one number a character
 ;;; from the first on, row y's pixel x its bit w·y + x.

@@ -78,12 +78,12 @@
                                        (make-list 8 (run #\# #\.))))))
 
 (define (interlisp-drag-outline x y w h)
-  (cairo-set-operator *cr* CAIRO_OPERATOR_DIFFERENCE)
-  (px-fill x y w 2 interlisp-dashes)
-  (px-fill x (+ y h -2) w 2 interlisp-dashes)
-  (px-fill x (+ y 2) 2 (- h 4) interlisp-dashes)
-  (px-fill (+ x w -2) (+ y 2) 2 (- h 4) interlisp-dashes)
-  (cairo-set-operator *cr* CAIRO_OPERATOR_OVER))
+  (call-with-operator 'difference
+    (lambda ()
+      (px-fill x y w 2 interlisp-dashes)
+      (px-fill x (+ y h -2) w 2 interlisp-dashes)
+      (px-fill x (+ y 2) 2 (- h 4) interlisp-dashes)
+      (px-fill (+ x w -2) (+ y 2) 2 (- h 4) interlisp-dashes))))
 
 ;; Its colors, which you may change and save as any color: the title
 ;; shade, ink; the thumb's 12.5 % shade (SCROLLBARSHADE, WINDOWSCROLL:34).

@@ -7,8 +7,9 @@
 ;;;   (fill-rect 10 10 100 40 'accent)
 ;;;   (draw-text 16 20 "hello" 'text 'mono)
 ;;;
-;;; Colors are #xRRGGBB fixnums, theme keys ('accent), (alpha c 0.5), or
-;;; stipples, patterns used as colors (stipple, below).
+;;; Colors are #xRRGGBB fixnums, theme keys ('accent), (alpha c 0.5),
+;;; stipples, patterns used as colors (stipple, below), or gradients
+;;; (linear-gradient, below).
 
 (define pi (* 4 (atan 1)))
 
@@ -162,32 +163,6 @@
          (exact (round (* g 255)))
          (exact (round (* b 255))))))
 
-;; Hue in degrees, saturation and lightness in [0, 1].
-(define (color->hsl c)
-  (let-values ([(r g b a) (color-rgba c)])
-    (let* ([hi (max r g b)] [lo (min r g b)] [l (/ (+ hi lo) 2)] [d (- hi lo)])
-      (if (< d 1e-9)
-          (values 0.0 0.0 l)
-          (values (cond [(= hi r) (* 60 (mod (/ (- g b) d) 6))]
-                        [(= hi g) (* 60 (+ (/ (- b r) d) 2))]
-                        [else (* 60 (+ (/ (- r g) d) 4))])
-                  (/ d (- 1 (abs (- (* 2 l) 1))))
-                  l)))))
-
-(define (hsl->color h s l)
-  (let* ([c (* (- 1 (abs (- (* 2 l) 1))) s)]
-         [hp (/ (mod h 360) 60)]
-         [x (* c (- 1 (abs (- (mod hp 2) 1))))]
-         [m (- l (/ c 2))])
-    (define (byte v) (clamp (exact (round (* 255 (+ v m)))) 0 255))
-    (let-values ([(r g b) (cond [(< hp 1) (values c x 0)]
-                                [(< hp 2) (values x c 0)]
-                                [(< hp 3) (values 0 c x)]
-                                [(< hp 4) (values 0 x c)]
-                                [(< hp 5) (values x 0 c)]
-                                [else (values c 0 x)])])
-      (rgb (byte r) (byte g) (byte b)))))
-
 ;; Black or white, whichever reads better on color c.
 (define (readable-on c)
   (let-values ([(r g b a) (color-rgba c)])
@@ -201,10 +176,12 @@
 
 (define (set-color! c)
   (let ([c (let key ([c c]) (if (symbol? c) (key (theme c)) c))])
-    (if (stipple? c)
-        (set-stipple! c)
-        (let-values ([(r g b a) (color-rgba c)])
-          (cairo-set-source-rgba *cr* r g b a)))))
+    (cond
+      [(stipple? c) (set-stipple! c)]
+      [(and (pair? c) (memq (car c) '(linear-gradient radial-gradient)))
+       (set-gradient! c)]
+      [else (let-values ([(r g b a) (color-rgba c)])
+              (cairo-set-source-rgba *cr* r g b a))])))
 
 ;; A stipple's tile on device pixels where px's rule puts them at our
 ;; scale (logical ceiling((d + 1/2)/s) - 1), whole periods: exact anywhere.
@@ -247,6 +224,32 @@
     (cairo-set-source *cr* pat)   ; which keeps the pattern and its tile
     (cairo-pattern-destroy pat)))
 
+;; A gradient used as a color: its colors spread evenly from (x0, y0) to
+;; (x1, y1), or from the center (cx, cy) out to radius r, in the
+;; coordinates it is drawn in. Plain data, as a stipple is.
+;;   (fill-rect 0 0 w h (linear-gradient 0 0 0 h 'accent 'bg-1))
+(define (linear-gradient x0 y0 x1 y1 . colors)
+  (cons* 'linear-gradient x0 y0 x1 y1 colors))
+(define (radial-gradient cx cy r . colors)
+  (cons* 'radial-gradient cx cy r colors))
+
+(define (set-gradient! c)
+  (let* ([radial? (eq? (car c) 'radial-gradient)]
+         [colors (list-tail c (if radial? 4 5))]
+         [n (length colors)]
+         [pat (if radial?
+                  (apply (lambda (cx cy r)
+                           (cairo-pattern-create-radial cx cy 0 cx cy r))
+                         (list-head (cdr c) 3))
+                  (apply cairo-pattern-create-linear (list-head (cdr c) 4)))])
+    (for-each (lambda (color i)
+                (let-values ([(r g b a) (color-rgba color)])
+                  (cairo-pattern-add-color-stop-rgba
+                   pat (/ i (max 1 (- n 1))) r g b a)))
+              colors (iota n))
+    (cairo-set-source *cr* pat)   ; which keeps the pattern
+    (cairo-pattern-destroy pat)))
+
 ;;; ------------------------------------------------------------------ fonts
 ;;; A font is a setting: the theme's roles ('ui, 'mono, 'title, ...) are
 ;;; rules, below, that make one with font, and get-font of a role reads
@@ -254,6 +257,7 @@
 
 (define-record-type (font-type make-font font?)
   (nongenerative schevana-font-3)
+  ;; slant italic or normal, weight bold or normal
   (fields (immutable family font-family) (immutable slant font-slant)
           (immutable weight font-weight) (immutable size font-size)
           (immutable face font-face)
@@ -265,20 +269,21 @@
 (cairo-font-options-set-antialias crisp-font-options CAIRO_ANTIALIAS_NONE)
 
 (define (make-font* family size . opts)
-  (let ([slant (if (memq 'italic opts)
-                   CAIRO_FONT_SLANT_ITALIC
-                   CAIRO_FONT_SLANT_NORMAL)]
-        [weight (if (memq 'bold opts)
-                    CAIRO_FONT_WEIGHT_BOLD
-                    CAIRO_FONT_WEIGHT_NORMAL)]
+  (let ([italic? (memq 'italic opts)]
+        [bold? (memq 'bold opts)]
         ;; a Mac's Cairo takes monospace for Courier, which has no λ
         [face-family (if (and (equal? family "monospace")
                               (memq (machine-type)
                                     '(ta6osx tarm64osx a6osx arm64osx)))
                          "Menlo"
                          family)])
-    (make-font family slant weight size
-               (cairo-toy-font-face-create face-family slant weight) #f
+    (make-font family (if italic? 'italic 'normal) (if bold? 'bold 'normal)
+               size
+               (cairo-toy-font-face-create
+                face-family
+                (if italic? CAIRO_FONT_SLANT_ITALIC CAIRO_FONT_SLANT_NORMAL)
+                (if bold? CAIRO_FONT_WEIGHT_BOLD CAIRO_FONT_WEIGHT_NORMAL))
+               #f
                (if (memq 'crisp opts) crisp-font-options plain-font-options))))
 
 ;; (font family size . opts), opts bold, italic and crisp (not
@@ -498,10 +503,21 @@
   (case-lambda
     [(x y w h r color) (stroke-round-rect x y w h r color 1)]
     [(x y w h r color lw)
-     (set-color! color)
-     (cairo-set-line-width *cr* lw)
-     (rrect-path! (+ x (/ lw 2)) (+ y (/ lw 2)) (- w lw) (- h lw) r)
-     (cairo-stroke *cr*)]))
+     (stroke-round-rects (list (list x y w h r)) color lw)]))
+
+;; Many rounded rectangles in one color, stroked at once (where their
+;; lines cross, painted once): ((x y w h r) ...), each line inside its
+;; box, as stroke-round-rect's.
+(define (stroke-round-rects boxes color lw)
+  (set-color! color)
+  (cairo-set-line-width *cr* lw)
+  (for-each (lambda (b)
+              (apply (lambda (x y w h r)
+                       (rrect-path! (+ x (/ lw 2)) (+ y (/ lw 2)) (- w lw)
+                                    (- h lw) r))
+                     b))
+            boxes)
+  (cairo-stroke *cr*))
 
 (define draw-line
   (case-lambda
@@ -555,24 +571,6 @@
      (cairo-arc *cr* cx cy r 0 (* 2 pi))
      (cairo-stroke *cr*)]))
 
-;; Linear gradient from c1 to c2; dir is 'vertical or 'horizontal.
-(define fill-gradient
-  (case-lambda
-    [(x y w h c1 c2) (fill-gradient x y w h c1 c2 'vertical 0)]
-    [(x y w h c1 c2 dir) (fill-gradient x y w h c1 c2 dir 0)]
-    [(x y w h c1 c2 dir radius)
-     (let ([pat (if (eq? dir 'horizontal)
-                    (cairo-pattern-create-linear x 0 (+ x w) 0)
-                    (cairo-pattern-create-linear 0 y 0 (+ y h)))])
-       (let-values ([(r g b a) (color-rgba c1)])
-         (cairo-pattern-add-color-stop-rgba pat 0 r g b a))
-       (let-values ([(r g b a) (color-rgba c2)])
-         (cairo-pattern-add-color-stop-rgba pat 1 r g b a))
-       (cairo-set-source *cr* pat)
-       (rrect-path! x y w h radius)
-       (cairo-fill *cr*)
-       (cairo-pattern-destroy pat))]))
-
 ;;; ------------------------------------------------------------------ state
 
 (define (call-with-clip x y w h thunk)
@@ -606,6 +604,41 @@
     (lambda () (cairo-save *cr*) (cairo-scale *cr* s s))
     thunk
     (lambda () (cairo-restore *cr*))))
+
+;; Turned by angle radians, clockwise on the screen.
+(define (call-with-rotation angle thunk)
+  (dynamic-wind
+    (lambda () (cairo-save *cr*) (cairo-rotate *cr* angle))
+    thunk
+    (lambda () (cairo-restore *cr*))))
+
+;; Drawn in device pixels: those of the surface being drawn on (the
+;; screen, a layer, an image), from its top left corner.
+(define (call-with-device-pixels thunk)
+  (dynamic-wind
+    (lambda () (cairo-save *cr*) (cairo-identity-matrix *cr*))
+    thunk
+    (lambda () (cairo-restore *cr*))))
+
+;; (values s x0 y0): device pixels per logical pixel where we draw, and
+;; where the logical origin is in device pixels. Unrotated drawing only:
+;; inside call-with-rotation s is not the scale.
+(define (device-transform)
+  (cairo-get-matrix *cr* *scratch*)
+  (values (foreign-ref 'double *scratch* 0) (foreign-ref 'double *scratch* 32)
+          (foreign-ref 'double *scratch* 40)))
+
+;; What thunk draws combines with what is there by op instead of covering
+;; it: 'difference (white turns it to its inverse) or 'add.
+(define (call-with-operator op thunk)
+  (let ([o (case op
+             [(difference) CAIRO_OPERATOR_DIFFERENCE]
+             [(add) CAIRO_OPERATOR_ADD]
+             [else (errorf 'call-with-operator "no operator ~s" op)])])
+    (dynamic-wind
+      (lambda () (cairo-save *cr*) (cairo-set-operator *cr* o))
+      thunk
+      (lambda () (cairo-restore *cr*)))))
 
 (define-syntax with-clip
   (syntax-rules ()
@@ -647,63 +680,24 @@
   (cairo-paint *cr*)
   (cairo-restore *cr*))
 
-;; A radial glow: color at the center fading to transparent at radius r.
-(define (fill-glow cx cy r color)
-  (let ([pat (cairo-pattern-create-radial cx cy 0 cx cy r)])
-    (let-values ([(cr cg cb ca) (color-rgba color)])
-      (cairo-pattern-add-color-stop-rgba pat 0 cr cg cb ca)
-      (cairo-pattern-add-color-stop-rgba pat 1 cr cg cb 0))
-    (cairo-set-source *cr* pat)
-    (cairo-new-path *cr*)
-    (cairo-arc *cr* cx cy r 0 (* 2 pi))
-    (cairo-fill *cr*)
-    (cairo-pattern-destroy pat)))
+;; Draws thunk on a fresh image w × h pixels big, transparent, and writes
+;; it to path as a PNG file.
+(define (write-image-png path w h thunk)
+  (let* ([surface (cairo-image-surface-create CAIRO_FORMAT_ARGB32 w h)]
+         [cr (cairo-create surface)]
+         [free! (lambda ()
+                  (cairo-destroy cr)
+                  (cairo-surface-destroy surface))])
+    ;; freed on an error too, as draw-into-layer!'s cairo_t
+    (guard (c [#t (free!) (raise c)])
+      (fluid-let ([*cr* cr]) (thunk)))
+    (cairo-surface-write-to-png surface path)
+    (free!)))
 
-;;; ------------------------------------------------------------------
-;;; pixel buffers
-;;; A pixmap is a small image an app fills pixel by pixel (one pixel per
-;;; Life cell, say) and draws scaled up in one call, instead of drawing
-;;; thousands of rectangles. Its pixels are a Scheme bytevector of 4·w·h
-;;; bytes, row after row, each pixel one native 32-bit word in cairo's
-;;; premultiplied ARGB (color->pixel makes one). Tight loops can write
-;;; (pixmap-bytes pm) directly; a worker thread can fill a buffer from
-;;; make-pixmap-bytevector and hand it over with pixmap-swap-bytes!.
-
-(define-record-type (pixmap new-pixmap pixmap?)
-  (nongenerative schevana-pixmap-2)
-  (fields width height (mutable bytes)))
-
-(define (pixmap-w pm) (pixmap-width pm))
-(define (pixmap-h pm) (pixmap-height pm))
-
-;; Transparent, or filled with color.
-(define make-pixmap
-  (case-lambda
-    [(w h) (make-pixmap w h #f)]
-    [(w h color)
-     (unless (and (fixnum? w) (fixnum? h) (fx> w 0) (fx> h 0))
-       (errorf 'make-pixmap "not a pixmap size: ~s × ~s" w h))
-     (let ([pm (new-pixmap w h (make-immobile-bytevector (fx* 4 (fx* w h)) 0))])
-       (when color (pixmap-fill! pm color))
-       pm)]))
-
-;; A zeroed buffer the size of pm's pixels, for a worker to fill.
-(define (make-pixmap-bytevector pm)
-  (make-immobile-bytevector (fx* 4 (fx* (pixmap-w pm) (pixmap-h pm))) 0))
-
-;; Wraps bv (4·w·h bytes of pixels) without copying it.
-(define (bytevector->pixmap bv w h)
-  (unless (and (fixnum? w) (fixnum? h) (fx> w 0) (fx> h 0)
-               (bytevector? bv) (= (bytevector-length bv) (* 4 w h)))
-    (errorf 'bytevector->pixmap "need ~a bytes for ~s × ~s pixels"
-            (* 4 w h) w h))
-  (new-pixmap w h bv))
-
-(define (check-pixmap-bytes who pm bv)
-  (unless (and (bytevector? bv)
-               (= (bytevector-length bv) (* 4 (pixmap-w pm) (pixmap-h pm))))
-    (errorf who "need ~a bytes of pixels for a ~a × ~a pixmap"
-            (* 4 (pixmap-w pm) (pixmap-h pm)) (pixmap-w pm) (pixmap-h pm))))
+;;; ------------------------------------------------------------------ pixels
+;;; Raw pixels, each one native 32-bit word in cairo's premultiplied ARGB
+;;; (color->pixel makes one), row after row in a Scheme bytevector: what
+;;; kits/pixmap.ss's pixmaps hold.
 
 ;; A color as one pixel. #xRRGGBB is opaque; theme keys and (alpha c a)
 ;; are premultiplied. Reads the theme, so main thread only.
@@ -716,78 +710,32 @@
           (fxior (fxsll (byte a) 24) (fxsll (byte (* r a)) 16)
                  (fxsll (byte (* g a)) 8) (byte (* b a)))))))
 
-(define (pixmap-index who pm x y)
-  (unless (and (fixnum? x) (fixnum? y)
-               (fx< -1 x (pixmap-w pm)) (fx< -1 y (pixmap-h pm)))
-    (errorf who "(~s, ~s) is outside a ~a × ~a pixmap"
-            x y (pixmap-w pm) (pixmap-h pm)))
-  (fx* 4 (fx+ x (fx* y (pixmap-w pm)))))
-
-(define (pixmap-set! pm x y color)
-  (pixmap-set-pixel! pm x y (color->pixel color)))
-
-(define (pixmap-set-pixel! pm x y px)
-  (bytevector-u32-native-set! (pixmap-bytes pm)
-                              (pixmap-index 'pixmap-set-pixel! pm x y) px))
-
-;; The raw pixel.
-(define (pixmap-ref pm x y)
-  (bytevector-u32-native-ref (pixmap-bytes pm)
-                             (pixmap-index 'pixmap-ref pm x y)))
-
-(define (pixmap-fill! pm color)
-  (let* ([bv (pixmap-bytes pm)] [px (color->pixel color)]
-         [row (fx* 4 (pixmap-w pm))] [n (bytevector-length bv)])
-    (do ([i 0 (fx+ i 4)]) ((fx= i row)) (bytevector-u32-native-set! bv i px))
-    (let loop ([done row])   ; then double what is filled
-      (when (fx< done n)
-        (let ([k (fxmin done (fx- n done))])
-          (bytevector-copy! bv 0 bv done k)
-          (loop (fx+ done k)))))))
-
-;; bv holds raw pixels, exactly as many as pm has.
-(define (pixmap-load! pm bv)
-  (check-pixmap-bytes 'pixmap-load! pm bv)
-  (bytevector-copy! bv 0 (pixmap-bytes pm) 0 (bytevector-length bv)))
-
-;; Installs bv (from make-pixmap-bytevector, say) as pm's pixels without
-;; copying; returns the old buffer.
-(define (pixmap-swap-bytes! pm bv)
-  (check-pixmap-bytes 'pixmap-swap-bytes! pm bv)
-  (let ([old (pixmap-bytes pm)])
-    (pixmap-bytes-set! pm bv)
-    old))
-
-;; Draws the pixmap scaled to w × h (default: its own size), each pixel a
-;; sharp block. Cairo reads the bytes in place: they are locked for the
+;; Draws the pw × ph pixels in bytes scaled to w × h at (x, y), each pixel
+;; a sharp block. Cairo reads the bytes in place: they are locked for the
 ;; call, and an image target composites before it returns.
-(define draw-pixmap
-  (case-lambda
-    [(pm x y) (draw-pixmap pm x y (pixmap-w pm) (pixmap-h pm))]
-    [(pm x y w h)
-     (when (and (> w 0) (> h 0))
-       (let ([bytes (pixmap-bytes pm)] [pw (pixmap-w pm)] [ph (pixmap-h pm)]
-             [surface 0] [pat 0])
-         (dynamic-wind
-           (lambda ()
-             (lock-object bytes)
-             (set! surface (cairo-image-surface-create-for-data
-                            (object->reference-address bytes)
-                            CAIRO_FORMAT_ARGB32 pw ph (fx* 4 pw)))
-             (set! pat (cairo-pattern-create-for-surface surface))
-             (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
-             (cairo-save *cr*))
-           (lambda ()
-             (cairo-translate *cr* x y)
-             (cairo-scale *cr* (/ w pw) (/ h ph))
-             (cairo-set-source *cr* pat)
-             (cairo-rectangle *cr* 0 0 pw ph)
-             (cairo-fill *cr*))
-           (lambda ()
-             (cairo-restore *cr*)
-             (cairo-pattern-destroy pat)
-             (cairo-surface-destroy surface)
-             (unlock-object bytes)))))]))
+(define (draw-pixels bytes pw ph x y w h)
+  (when (and (> w 0) (> h 0))
+    (let ([surface 0] [pat 0])
+      (dynamic-wind
+        (lambda ()
+          (lock-object bytes)
+          (set! surface (cairo-image-surface-create-for-data
+                         (object->reference-address bytes)
+                         CAIRO_FORMAT_ARGB32 pw ph (fx* 4 pw)))
+          (set! pat (cairo-pattern-create-for-surface surface))
+          (cairo-pattern-set-filter pat CAIRO_FILTER_NEAREST)
+          (cairo-save *cr*))
+        (lambda ()
+          (cairo-translate *cr* x y)
+          (cairo-scale *cr* (/ w pw) (/ h ph))
+          (cairo-set-source *cr* pat)
+          (cairo-rectangle *cr* 0 0 pw ph)
+          (cairo-fill *cr*))
+        (lambda ()
+          (cairo-restore *cr*)
+          (cairo-pattern-destroy pat)
+          (cairo-surface-destroy surface)
+          (unlock-object bytes))))))
 
 ;;; ------------------------------------------------------------------ frames
 ;;; A frame is drawn from scratch into *back*, the second screen buffer,

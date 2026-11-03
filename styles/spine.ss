@@ -95,8 +95,8 @@
                                  (round (+ (/ (+ head 4 end) 2)
                                            (/ (text-width title 'title) 2)))
             (lambda ()
-              (cairo-rotate *cr* (* -1/2 pi))
-              (draw-text 0 0 title ink 'title))))))))
+              (call-with-rotation (* -1/2 pi)
+                (lambda () (draw-text 0 0 title ink 'title))))))))))
 
 (define (spine-draw-over win x y w h focused? hover pressed)
   (stroke-round-rect x y w h (spine-radius win)

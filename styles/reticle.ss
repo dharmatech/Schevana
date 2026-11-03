@@ -17,7 +17,7 @@
 
 ;; Device pixels per logical pixel where we draw: the picker's miniature
 ;; is drawn scaled down.
-(define (reticle-k) (let-values ([(k ox oy) (px-device)]) k))
+(define (reticle-k) (let-values ([(k ox oy) (device-transform)]) k))
 
 ;; Whole device pixels, so that lines are crisp at any scale: v to the
 ;; nearest one (or by floor or ceiling, to stay inside a box), and a

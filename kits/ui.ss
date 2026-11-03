@@ -649,7 +649,7 @@
 ;; (Genera's hints and type descriptions).
 (define (ui-italic-of f)
   (apply font (font-family f) (font-size f) 'italic
-         (if (= (font-weight f) CAIRO_FONT_WEIGHT_BOLD) '(bold) '())))
+         (if (eq? (font-weight f) 'bold) '(bold) '())))
 
 ;; The ring of a widget that has the keyboard from Tab.
 (define-part (ui-draw-focus x y w h flags r)

@@ -229,25 +229,30 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows
-kits/        complete: a completion list beside a caret (matching, keys,
-             clicks, placement); edit: text editing, pure, and a text's
-             rows, computed only as far as they are shown; px: pixel art
-             on whole device pixels (rectangles, bevels, small pictures,
-             text); ui:
-             immediate-mode widgets (buttons, text fields and areas,
-             dropdowns, tabs, checkboxes, a table, a tree, chips, a date
-             picker, scroll views, tooltips, a dialog), keyboard focus
+kits/        color: hue, saturation and lightness; complete: a completion
+             list beside a caret (matching, keys, clicks, placement);
+             edit: text editing, pure, and a text's rows, computed only
+             as far as they are shown; fill: gradient and glow fills;
+             pixmap: pixel buffers drawn scaled up; px: pixel art on
+             whole device pixels (rectangles, bevels, small pictures,
+             text); theme: which layer gives a setting, what a palette
+             would show; ui: immediate-mode widgets (buttons, text fields
+             and areas, dropdowns, tabs, checkboxes, a table, a tree,
+             chips, a date picker, scroll views, tooltips, a dialog),
+             keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!
 src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
-src/gfx      immediate-mode drawing API, colors and stipples, fonts and
-             ink, layers; the two screen buffers
+src/gfx      immediate-mode drawing API, colors, stipples and gradients,
+             fonts and ink, operators, rotation, device pixels, layers,
+             raw pixels, PNG files; the two screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
 src/theme    the whole look: settings in layers, rules, palettes, styles,
              parts, the frame's parts; save/load
-src/ffi      the only file that knows about C (SDL3 + Cairo)
+src/ffi      the only file that knows about C (SDL3 + Cairo); only the
+             core uses it
 ```
 
 `src/` is the core, the explicit, ordered list in `load.ss`. Its last
@@ -255,7 +260,9 @@ file loads the folders: `kits/`, `desktop/`, `styles/`, `palettes/`,
 `wallpapers/` and `apps/`, one definition per file (`desktop/` aside),
 each folder in file-name order. A file dropped into a folder loads at the
 next boot or `(reload!)`, with no list to edit, and `(source-files)`
-lists them all.
+lists them all. Only the core calls C: the folders draw, measure and
+save through its procedures, never through `src/ffi.ss`'s bindings, and
+`tests/sources.ss` checks that none of them names one.
 
 The core names nothing of the desktop layer's: the crash panel and the
 window menu are parts (`draw-crash-panel`, `open-window-menu`) whose
@@ -322,8 +329,9 @@ Decisions worth keeping in mind for the real design:
   and the built-in defaults. A rule is a setting computed from others then,
   never per frame: the built-in `selection` is `(theme-rule (mix 'accent
   'bg-1 0.65))`, so a palette gives twenty colors and the rest follow it, and
-  so does your accent. `(theme-source key)` says which layer gives one,
-  `(theme-part key)` the procedure a part key gives.
+  so does your accent. `(theme-source key)` (the theme kit's) says
+  which layer gives one, `(theme-part key)` the procedure a part key
+  gives.
   The Settings app is a front end to these, so anything it does can be
   scripted from the REPL: its Theme tab's style cards are the one
   switch (`set-style!`: frames, palette, wallpaper, fonts, behaviors and
@@ -414,9 +422,19 @@ Decisions worth keeping in mind for the real design:
   ...)`, is a pattern used wherever a color is (a fill, a line, text, a
   theme key's value), tiled on the screen's device pixels where px's
   rule puts each logical pixel, so it lines up across windows at any
-  scale. `text-ink` measures what a string inks as `*cr*`
-  draws it (capitals centered on a line), and a font made with `'crisp`
-  is not antialiased. `kits/px.ss` draws on whole device pixels at any
+  scale. So is a gradient, `(linear-gradient x0 y0 x1 y1 color ...)`
+  or `(radial-gradient cx cy r color ...)`, its colors spread evenly,
+  which the fill kit's `fill-gradient` and `fill-glow` are made of.
+  `text-ink` measures what a string inks where it is drawn (capitals
+  centered on a line), and a font made with `'crisp` is not
+  antialiased. What the styles once asked of Cairo themselves the core
+  gives: `call-with-operator` (`'difference`: reverse video, the bell's
+  flash; `'add`), `call-with-rotation` (Spine's title),
+  `call-with-device-pixels` and `device-transform` (where the device's
+  pixels lie: Curses draws on them), `stroke-round-rects` (outlines
+  stroked as one: Halo's glow), `draw-pixels` (raw pixels, which the
+  pixmap kit's `pixmap-draw` draws) and `write-image-png` (the app
+  icon's file). `kits/px.ss` draws on whole device pixels at any
   scale, never antialiased: `px-fill`, `px-bevel` (Motif's corners or
   the Mac's), `px-ring`, `px-bits` for small pictures, `px-text`,
   `px-invert` (reverse video: ink and paper swap, in any palette),

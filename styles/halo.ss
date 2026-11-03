@@ -57,26 +57,21 @@
         (list buttons)
         (list (list tx tw title) buttons))))
 
-(define (halo-pill-paths! pills x y)
-  (for-each (lambda (p)
-              (rrect-path! (+ x (car p)) y (cadr p) (halo-pill-height)
-                           (/ (halo-pill-height) 2)))
-            pills))
+;; The pills' outlines at y, as stroke-round-rects' boxes (x y w h r),
+;; each grown by d at every side: a line 2d wide stroked inside one runs
+;; along the pill's edge.
+(define (halo-pill-boxes pills x y d)
+  (map (lambda (p)
+         (list (- (+ x (car p)) d) (- y d) (+ (cadr p) d d)
+               (+ (halo-pill-height) d d) (/ (halo-pill-height) 2)))
+       pills))
 
-;; Strokes the current path in the halo's ink, accent at the top left
-;; turning to accent-2 at the bottom right, at opacity a; unfocused, in
-;; the plain border color.
-(define (halo-stroke! x y w h focused? lw a)
-  (let ([pat (cairo-pattern-create-linear x y (+ x w) (+ y h))])
-    (for-each (lambda (stop key)
-                (let-values ([(r g b k) (color-rgba
-                                         (if focused? key 'window-border))])
-                  (cairo-pattern-add-color-stop-rgba pat stop r g b (* k a))))
-              '(0 1) '(accent accent-2))
-    (cairo-set-source *cr* pat)
-    (cairo-set-line-width *cr* lw)
-    (cairo-stroke *cr*)
-    (cairo-pattern-destroy pat)))
+;; The halo's ink, accent at the top left turning to accent-2 at the
+;; bottom right, at opacity a; unfocused, the plain border color.
+(define (halo-ink x y w h focused? a)
+  (apply linear-gradient x y (+ x w) (+ y h)
+         (map (lambda (key) (alpha (if focused? key 'window-border) a))
+              '(accent accent-2))))
 
 ;; ×, −, or two corners of a frame: pointing out to maximize, in to
 ;; restore. (x, y) is a pixel's middle.
@@ -100,10 +95,12 @@
     ;; the card and the pills then cover their inner halves
     (when (and focused? (not (maximized? win)))
       (for-each (lambda (lw)
-                  (cairo-new-path *cr*)
-                  (rrect-path! x (+ y e) w (- h e) r)
-                  (halo-pill-paths! pills x y)
-                  (halo-stroke! x y w h #t lw 0.05))
+                  (let ([d (/ lw 2)])
+                    (stroke-round-rects
+                     (cons (list (- x d) (- (+ y e) d) (+ w lw) (+ (- h e) lw)
+                                 r)
+                           (halo-pill-boxes pills x y d))
+                     (halo-ink x y w h #t 0.05) lw)))
                 '(2 4 6 8 10)))
     (fill-round-rect x (+ y e) w (- h e) r (window-bg win))))
 
@@ -113,13 +110,12 @@
          [top (+ y (halo-drop win) (/ lw 2))]
          [mid (+ top (/ ph 2))]   ; the card's top edge
          [gy (+ (floor mid) 1/2)]   ; the glyphs' row
-         [bloom? (memq hover '(close minimize maximize))])
-    (cairo-new-path *cr*)
+         [bloom? (memq hover '(close minimize maximize))]
+         [ink (halo-ink x y w h focused? 1)])
+    ;; the card's edge: maximized, a line lw high across the top
     (if (maximized? win)
-        (begin (cairo-move-to *cr* x mid) (cairo-line-to *cr* (+ x w) mid))
-        (rrect-path! (+ x (/ lw 2)) (+ y e (/ lw 2)) (- w lw) (- h e lw)
-                     (halo-radius win)))
-    (halo-stroke! x y w h focused? lw 1)
+        (fill-rect x (- mid (/ lw 2)) w lw ink)
+        (stroke-round-rect x (+ y e) w (- h e) (halo-radius win) ink lw))
     (for-each (lambda (p)
                 (fill-round-rect (+ x (car p)) top (cadr p) ph (/ ph 2)
                                  (window-bg win))
@@ -128,8 +124,7 @@
                                       (if focused? 'title-text 'title-text-dim)
                                       'ui)))
               pills)
-    (halo-pill-paths! pills x top)
-    (halo-stroke! x y w h focused? lw 1)
+    (stroke-round-rects (halo-pill-boxes pills x top (/ lw 2)) ink lw)
     (for-each
      (lambda (b)
        (let ([kind (car b)] [gx (+ x (cadr b) (/ (cadddr b) 2))]

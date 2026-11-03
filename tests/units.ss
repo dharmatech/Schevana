@@ -160,7 +160,7 @@
   (fill-rect 0 0 600 400 'red)
   (draw-text 20 20 "stray" 'text 'big)
   (draw-shadow 100 100 300 200 9 14)   ; shadow
-  (draw-pixmap (make-pixmap 2 2 #xff0000) 10 10 50 50))
+  (pixmap-draw (make-pixmap 2 2 #xff0000) 10 10 50 50))
 
 (check "stray drawing between frames leaves the canvas untouched"
        (let ([before (canvas-bytes)])
@@ -572,10 +572,10 @@
               (not (eq? (pixmap-bytes pm) bv))
               (raises? (lambda () (pixmap-load! pm (make-bytevector 12 0)))))))
 
-(check "bytevector->pixmap wraps without copying"
+(check "pixmap-from-bytevector wraps without copying"
        (let ([bv (make-bytevector 16 0)])
-         (and (eq? (pixmap-bytes (bytevector->pixmap bv 2 2)) bv)
-              (raises? (lambda () (bytevector->pixmap bv 3 2))))))
+         (and (eq? (pixmap-bytes (pixmap-from-bytevector bv 2 2)) bv)
+              (raises? (lambda () (pixmap-from-bytevector bv 3 2))))))
 
 (check "pixmap-swap-bytes! installs a buffer and returns the old one"
        (let* ([pm (make-pixmap 2 2 #x0000ff)]
@@ -599,7 +599,7 @@
          [after (image *canvas-pw* *canvas-ph* s
                        (lambda ()
                          (fill-gradient 0 0 300 300 #x204060 #x806040)
-                         (draw-pixmap pm 100 100 20 20)))]
+                         (pixmap-draw pm 100 100 20 20)))]
          [x0 (exact (* s 100))] [x1 (exact (* s 120))]
          [ok (let loop ([y 0])
                (or (= y (exact (* s 300)))
@@ -622,16 +622,16 @@
     ok))
 
 (define (quadrants bv)
-  (let ([pm (bytevector->pixmap bv 2 2)])
+  (let ([pm (pixmap-from-bytevector bv 2 2)])
     (for-each (lambda (i px) (pixmap-set-pixel! pm (mod i 2) (quotient i 2) px))
               '(0 1 2 3) '(#xffff0000 #xff00ff00 #xff0000ff #xff123456))
     pm))
 
-(check "draw-pixmap is nearest-neighbor at 100%"
+(check "pixmap-draw is nearest-neighbor at 100%"
        (draws-nearest? 1 (quadrants (make-immobile-bytevector 16 0))))
-(check "draw-pixmap is nearest-neighbor at 200%"
+(check "pixmap-draw is nearest-neighbor at 200%"
        (draws-nearest? 2 (quadrants (make-immobile-bytevector 16 0))))
-(check "draw-pixmap works with an ordinary (movable) bytevector"
+(check "pixmap-draw works with an ordinary (movable) bytevector"
        (draws-nearest? 2 (quadrants (make-bytevector 16 0))))
 
 ;;; ------------------------------------------------------------------ Life
@@ -2559,7 +2559,7 @@
                   (let* ([given (let ([p (palette-colors name)])
                                   (if (null? p) base-colors p))]
                          [today (derived-as-today given)]
-                         [now (palette-preview name)])
+                         [now (theme-palette-preview name)])
                     (for-all (lambda (k)
                                (equal? (plist-ref now k #f)
                                        (plist-ref today k #f)))
@@ -3288,6 +3288,200 @@
                                                 (list-ref rows y))))))
                           (iota 24)))))
         '(close minimize maximize restore shade up down left right)))
+
+;;; The core's primitives that keep C away from the folders: operators,
+;;; the device's transform and pixels, rotation, gradients as colors,
+;;; several boxes stroked at once, raw pixels, a PNG file.
+
+;; thunk's pixels at (x, y) ..., drawn on a fresh w × h image at scale s.
+(define (pixels-of w h s thunk . points)
+  (let* ([img (image w h s thunk)]
+         [ps (map (lambda (p) (pixel-at img (car p) (cadr p))) points)])
+    (cairo-surface-destroy img)
+    ps))
+
+(define (same-drawing? w h s a b)
+  (let* ([ia (image w h s a)] [ib (image w h s b)] [d (max-diff ia ib)])
+    (cairo-surface-destroy ia)
+    (cairo-surface-destroy ib)
+    (zero? d)))
+
+(check "call-with-operator: white by difference turns a color to its \
+        inverse, add adds, drawing covers again after, and an unknown \
+        operator raises"
+       (and (equal? (pixels-of 4 4 1
+                               (lambda ()
+                                 (fill-rect 0 0 4 4 #x204060)
+                                 (call-with-operator 'difference
+                                   (lambda () (fill-rect 0 0 4 4 #xffffff))))
+                               '(1 1))
+                    '(#xffdfbf9f))
+            (equal? (pixels-of 4 4 1
+                               (lambda ()
+                                 (fill-rect 0 0 4 4 #x102030)
+                                 (call-with-operator 'add
+                                   (lambda () (fill-rect 0 0 4 4 #x010203))))
+                               '(1 1))
+                    '(#xff112233))
+            (equal? (pixels-of 4 4 1
+                               (lambda ()
+                                 (fill-rect 0 0 4 4 #x204060)
+                                 (call-with-operator 'difference void)
+                                 (fill-rect 0 0 4 4 #x000000))
+                               '(1 1))
+                    '(#xff000000))
+            (raises? (lambda () (call-with-operator 'xor void)))))
+
+(check "device-transform: the scale and where the origin is in device \
+        pixels; call-with-device-pixels draws on them from the corner, \
+        then no more"
+       (let* ([seen '()]
+              [see! (lambda ()
+                      (set! seen (cons (call-with-values device-transform
+                                         list)
+                                       seen)))]
+              [img (image 8 8 2
+                          (lambda ()
+                            (fill-rect 0 0 4 4 #xffffff)
+                            (call-with-translation 1 1.5
+                              (lambda ()
+                                (see!)
+                                (call-with-device-pixels
+                                  (lambda ()
+                                    (see!)
+                                    (fill-rect 0 0 1 1 #x000000)))
+                                (see!)
+                                (fill-rect 1 0.5 1 1 #x000000)))))]
+              [rows (pixel-rows img '((#xffffffff . #\.)
+                                      (#xff000000 . #\k)))])
+         (cairo-surface-destroy img)
+         (and (equal? (reverse seen) '((2.0 2.0 3.0) (1.0 0.0 0.0)
+                                       (2.0 2.0 3.0)))
+              (equal? rows '("k......." "........" "........" "........"
+                             "....kk.." "....kk.." "........" "........")))))
+
+(check "call-with-rotation turns what it draws clockwise on the screen, \
+        then no more"
+       (same-drawing? 10 10 1
+                      (lambda ()
+                        (fill-rect 0 0 10 10 #xffffff)
+                        (call-with-translation 5 5
+                          (lambda ()
+                            (call-with-rotation (/ pi 2)
+                              (lambda () (fill-rect 0 0 4 2 #x000000)))
+                            (fill-rect 0 -5 1 1 #x000000))))
+                      (lambda ()
+                        (fill-rect 0 0 10 10 #xffffff)
+                        (fill-rect 3 5 2 4 #x000000)
+                        (fill-rect 5 0 1 1 #x000000))))
+
+;; A pattern's stops at the offsets given, then the pattern as the source.
+(define (stops-by-hand! pat offsets colors)
+  (for-each (lambda (at c)
+              (let-values ([(r g b a) (color-rgba c)])
+                (cairo-pattern-add-color-stop-rgba pat at r g b a)))
+            offsets colors)
+  (cairo-set-source *cr* pat)
+  (cairo-pattern-destroy pat))
+
+(check "gradients are colors: a linear and a radial one paint as cairo's \
+        patterns of their colors, spread evenly; fill-gradient and \
+        fill-glow as they did by hand"
+       (and (same-drawing?
+             80 60 1.5
+             (lambda ()
+               (fill-rect 0 0 80 60
+                          (linear-gradient 3 2 70 50 'accent #x000000
+                                           (alpha 'red 0.5))))
+             (lambda ()
+               (stops-by-hand! (cairo-pattern-create-linear 3 2 70 50)
+                               '(0 1/2 1)
+                               (list 'accent #x000000 (alpha 'red 0.5)))
+               (cairo-rectangle *cr* 0 0 80 60)
+               (cairo-fill *cr*)))
+            (same-drawing?
+             80 60 1.5
+             (lambda ()
+               (fill-circle 40 30 25 (radial-gradient 40 30 25 'accent-2
+                                                      #xffffff)))
+             (lambda ()
+               (stops-by-hand! (cairo-pattern-create-radial 40 30 0 40 30 25)
+                               '(0 1) '(accent-2 #xffffff))
+               (cairo-new-sub-path *cr*)
+               (cairo-arc *cr* 40 30 25 0 (* 2 pi))
+               (cairo-fill *cr*)))
+            (for-all
+             (lambda (dir radius)
+               (same-drawing?
+                80 60 1.5
+                (lambda ()
+                  (fill-gradient 5 5 70 50 'desktop-top 'desktop-bottom dir
+                                 radius))
+                (lambda ()   ; HEAD's fill-gradient
+                  (stops-by-hand! (if (eq? dir 'horizontal)
+                                      (cairo-pattern-create-linear 5 0 75 0)
+                                      (cairo-pattern-create-linear 0 5 0 55))
+                                  '(0 1) '(desktop-top desktop-bottom))
+                  (rrect-path! 5 5 70 50 radius)
+                  (cairo-fill *cr*))))
+             '(vertical horizontal) '(9 0))
+            (same-drawing?
+             80 60 1.5
+             (lambda () (fill-glow 40 30 35 (alpha 'accent 0.3)))
+             (lambda ()   ; HEAD's fill-glow
+               (let ([pat (cairo-pattern-create-radial 40 30 0 40 30 35)])
+                 (let-values ([(cr cg cb ca) (color-rgba (alpha 'accent 0.3))])
+                   (cairo-pattern-add-color-stop-rgba pat 0 cr cg cb ca)
+                   (cairo-pattern-add-color-stop-rgba pat 1 cr cg cb 0))
+                 (cairo-set-source *cr* pat)
+                 (cairo-new-path *cr*)
+                 (cairo-arc *cr* 40 30 35 0 (* 2 pi))
+                 (cairo-fill *cr*)
+                 (cairo-pattern-destroy pat))))))
+
+(check "stroke-round-rects strokes its boxes as one path, painting once \
+        where their lines cross; one box is stroke-round-rect"
+       (let* ([half (alpha #x000000 0.5)]
+              ;; where they cross, then on each one's line alone
+              [ps (pixels-of 40 30 1
+                             (lambda ()
+                               (fill-rect 0 0 40 30 #xffffff)
+                               (stroke-round-rects '((2 2 20 20 4)
+                                                     (12 6 20 20 4))
+                                                   half 4))
+                             '(20 8) '(20 15) '(14 16))])
+         (and (apply = ps) (not (= (car ps) #xffffffff))
+              (same-drawing? 40 30 1.5
+                             (lambda ()
+                               (stroke-round-rects '((2 2 20 20 4)) half 3))
+                             (lambda ()
+                               (stroke-round-rect 2 2 20 20 4 half 3))))))
+
+(check "draw-pixels draws raw pixels as sharp blocks, and nothing at no size"
+       (let ([bv (make-bytevector 8 0)])
+         (bytevector-u32-native-set! bv 0 #xffff0000)
+         (bytevector-u32-native-set! bv 4 #xff0000ff)
+         (equal? (pixels-of 8 4 1
+                            (lambda ()
+                              (draw-pixels bv 2 1 1 1 4 2)
+                              (draw-pixels bv 2 1 6 0 0 3))
+                            '(1 1) '(2 2) '(3 1) '(4 2) '(5 1) '(6 1))
+                 '(#xffff0000 #xffff0000 #xff0000ff #xff0000ff 0 0))))
+
+(define png-surface
+  (foreign-procedure "cairo_image_surface_create_from_png" (string) uptr))
+
+(check "write-image-png draws on a fresh transparent image and saves it"
+       (let ([path (string-append out-dir "/primitive.png")])
+         (write-image-png path 3 2 (lambda () (fill-rect 1 0 2 1 #x336699)))
+         (let* ([img (png-surface path)]
+                [r (list (cairo-image-surface-get-width img)
+                         (cairo-image-surface-get-height img)
+                         (pixel-at img 0 0) (pixel-at img 1 0)
+                         (pixel-at img 2 0) (pixel-at img 2 1))])
+           (cairo-surface-destroy img)
+           (delete-file path)
+           (equal? r '(3 2 0 #xff336699 #xff336699 0)))))
 
 ;;; ------------------------------------------------------------------
 ;;; behaviors a style chooses (each a setting, today's feel by default)
@@ -4437,8 +4631,8 @@
             (with-style 'genera
               (lambda ()
                 (let ([f (faint-font 'text-faint (get-font 'mono-bold))])
-                  (and (= (font-slant f) CAIRO_FONT_SLANT_ITALIC)
-                       (= (font-weight f) CAIRO_FONT_WEIGHT_BOLD)
+                  (and (eq? (font-slant f) 'italic)
+                       (eq? (font-weight f) 'bold)
                        (eq? (faint-font 'text (get-font 'mono))
                             (get-font 'mono))))))))
 

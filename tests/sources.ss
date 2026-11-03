@@ -3,14 +3,14 @@
 ;;;   scheme --script tests/sources.ss
 ;;;
 ;;; Every line of every source file fits in 80 columns; no top-level name
-;;; is defined in two files; src/ stays within its size budget; every file
-;;; in a folder registers what it defines (a kit's names keep its prefix;
-;;; desktop/, like src/, defines plain names); a style sets only settings
-;;; that exist (built in, its options' or its own); in the kits, the
-;;; desktop layer, Tasks and Settings only the drawing procedures draw or
-;;; name a color, and the edit kit never does; and only styles call a part's
-;;; built-in body. Fast: it loads the world but does
-;;; not boot it.
+;;; is defined in two files; src/ stays within its size budget; outside
+;;; src/ nothing calls C; every file in a folder registers what it defines
+;;; (a kit's names keep its prefix; desktop/, like src/, defines plain
+;;; names); a style sets only settings that exist (built in, its options'
+;;; or its own); in the kits, the desktop layer, Tasks and Settings only
+;;; the drawing procedures draw or name a color, and the edit kit never
+;;; does; and only styles call a part's built-in body. Fast: it loads the
+;;; world but does not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -181,6 +181,48 @@
                          (sort (lambda (a b) (> (cdr a) (cdr b))) counts))))))
 
 ;;; ------------------------------------------------------------------
+;;; only the core calls C
+;;; One of the core's roles is to keep C away from the rest: outside src/
+;;; no file names a binding of src/ffi.ss, a foreign-… procedure, an
+;;; ftype form, load-shared-object, or the core's cairo context (*cr*) and
+;;; scratch memory (*scratch*). The tests may: they inspect what is
+;;; drawn and stand in for the host.
+
+(define ffi-names (map cdr (definitions "src/ffi.ss")))
+
+(define (reaches-c? s)
+  (or (and (memq s (append ffi-names
+                           '(*cr* *scratch* define-ftype make-ftype-pointer
+                             load-shared-object)))
+           #t)
+      (exists (lambda (p) (string-prefix? p (symbol->string s)))
+              '("foreign-" "ftype-"))))
+
+;; The symbols in x, each once.
+(define (symbols-in x)
+  (let walk ([x x] [acc '()])
+    (cond [(symbol? x) (if (memq x acc) acc (cons x acc))]
+          [(pair? x) (walk (cdr x) (walk (car x) acc))]
+          [(vector? x) (fold-left (lambda (acc y) (walk y acc)) acc
+                                  (vector->list x))]
+          [else acc])))
+
+(define outside-src
+  (remp (lambda (f) (equal? (file-folder f) "src"))
+        (append world-files '("main.ss"))))
+
+(check (format "outside src/ (~a files) nothing reaches C: no binding of \
+                src/ffi.ss (~a), no foreign-… or ftype form, no *cr* or \
+                *scratch*" (length outside-src) (length ffi-names))
+       (none? (apply append
+                     (map (lambda (f)
+                            (map (lambda (s) (format "~a names ~a" f s))
+                                 (reverse (filter reaches-c?
+                                                  (symbols-in
+                                                   (file-forms f))))))
+                          outside-src))))
+
+;;; ------------------------------------------------------------------
 ;;; folders
 
 ;; Each file in styles/, palettes/ and wallpapers/ defines one of its kind,
@@ -301,17 +343,16 @@
   (map (lambda (k) (string->symbol (format "~a*" k))) parts))
 
 ;; What paints or chooses paint. Calling a part is what other code does
-;; (a style's own then draws); making, saving or freeing an image is not
-;; painting, nor is finding where the device's pixels lie (the matrix,
-;; px-device, px-snap: for a clip on whole pixels).
+;; (a style's own then draws); making an image is not painting, nor is
+;; finding where the device's pixels lie (px-snap: for a clip on whole
+;; pixels).
 (define (drawing-primitive? s)
   (and (not (memq s parts))
-       (not (memq s '(cairo-create cairo-destroy cairo-image-surface-create
-                      cairo-surface-destroy cairo-surface-write-to-png
-                      draw-into-layer! cairo-get-matrix px-device px-snap)))
+       (not (memq s '(draw-into-layer! px-snap)))
        (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
-                   '("fill-" "stroke-" "draw-" "cairo-" "px-"))
-           (and (memq s '(set-color! use-font! clear! blit-layer!)) #t))))
+                   '("fill-" "stroke-" "draw-" "px-"))
+           (and (memq s '(set-color! use-font! clear! blit-layer! pixmap-draw))
+                #t))))
 
 ;; What a form does that only a drawing procedure may: ((draws . name)
 ;; (color . key) ...).

@@ -48,26 +48,25 @@
          (or (fit (+ s (* 5 c)) (- w s (* 9 c)))
              (and (not buttons?) (fit (+ s c) (- w s c)))))))
 
-;; s in device pixels, k of them to the logical one: its ink centered on x
-;; and its capitals' on y, measured as drawn (hinting makes the capitals
-;; 10 pixels high at 100%, 21 at 200%), on whole pixels.
+;; s in device pixels, k of them to the logical one, in the mono font
+;; made k times bigger: its ink centered on x and its capitals' on y,
+;; measured as drawn (hinting makes the capitals 10 pixels high at 100%,
+;; 21 at 200%), on whole pixels.
 (define (curses-text s x y k color)
-  (define (middle str i)   ; of the ink, from the origin: 0, x; 8, y
-    (cairo-text-extents *cr* str *scratch*)
-    (+ (foreign-ref 'double *scratch* i)
-       (/ (foreign-ref 'double *scratch* (+ i 16)) 2)))
-  (let ([f (get-font 'mono)])
-    (use-font! f)
-    (cairo-set-font-size *cr* (* k (font-size f)))
-    (set-color! color)
-    (cairo-move-to *cr* (floor (- x (middle s 0) -1/2))
-                   (floor (- y (middle "H" 8))))
-    (cairo-show-text *cr* s)))
+  (let* ([mono (get-font 'mono)]
+         [f (font (font-family mono) (* k (font-size mono)))])
+    (define (middle str)   ; of the ink, from the pen: (values x y)
+      (let-values ([(l t w h) (text-ink str f)])
+        (values (+ l (/ w 2)) (+ t (/ h 2)))))
+    (let-values ([(mx my) (middle s)] [(hx hy) (middle "H")])
+      (draw-text (floor (- x mx -1/2))
+                 (- (floor (- y hy)) (font-ascent f))
+                 s color f))))
 
 ;; Drawn in device pixels, in pens: squares a line wide, 1 pixel at 100%
 ;; and 2 at 200%.
 (define (curses-draw-under win x y w h focused? hover pressed)
-  (let*-values ([(k ox oy) (px-device)] [(p) (max 1 (round k))]
+  (let*-values ([(k ox oy) (device-transform)] [(p) (max 1 (round k))]
                 [(c) (curses-cell)] [(bg) (window-bg win)]
                 [(ink) (if focused? 'accent 'text-faint)]
                 [(fg) (if focused? 'title-text 'title-text-dim)]
@@ -131,21 +130,24 @@
       (fill-rect x y w h bg)
       (call-with-clip x y w h   ; a narrow window cuts its buttons
         (lambda ()
-          (cairo-identity-matrix *cr*)   ; from here on, device pixels
-          ;; the double rule's outer and inner lines, or the one between
-          (for-each (lambda (o)
-                      (stroke-rect (+ L o) (+ T o) (- (+ R p) L o o)
-                                   (- (+ B p) T o o) ink p))
-                    (if focused? (list (- p) p) '(0)))
-          (when buttons?
-            (for-each (lambda (bt) (button (car bt) (cadr bt) (cadddr bt)))
-                      (curses-regions win)))
-          (let ([t (curses-title win buttons?)])
-            (when t
-              (group (cadr t) (caddr t)
-                (lambda (cx)
-                  (curses-text (car t) (+ cx (/ p 2)) (+ T (/ p 2)) k
-                               fg))))))))))
+          (call-with-device-pixels
+            (lambda ()
+              ;; the double rule's outer and inner lines, or the one
+              ;; between
+              (for-each (lambda (o)
+                          (stroke-rect (+ L o) (+ T o) (- (+ R p) L o o)
+                                       (- (+ B p) T o o) ink p))
+                        (if focused? (list (- p) p) '(0)))
+              (when buttons?
+                (for-each (lambda (bt)
+                            (button (car bt) (cadr bt) (cadddr bt)))
+                          (curses-regions win)))
+              (let ([t (curses-title win buttons?)])
+                (when t
+                  (group (cadr t) (caddr t)
+                    (lambda (cx)
+                      (curses-text (car t) (+ cx (/ p 2)) (+ T (/ p 2)) k
+                                   fg))))))))))))
 
 ;; A terminal's visual bell flashes the screen; menus box their entries.
 (define-style curses "Curses"

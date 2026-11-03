@@ -275,7 +275,7 @@
 ;; heavier one while it has the keyboard (lispm-notes, answer 4); an area
 ;; of lines is a pane (ZWEI's), boxed.
 (define (genera-field x y w h flags)
-  (let*-values ([(s ox oy) (px-device)]
+  (let*-values ([(s ox oy) (device-transform)]
                 ;; a device pixel at least, in Settings' miniatures too
                 [(n) (max (if (memq 'focused flags) 2 1)
                           (exact (ceiling (/ 1 s))))])

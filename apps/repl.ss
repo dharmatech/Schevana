@@ -586,7 +586,8 @@
     (find-window "app" ,(lambda () (map symbol->string (apps))))
     (set-palette! "palette"
                          ,(lambda () (map symbol->string (palettes))))
-    (palette-preview "palette" ,(lambda () (map symbol->string (palettes))))))
+    (theme-palette-preview "palette"
+                           ,(lambda () (map symbol->string (palettes))))))
 
 ;; (values kind start typed choices): choices are (name . kind-or-#f);
 ;; a kind of #f is looked up in the environment when shown.
@@ -1117,11 +1118,9 @@
 ;; in whole device pixels. (The font's own box sits differently around
 ;; its glyphs at each size, as its metrics round.)
 (define (repl-mark-top th)
-  (use-font! (get-font 'mono))
-  (cairo-text-extents *cr* "()" *scratch*)
-  (let ([middle (+ (font-ascent 'mono) (foreign-ref 'double *scratch* 8)
-                   (/ (foreign-ref 'double *scratch* 24) 2))])
-    (/ (round (* *scale* (- middle (/ th 2)))) *scale*)))
+  (let-values ([(l top w h) (text-ink "()" 'mono)])
+    (let ([middle (+ (font-ascent 'mono) top (/ h 2))])
+      (/ (round (* *scale* (- middle (/ th 2)))) *scale*))))
 
 ;; A new REPL opens with room for this many characters, like a terminal,
 ;; whatever size the code font is.

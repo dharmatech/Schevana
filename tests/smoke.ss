@@ -824,7 +824,8 @@
                 (member '(genera . "Genera, again")
                         (named *styles* style-name
                                style-title))
-                (equal? (palette-preview 'nord) (palette-preview 'tokyo-night))
+                (equal? (theme-palette-preview 'nord)
+                        (theme-palette-preview 'tokyo-night))
                 (equal? (palette-title 'nord) "Nord, again")
                 (member '(flat . "Flat, again") (named *wallpapers* car cadr))
                 (member '(clock . "Clock, again")
@@ -3354,11 +3355,8 @@
 (define (fresh-metrics name)
   (let ([f (get-font name)])
     (font-metrics (make-font (font-family f) (font-slant f) (font-weight f)
-                             (font-size f)
-                             (cairo-toy-font-face-create (font-family f)
-                                                         (font-slant f)
-                                                         (font-weight f))
-                             #f (font-options f)))))
+                             (font-size f) (font-face f) #f
+                             (font-options f)))))
 
 (with-quiet-status
  (lambda ()

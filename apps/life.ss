@@ -45,7 +45,7 @@
 ;; The cells (a pixmap, one pixel each) scaled up at (ox, oy), then the
 ;; one-pixel gaps between them.
 (define (draw-life-cells pixels cols rows cell ox oy)
-  (draw-pixmap pixels ox oy (* cell cols) (* cell rows))
+  (pixmap-draw pixels ox oy (* cell cols) (* cell rows))
   ;; columns and rows apart: crossing rects in one path take cairo's slow
   ;; path under the window's rounded clip (5× slower)
   (fill-rects (map (lambda (x) (list (+ ox (* x cell)) oy 1 (* cell rows)))
