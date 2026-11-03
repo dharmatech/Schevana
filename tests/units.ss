@@ -1490,6 +1490,96 @@
                   (not (window-ref win 'tether))))))
   (close-window! win))
 
+;; The controls window, opened with the box, where both fit.
+(let* ([win (parameterize ([new-window-position '(40 . 60)]) (springies))]
+       [controls (lambda () (find-window "Springies — Controls"))]
+       [setting (lambda (key)
+                  (springies-setting (window-ref win 'settings) key))]
+       [press! (lambda (cw id)   ; the middle of the widget id
+                 (let ([r (ui-find (window-ref cw 'ui) id)])
+                   (let ([x (+ (ui-region-x r) (/ (ui-region-w r) 2))]
+                         [y (+ (ui-region-y r) (/ (ui-region-h r) 2))])
+                     (window-call cw 'mouse-down x y 'left 1)
+                     (window-call cw 'mouse-up x y 'left))))])
+  (render-frame!)
+  (check "Springies: the controls open beside the box, which has the keys"
+         (let ([cw (controls)])
+           (and cw (eq? (focused-window) win)
+                (= (window-x cw) (+ (window-x win) (window-w win) 12))
+                (= (window-y cw) (window-y win)))))
+  (check "Springies: the controls window has room for all its rows"
+         (let-values ([(w h) (window-content-size (controls))])
+           (let* ([bottom #f]
+                  [s (image (exact (ceiling w)) (exact (ceiling h)) 1
+                            (lambda ()
+                              (let ([ui (make-ui)])
+                                (ui-begin! ui)
+                                (set! bottom
+                                      (springies-draw-controls ui win w)))))])
+             (cairo-surface-destroy s)
+             (<= bottom h))))
+  (check "Springies: its model buttons choose the model"
+         (begin
+           (press! (controls) 'snake)
+           (and (eq? (window-ref win 'model) 'snake)
+                (not (setting 'gravity?))
+                (begin (press! (controls) 'ball)
+                       (eq? (window-ref win 'model) 'ball)))))
+  (check "Springies: its buttons and keys act on the box"
+         (let ([before (window-ref win 'particles)])
+           (press! (controls) 'kick)
+           (let ([kicked (window-ref win 'particles)])
+             (press! (controls) 'reset)
+             (window-call (controls) 'key #\g '())
+             (and (not (eq? kicked before))
+                  (not (eq? (window-ref win 'particles) kicked))
+                  (not (setting 'gravity?))))))
+  (check "Springies: its switches turn gravity and the pause on and off"
+         (begin
+           (press! (controls) 'gravity)
+           (press! (controls) 'pause)
+           (and (setting 'gravity?)
+                (not (window-ref win 'running?))
+                (begin (press! (controls) 'pause)
+                       (window-ref win 'running?)))))
+  (check "Springies: its sliders set the time step, and whole steps a frame"
+         (begin
+           (press! (controls) 'time-step)
+           (press! (controls) 'steps)
+           (and (< (abs (- (setting 'time-step) 0.00525)) 1e-9)
+                (eqv? (setting 'steps) 8))))
+  (check "Springies: H closes the controls and opens them again"
+         (begin
+           (window-call win 'key #\h '())
+           (and (not (controls))
+                (begin (window-call win 'key #\h '())
+                       (controls) #t))))
+  (check "Springies: the controls grow when their rows need more, on screen"
+         (let-values ([(w h) (window-content-size (controls))]
+                      [(dx dy dw dh) (desktop-rect)])
+           (define (grown-by! dw)
+             (fluid-let ([springies-controls-size
+                          (lambda () (values (+ w dw) h))])
+               (steps 1))
+             (let-values ([(w2 h2) (window-content-size (controls))])
+               (and (= w2 (+ w dw)) (= h2 h))))
+           (and (grown-by! 40)
+                (grown-by! 900)
+                (= (+ (window-x (controls)) (window-w (controls)))
+                   (+ dx dw)))))
+  (check "Springies: closing the box closes its controls"
+         (begin (close-window! win) (not (controls)))))
+
+;; Opened far to the right, the controls are moved to fit, and the box
+;; moves left to clear them.
+(let ([win (parameterize ([new-window-position '(400 . 60)]) (springies))])
+  (check "Springies: opened where the controls can't fit beside, the box \
+          moves"
+         (let ([cw (find-window "Springies — Controls")])
+           (and (< (window-x win) 400)
+                (= (+ (window-x win) (window-w win) 12) (window-x cw)))))
+  (close-window! win))
+
 (check "Springies: a frame leaves the particles it steps as they were"
        (let* ([m (springies-ball 760.0 520.0)]
               [ps (springies-model-particles m)]

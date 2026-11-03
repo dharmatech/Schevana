@@ -13,6 +13,7 @@
 ;;; (springies-set! win 'time-step 0.002)
 ;;; 1 2 3: ball, tire, snake · R: start over · K: kick · G: gravity
 ;;; Space: pause · drag: pull a mass
+;;; H: the controls window, beside the box (it closes with the box)
 
 ;;; ------------------------------------------------------------------ points
 
@@ -417,7 +418,7 @@
 (define (springies-status-text model particles springs gravity? frame-ms
                                running?)
   (format "~a: ~a masses, ~a springs~a   ~a   1 2 3 model · r reset · \
-           k kick · g gravity · space pause"
+           k kick · g gravity · h controls · space pause"
           (string-titlecase (symbol->string model))
           (vector-length particles) (length springs)
           (if gravity? "" ", no gravity")
@@ -485,7 +486,14 @@
 
 (define-app (springies) "Springies"
   (let ([w 760] [h 520] [last-step 0]
-        [frame-ms 0.0])   ; a frame's time, smoothed
+        [frame-ms 0.0]        ; a frame's time, smoothed
+        [controls-win #f])    ; the controls window, while it is open
+    (define (toggle-controls! win)
+      (if controls-win
+          (close-window! controls-win)
+          (set! controls-win
+                (springies-open-controls win
+                  (lambda () (set! controls-win #f))))))
     (define (frame! win)
       (let-values ([(w h) (springies-box-size win)])
         (let ([t0 (current-time 'time-monotonic)]
@@ -532,12 +540,178 @@
                       [(#\r) (springies-reset! win)]
                       [(#\k) (springies-kick! win)]
                       [(#\g) (springies-toggle-gravity! win)]
-                      [(#\space) (springies-toggle-running! win)])
+                      [(#\space) (springies-toggle-running! win)]
+                      [(#\h) (toggle-controls! win)])
                     (invalidate! win))
              'mouse-down (lambda (win x y button clicks)
                            (when (eq? button 'left) (springies-grab! win x y)))
              'mouse-move (lambda (win x y) (springies-pull! win x y))
              'mouse-up (lambda (win x y button)
-                         (when (eq? button 'left) (springies-let-go! win))))])
+                         (when (eq? button 'left) (springies-let-go! win)))
+             'close (lambda (win)
+                      (when controls-win (close-window! controls-win))))])
       (springies-choose! win 'ball)
+      ;; the controls show at first. Moved to fit on the desktop, they'd
+      ;; cover the box: it moves left to clear them.
+      (toggle-controls! win)
+      (let-values ([(dx dy dw dh) (desktop-rect)])
+        (let ([short (- (+ (window-x win) (window-w win) 12)
+                        (window-x controls-win))])
+          (when (> short 0)
+            (move-window! win (max dx (- (window-x win) short))
+                          (window-y win)))))
+      (focus-window! win)   ; the box has the keyboard
       win)))
+
+;;; ------------------------------------------------------------------
+;;; the controls window
+;;; Beside the box, as Boids' rules are beside the flock: a model to
+;;; choose, the keys' buttons and switches, and sliders for the time. It
+;;; reads and sets the box window's properties, so it shows them as they
+;;; are, whoever changed them: a key, a button or the REPL.
+
+;; The sliders' settings, their ranges and the labels of their rows. The
+;; time step stops at 10 ms: at 15 the ball and the tire blow up.
+(define springies-ranges
+  '((time-step 0.0005 0.01 "time step") (steps 1 16 "steps a frame")))
+
+(define (springies-readout key v)
+  (case key
+    [(time-step) (format "~,1f ms" (* v 1000.0))]
+    [else (format "~a" v)]))
+
+;; A slider's value v as its setting key holds it: steps are whole.
+(define (springies-slider-value key v)
+  (if (eq? key 'steps) (exact (round v)) v))
+
+(define springies-model-labels '("Ball (1)" "Tire (2)" "Snake (3)"))
+(define springies-buttons '("Start over (R)" "Kick (K)"))
+(define springies-switches '("Gravity (G)" "Pause (Space)"))
+
+(define (springies-label-width)
+  (+ 12 (text-widest (map cadddr springies-ranges) 'ui)))
+
+(define (springies-readout-width) (+ 12 (text-width "00.0 ms" 'ui)))
+
+;; The controls window's content size: room for its rows, as
+;; springies-draw-controls lays them out, with sliders 140 wide.
+(define (springies-controls-size)
+  (let ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)]
+        [ch (ui-control-height)])
+    (define (in-a-row labels)   ; as wide as the widest label, each
+      (+ (* (length labels) (+ 32 (text-widest labels 'ui)))
+         (* (- (length labels) 1) gap)))
+    (values (+ pad pad
+               (max (+ (springies-label-width) 140 (springies-readout-width))
+                    (in-a-row springies-model-labels)
+                    (in-a-row springies-buttons)
+                    (* 2 (+ gap (fold-left max 0
+                                           (map (lambda (label)
+                                                  (let-values
+                                                      ([(w h) (ui-checkbox-size
+                                                               label)])
+                                                    w))
+                                                springies-switches))))))
+            (+ pad (* 3 (+ ch gap)) (* 2 gap)
+               (* (length springies-ranges) (+ sh gap))
+               gap (font-line-height 'ui-small) pad))))
+
+;; The rows, top to bottom: the models, the buttons, the switches, a
+;; slider for each range, and a hint. Returns the y below them.
+(define (springies-draw-controls ui box-win w)
+  (let* ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)]
+         [ch (ui-control-height)]
+         [lw (springies-label-width)] [rw (springies-readout-width)]
+         [settings (window-ref box-win 'settings)])
+    ;; widgets side by side across the row at y, as wide as each other:
+    ;; (draw x y w) each
+    (define (in-a-row y draws)
+      (let* ([n (length draws)]
+             [cw (/ (- w pad pad (* gap (- n 1))) n)])
+        (for-each (lambda (draw i) (draw (+ pad (* i (+ cw gap))) y cw))
+                  draws (iota n))))
+    (define (row y range)
+      (let* ([key (car range)] [v (springies-setting settings key)])
+        (ui-draw-label pad y lw sh '(dim) (cadddr range))
+        (ui-slider ui key (+ pad lw) y (- w pad lw rw pad) v
+                   (cadr range) (caddr range)
+                   (lambda (v)
+                     (springies-set! box-win key
+                                     (springies-slider-value key v))))
+        (ui-draw-label (- w pad rw) y rw sh '(right) (springies-readout key v))
+        (+ y sh gap)))
+    (in-a-row pad
+      (map (lambda (name label)
+             (lambda (x y cw)
+               (ui-button ui name x y cw ch label
+                          (lambda () (springies-choose! box-win name))
+                          'selected (eq? name (window-ref box-win 'model)))))
+           springies-models springies-model-labels))
+    (in-a-row (+ pad ch gap gap)
+      (map (lambda (id label act!)
+             (lambda (x y cw)
+               (ui-button ui id x y cw ch label (lambda () (act! box-win)))))
+           '(reset kick) springies-buttons
+           (list springies-reset! springies-kick!)))
+    (in-a-row (+ pad (* 2 (+ ch gap)) gap)
+      (list (lambda (x y cw)
+              (ui-checkbox ui 'gravity x y cw ch (car springies-switches)
+                           (springies-setting settings 'gravity?)
+                           (lambda (on?)
+                             (springies-set! box-win 'gravity? on?))))
+            (lambda (x y cw)
+              (ui-checkbox ui 'pause x y cw ch (cadr springies-switches)
+                           (not (window-ref box-win 'running?))
+                           (lambda (on?)
+                             (window-set! box-win 'running? (not on?)))))))
+    (let ([y (fold-left row (+ pad (* 3 (+ ch gap)) (* 2 gap))
+                        springies-ranges)])
+      (ui-draw-label pad (+ y gap) (- w pad pad) (font-line-height 'ui-small)
+                     '(hint) "h hides this window · drag a mass to pull it")
+      (+ y gap (font-line-height 'ui-small) pad))))
+
+;; Opens the controls window for the model in box-win, beside it, and
+;; returns it; on-close is called when it closes. Its keys are the box's.
+(define (springies-open-controls box-win on-close)
+  (let ([ui (make-ui)]
+        [shown #f])   ; what it last drew
+    (define (now-shown)
+      (list (window-ref box-win 'model) (window-ref box-win 'settings)
+            (window-ref box-win 'running?)))
+    (let-values ([(w h) (springies-controls-size)])
+      (parameterize ([new-window-position
+                      (cons (+ (window-x box-win) (window-w box-win) 12)
+                            (window-y box-win))])
+        (apply open-window "Springies — Controls"
+               'size (cons w h)
+               'app #f
+               'draw (lambda (win w h)
+                       (set! shown (now-shown))
+                       (ui-begin! ui)
+                       (springies-draw-controls ui box-win w)
+                       (ui-end! ui w h))
+               'close (lambda (win) (on-close))
+               (append
+                (ui-handlers ui 'key (lambda (win key mods)
+                                       (window-call box-win 'key key mods)
+                                       #t))
+                ;; the kit's tick, then: a change from elsewhere shows, and
+                ;; fonts grown in Settings get room for the rows
+                (list 'tick (lambda (win)
+                              (ui-tick ui win)
+                              (let-values ([(w h) (springies-controls-size)])
+                                (springies-grow-to! win w h))
+                              (unless (equal? shown (now-shown))
+                                (invalidate! win))))))))))
+
+;; Grows win's content to at least w × h, moved left or up as far as it
+;; takes to stay on the desktop. It never shrinks: a size set by hand
+;; holds. Boids' rules window grows the same way (boids-grow-to!).
+(define (springies-grow-to! win w h)
+  (let-values ([(cw ch) (window-content-size win)])
+    (when (and (or (> w cw) (> h ch)) (not (shaded? win)))
+      (resize-window! win (max w cw) (max h ch))
+      (let-values ([(dx dy dw dh) (desktop-rect)])
+        (move-window! win
+          (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
+          (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))))
