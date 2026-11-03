@@ -62,23 +62,6 @@
     (let-values ([(l t r b) (frame-insets win)])
       (fill-rect (+ x l) (+ y t) (- w l r) (- h t b) 'genera-gray))))
 
-;; A command word: plain until the pointer is on it (or the keyboard), a
-;; 1-pixel box then, reversed while pressed or chosen (report:51, :65).
-(define (genera-button x y w h flags label glyph)
-  (let* ([on? (lambda (f) (memq f flags))]
-         [live? (not (on? 'disabled))]
-         [rev? (and live? (or (on? 'pressed) (on? 'selected)))]
-         [ink (cond [rev? 'window-bg] [live? 'text] [else 'text-faint])]
-         [g (ui-glyph-size)])
-    (cond [rev? (px-fill x y w h 'text)]
-          [(and live? (or (on? 'hover) (on? 'focused)))
-           (px-ring x y w h 'text)])
-    (if label
-        (draw-text-centered x y w h (fit-text label (- w 8) 'ui) ink 'ui)
-        (when glyph
-          (ui-draw-glyph (+ x (/ (- w g) 2)) (+ y (/ (- h g) 2)) g g
-                         (list (cons 'ink ink)) glyph)))))
-
 ;;; the who line
 
 ;; Each of its two lines: the code font's line and 2.
@@ -131,30 +114,685 @@
        ".")))
 
 ;; A window not selected is grayed over with this: a sparse stipple of
-;; ink on clear paper; a color, which you may change and save.
+;; ink on clear paper; a color, which you may change and save. Rows the
+;; search leaves out and what lies under a dialog are grayed with it too.
 (color-default! 'genera-gray (stipple 'text #f "#..." "...." "...." "...."))
+;; A scroll bar's elevator: 33 %, diagonal (lispm-apps.md 2.4).
+(color-default! 'genera-elevator (stipple 'text #f "#.." ".#." "..#"))
 
-;; Its palette on a plain white screen.
+;;; ------------------------------------------------------------------
+;;; the widgets
+;;; Each the original's own where it had one, else what its authors would
+;;; have made of their parts (.work/style/research/lispm-apps.md part 4):
+;;; ink on paper and no color; a 1-pixel box for what the mouse is over,
+;;; inverse video for what is chosen, bold for the current value, italic
+;;; for a hint ('faint-text-font), an underline for the keyboard's place.
+;;; Where the CADR differs, a setting says how (styles/cadr.ss).
+
+;; A color that is another's: what a palette gives it, so that every hue
+;; is the palette's ink and every ground its paper, as on a screen one bit
+;; deep (lispm-apps.md part 1).
+(define (genera-same key) (theme-rule (theme key)))
+
+;; What the mouse is over: a 1-pixel box; the CADR's sticks out a pixel
+;; at the top and left, "the right thing for boxing text"
+;; (sheet.lisp:2349-2364): genera-hover-nudge.
+(define (genera-hover x y w h)
+  (let ([n (theme 'genera-hover-nudge)])
+    (px-ring (- x n) (- y n) (+ w n) (+ h n) 'text)))
+
+;; A box n pixels thick.
+(define (genera-box x y w h n) (px-bevel x y w h 'text 'text n))
+
+;; A text's top in a box h high at y: centered on its line.
+(define (genera-text-y y h font) (+ y (/ (- h (font-line-height font)) 2)))
+
+;; The keyboard's place: underlined (UG p.2762).
+(define (genera-focus x y w h flags r) (px-fill x (+ y h -1) w 1 'text))
+
+;; A command word (Peek's, the Inspector's): plain, boxed under the
+;; mouse, inverse video while it is the one chosen (a segment). A press
+;; shows no more (lispm-notes, answer 10). The default stands out: bold
+;; in Genera, the CADR's standout italic. On the CADR a dialog's words
+;; are margin choices, a choice box after each, on while it acts
+;; (choice.lisp:441-526).
+(define (genera-button x y w h flags label glyph)
+  (let* ([on? (lambda (f) (memq f flags))]
+         [live? (not (on? 'disabled))]
+         [rev? (and live? (on? 'selected))]
+         [font (theme (if (on? 'primary)
+                          'genera-standout-font
+                          'genera-command-font))]
+         [ink (cond [rev? 'window-bg] [live? 'text] [else 'text-faint])]
+         [box? (and label (theme 'genera-margin-choice))]
+         [s (genera-choice-side)] [sp (font-char-width font)])
+    (cond [rev? (px-fill x y w h 'text)]
+          [(and live? (or (on? 'hover) (on? 'pressed)))
+           (genera-hover x y w h)])
+    (cond
+      [box?
+       (let* ([text (fit-text label (- w 4 sp s) font)]
+              [x0 (+ x (/ (- w (text-width text font) sp s) 2))]
+              [end (draw-text x0 (genera-text-y y h font) text ink font)])
+         (genera-choice-box (+ end sp) (+ y (/ (- h s) 2)) s
+                            (on? 'pressed)))]
+      [label
+       (draw-text-centered x y w h (fit-text label (- w 4) font) ink font)]
+      [glyph
+       (let ([g (ui-glyph-size)])
+         (ui-draw-glyph (+ x (/ (- w g) 2)) (+ y (/ (- h g) 2)) g g
+                        (list (cons 'ink ink)) glyph))])
+    (when (on? 'focused) (ui-draw-focus x y w h flags 0))))
+
+;; The word and a little room, as wide in either font.
+(define (genera-button-size label glyph)
+  (let ([h (ui-control-height)])
+    (values (if label
+                (+ 12 (max (text-width label (theme 'genera-command-font))
+                           (text-width label (theme 'genera-standout-font))))
+                h)
+            h)))
+
+;; The choice box: a square as tall as the body font's capitals, its
+;; frame a quarter of its side on the CADR (genera-choice-heavy), a pixel
+;; in Genera, and when on a thick X in it (choice.lisp:441-464).
+(define (genera-choice-side) (round (font-ascent 'ui)))
+
+(define (genera-choice-box x y s on?)
+  (let* ([heavy? (theme 'genera-choice-heavy)]
+         [f (if heavy? (max 1 (quotient s 4)) 1)] [n (- s f f)])
+    (px-fill x y s s 'window-bg)
+    (genera-box x y s s f)
+    (when on?
+      (do ([i 0 (+ i 1)]) ((= i n))
+        (for-each (lambda (c)
+                    (px-fill (+ x f c) (+ y f i) (if heavy? 2 1) 1 'text))
+                  (if heavy?
+                      (list (min i (- n 2)) (max 0 (- n 2 i)))
+                      (list i (- n 1 i))))))))
+
+;; A thing to mark: its name, a space and the box (choice.lisp:505-512),
+;; boxed under the mouse.
+(define (genera-checkbox x y w h flags label)
+  (let* ([s (genera-choice-side)] [sp (font-char-width 'ui)]
+         [end (if label
+                  (draw-text x (genera-text-y y h 'ui)
+                             (fit-text label (- w sp s) 'ui) 'text 'ui)
+                  x)]
+         [bx (if label (+ end sp) x)])
+    (genera-choice-box bx (+ y (/ (- h s) 2)) s (memq 'checked flags))
+    (when (memq 'hover flags) (genera-hover x y (- (+ bx s 2) x) h))
+    (when (memq 'focused flags) (ui-draw-focus x y (- (+ bx s) x) h flags 0))))
+
+(define (genera-checkbox-size label)
+  (values (+ (text-width label 'ui) (font-char-width 'ui) (genera-choice-side))
+          (ui-control-height)))
+
+;; An on-off setting as a boolean of the CADR's choose-variable-values:
+;; "Name: Yes No", the current one bold (choice.lisp:826-841). A click
+;; sets the other, so the mouse boxes that one.
+(define (genera-toggle x y w h flags label)
+  (let* ([on? (memq 'checked flags)] [f (theme 'genera-choice-font)]
+         [b (theme 'genera-choice-bold)] [sp (font-char-width 'ui)]
+         [x1 (if label
+                 (draw-text x (genera-text-y y h 'ui)
+                            (string-append label ":") 'text 'ui)
+                 x)])
+    (let loop ([words '("Yes" "No")] [wx (+ x1 sp)] [current? on?])
+      (unless (null? words)
+        (let* ([font (if current? b f)]
+               [end (draw-text wx (genera-text-y y h font) (car words)
+                               'text font)])
+          (when (and (not current?) (memq 'hover flags))
+            (genera-hover (- wx 2) y (+ (- end wx) 4) h))
+          (loop (cdr words) (+ wx (text-width (car words) b) sp)
+                (not current?)))))
+    (when (memq 'focused flags) (ui-draw-focus x y w h flags 0))))
+
+(define (genera-toggle-size label)
+  (values (+ (if label (text-width (string-append label ":") 'ui) 0)
+             (* 3 (font-char-width 'ui))
+             (text-width "Yes" (theme 'genera-choice-bold))
+             (text-width "No" (theme 'genera-choice-bold)))
+          (ui-control-height)))
+
+;; A mode among others, Peek's (peek.lisp:117-148; J-peek): the word,
+;; inverse video while it is the current one, boxed under the mouse.
+(define (genera-tab x y w h flags label)
+  (let ([font (theme 'genera-command-font)] [sel? (memq 'selected flags)])
+    (cond [sel? (px-fill x y w h 'text)]
+          [(memq 'hover flags) (genera-hover x y w h)])
+    (draw-text-centered x y w h label (if sel? 'window-bg 'text) font)
+    (when (memq 'focused flags) (ui-draw-focus x y w h flags 0))))
+
+(define (genera-tabs-size labels)
+  (values (fold-left (lambda (acc l)
+                       (+ acc 12 (text-width l (theme 'genera-command-font))))
+                     0 labels)
+          (ui-control-height)))
+
+;; A value's place, as an accept-values field's: no box, an underline, a
+;; heavier one while it has the keyboard (lispm-notes, answer 4); an area
+;; of lines is a pane (ZWEI's), boxed.
+(define (genera-field x y w h flags)
+  (let*-values ([(s ox oy) (px-device)]
+                ;; a device pixel at least, in Settings' miniatures too
+                [(n) (max (if (memq 'focused flags) 2 1)
+                          (exact (ceiling (/ 1 s))))])
+    (if (memq 'lines flags)
+        (genera-box x y w h n)
+        (px-fill x (- (+ y h) n) w n 'text))))
+
+;; The text 2 pixels in, after a search's glass; an area's scroll bar at
+;; its left, as ZWEI's.
+(define (genera-text-box-areas x y w h flags)
+  (let* ([bw (ui-scrollbar-width)]
+         [left (cond [(memq 'lines flags) (+ bw 4)]
+                     [(memq 'search flags) (+ (ui-glyph-size) 14)]
+                     [else 2])])
+    (list (list 'edit (+ x left) (+ y 3) (max 0 (- w left 3))
+                (max 0 (- h 6)) (if (memq 'large flags) 'heading 'ui))
+          (list 'bar (+ x 2) (+ y 2) bw (max 0 (- h 4))))))
+
+(define (genera-text-box-size flags w rows)
+  (with-place 'field
+    (lambda ()
+      (let ([large? (memq 'large flags)])
+        (values w
+                (if (and (= rows 1) (not large?))
+                    (ui-control-height)
+                    (round (+ 6 (* rows (font-line-height
+                                         (if large? 'heading 'ui)))))))))))
+
+;; A choice, as an accept-values field shows one of a large type: only
+;; the current value, in bold (UG p.2743-2744; lispm-notes, answer 5),
+;; boxed under the mouse; a click gives the menu. A label shown instead
+;; of a value is plain, and no value faint.
+(define (genera-dropdown x y w h flags label)
+  (let ([font (if (or (memq 'label flags) (memq 'placeholder flags))
+                  'ui
+                  'ui-bold)])
+    (when (or (memq 'hover flags) (memq 'open flags)) (genera-hover x y w h))
+    (draw-text (+ x 3) (genera-text-y y h font) (fit-text label (- w 6) font)
+               (if (memq 'placeholder flags) 'text-faint 'text) font)
+    (when (memq 'focused flags) (ui-draw-focus x y w h flags 0))))
+
+(define (genera-dropdown-size labels)
+  (values (min (* 10 (font-line-height 'ui))
+               (+ 8 (widest-text labels 'ui-bold)))
+          (ui-control-height)))
+
+;; A tag as a Zmail keyword, in braces (E&M p.2434); one that can go, a
+;; × after it, and the box under the mouse.
+(define (genera-chip x y w h flags label)
+  (let* ([removable? (memq 'removable flags)] [g (ui-small-glyph-size)]
+         [room (- w (text-width "{}" 'ui) (if removable? (+ g 4) 0))])
+    (draw-text x (genera-text-y y h 'ui)
+               (string-append "{" (fit-text label room 'ui) "}") 'text 'ui)
+    (when removable?
+      (let ([a (cdr (assq 'remove (ui-chip-areas x y w h)))])
+        (ui-draw-glyph (+ (car a) (/ (- (caddr a) g) 2))
+                       (+ (cadr a) (/ (- (cadddr a) g) 2)) g g
+                       '((ink . text)) 'cross)))
+    (when (memq 'hover flags) (genera-hover x y w h))))
+
+(define (genera-chip-size label removable?)
+  (values (+ (text-width (string-append "{" label "}") 'ui)
+             (if removable? (+ (ui-small-glyph-size) 4) 0))
+          (round (+ (font-line-height 'ui) 2))))
+
+(define (genera-chip-areas x y w h)
+  (let ([g (ui-small-glyph-size)])
+    (list (list 'remove (- (+ x w) g 4) y (+ g 4) h))))
+
+;; A record, Genera's output in a border (PUI p.1685, p.1696): a 1-pixel
+;; box, 2 pixels while chosen (the CADR's box blinker, sheet.lisp:2365;
+;; lispm-notes, answer 3); the mouse's box just outside it.
+(define (genera-card x y w h flags)
+  (genera-box x y w h (if (memq 'selected flags) 2 1))
+  (when (memq 'hover flags) (px-ring (- x 2) (- y 2) (+ w 4) (+ h 4) 'text)))
+
+;; Genera's scroll bar, as measured (lispm-apps.md 2.4; report:35-41):
+;; 1-pixel sides, a box as wide as the bar at each end, the elevator
+;; between them in a 33 % stipple.
+(define (genera-scrollbar-areas x y w h start size)
+  (let* ([e (min w (floor (/ h 3)))] [l (- h e e)]
+         [th (min l (max w (* size l)))])
+    (list (list 'thumb x
+                (+ y e (if (< size 1) (* (- l th) (/ start (- 1 size))) 0))
+                w th))))
+
+(define (genera-scrollbar x y w h flags start size)
+  (let ([e (min w (floor (/ h 3)))]
+        [t (cdr (assq 'thumb (ui-scrollbar-areas x y w h start size)))])
+    (px-fill x y w h 'window-bg)
+    (px-fill x y 1 h 'text)
+    (px-fill (+ x w -1) y 1 h 'text)
+    (px-ring x y w e 'text)
+    (px-ring x (- (+ y h) e) w e 'text)
+    (px-fill (+ x 1) (cadr t) (- w 2) (cadddr t) 'genera-elevator)))
+
+;; Neither machine had a slider; typed numbers did its job (CLIM2
+;; p.1151). Its authors would have turned the scroll bar sideways: a
+;; shaft of 1-pixel sides and a short stippled block at the value.
+(define (genera-slider x y w h flags frac paint)
+  (let* ([cy (round (+ y (/ h 2)))] [kx (+ x (* frac w))])
+    (if paint
+        (call-with-clip x (- cy 4) w 8 (lambda () (paint x (- cy 4) w 8)))
+        (begin (px-fill x (- cy 5) w 1 'text)
+               (px-fill x (+ cy 4) w 1 'text)))
+    (px-fill (- kx 6) (- cy 5) 12 10 'window-bg)
+    (px-ring (- kx 6) (- cy 5) 12 10 'text)
+    (px-fill (- kx 5) (- cy 4) 10 8 'genera-elevator)))
+
+;; A progress note's bar: thin, solid, from the left, no track (UG
+;; p.2740; J-zmail).
+(define (genera-progress x y w h flags frac)
+  (when (> frac 0)
+    (px-fill x (+ y (floor (/ (- h 2) 2))) (* w (min 1 frac)) 2 'text)))
+
+;; A column's heading: Peek's plain line (peek.lisp:270-273), or the
+;; PUI's italic underlined (genera-heading-underline, PUI p.1886); the
+;; sort as the character set's arrow after it.
+(define (genera-table-header x y w h flags label dir)
+  (let* ([f (theme 'genera-heading-font)]
+         [arrow (case dir [(up) " ↑"] [(down) " ↓"] [else ""])]
+         [s (string-append (fit-text label (max 0 (- w 14 (text-width arrow f)))
+                                     f)
+                           arrow)]
+         [ty (genera-text-y y h f)]
+         [end (draw-text (+ x 10) ty s 'text f)])
+    (when (and (theme 'genera-heading-underline) (> (string-length s) 0))
+      (px-fill (+ x 10) (+ ty (font-ascent f) 1) (- end x 10) 1 'text))
+    (when (memq 'hover flags) (genera-hover x y w h))))
+
+;; A row: the mouse's box; chosen, inverse video: its 2-pixel box here,
+;; and its inside turned by ui-draw-highlight-over when its cells are
+;; drawn (lispm-notes, answer 3).
+(define (genera-table-row x y w h flags)
+  (cond [(memq 'selected flags) (genera-box x y w h 2)]
+        [(memq 'hover flags) (genera-hover x y w h)]))
+
+;; A tree shown by indentation, as FSEdit's (WB Fig. 39); a node's
+;; triangle, the MOUSE font's, right when closed and down when open.
+(define (genera-tree-row x y w h flags w0 depth)
+  (let ([areas (ui-tree-areas x y w0 h depth)]
+        [g (round (* 3/4 (ui-glyph-size)))])
+    (ui-draw-table-row x y w h flags)
+    (when (memq 'kids flags)
+      (let ([t (cdr (assq 'twisty areas))])
+        (ui-draw-glyph (+ (car t) (/ (- (caddr t) g) 2)) (+ y (/ (- h g) 2))
+                       g g '((ink . text))
+                       (if (memq 'expanded flags) 'down 'right))))
+    (ui-draw-dim x y (- (cadr (assq 'cell areas)) x) h flags)))
+
+;; Left out (the search's): grayed over, as a window not in use.
+(define (genera-dim x y w h flags)
+  (when (and (memq 'dim flags) (not (memq 'selected flags)))
+    (px-fill x y w h 'genera-gray)))
+
+;; Panes: a well boxed, a strip ruled off where it meets the rest.
+(define (genera-surface x y w h flags)
+  (px-fill x y w h 'window-bg)
+  (cond [(memq 'well flags) (px-ring x y w h 'text)]
+        [(memq 'toolbar flags) (px-fill x (+ y h -1) w 1 'text)]
+        [(memq 'side flags) (px-fill x y 1 h 'text)]
+        [(memq 'nav flags) (px-fill (+ x w -1) y 1 h 'text)]))
+
+;; A popup: Genera's, a 2-pixel border; the CADR's, 1 pixel and its
+;; white (lispm.md 2.8): genera-panel-border.
+(define (genera-panel x y w h flags)
+  ;; shadow{
+  ;; Genera's shadow: solid under what only the mouse uses, a 50 %
+  ;; stipple under a dialog (report:51); the CADR had none.
+  (when (theme 'genera-shadow)
+    (px-fill (+ x 7) (+ y 7) w h
+             (if (exists (lambda (f) (memq f flags)) '(menu toast tooltip))
+                 'text
+                 (stipple 'text #f "#." ".#"))))
+  ;; shadow}
+  (px-fill x y w h 'window-bg)
+  (genera-box x y w h (theme 'genera-panel-border)))
+
+;; The entry under the mouse in a menu: a 1-pixel box, inverse while a
+;; button is held on it; one under the mouse elsewhere, the box; the
+;; chosen one, a 2-pixel box that ui-draw-highlight-over fills in.
+(define (genera-highlight x y w h flags)
+  (cond [(and (memq 'outline flags) (memq 'pressed flags))
+         (px-fill x y w h 'text)]
+        [(or (memq 'hover flags) (memq 'outline flags)) (genera-hover x y w h)]
+        [else (genera-box x y w h 2)]))
+
+;; Inverse video, inside the 2-pixel box (menu.lisp:855-893).
+(define (genera-highlight-over x y w h flags)
+  (px-invert (+ x 2) (+ y 2) (- w 4) (- h 4)))
+
+;; A light rule (UG p.2909); in a menu a blank cell (sysmen.lisp:277-282):
+;; genera-separator-rule.
+(define (genera-separator x y w h flags)
+  (when (theme 'genera-separator-rule)
+    (px-fill x (floor (+ y (/ h 2))) w 1 'text)))
+
+;; The fallback for what the who line says: a pop-up message's box
+;; (sysmen.lisp:612-628).
+(define (genera-tooltip x y w h flags text)
+  (ui-draw-panel x y w h '(tooltip))
+  (fold-left (lambda (ty line)
+               (draw-text (+ x 6) ty line 'text 'ui-small)
+               (+ ty (font-line-height 'ui-small)))
+             (+ y 4) (ui-tooltip-lines text)))
+
+(define (genera-tooltip-size text)
+  (let ([lines (ui-tooltip-lines text)])
+    (values (+ 12 (min 280 (widest-text lines 'ui-small)))
+            (+ 8 (* (length lines) (font-line-height 'ui-small))))))
+
+;; A dialog: Genera's accept-values window (UG Fig. 135), the CADR's
+;; choose-variable-values (choice.lisp:427-526, :916-922): the title over
+;; a rule, the message, and under a rule its buttons as words in equal
+;; shares of the width.
+(define (genera-dialog-strip) (+ (ui-control-height) 4))
+
+(define (genera-dialog-size title message labels)
+  (let* ([lh (font-line-height 'ui)] [b (theme 'genera-panel-border)]
+         [in (* 2 (+ b 12))]
+         [w (clamp (+ in (max (text-width title 'heading)
+                              (text-width message 'ui)
+                              (* (length labels)
+                                 (+ 24 (widest-text
+                                        labels
+                                        (theme 'genera-command-font))))))
+                   (* 22 lh) (* 32 lh))])
+    (values w
+            (round (+ b 6 (font-line-height 'heading) 6 1 10
+                      (* lh (length (ui-dialog-lines message (- w in))))
+                      10 1 (genera-dialog-strip) b)))))
+
+(define (genera-dialog-areas x y w h labels)
+  (let* ([b (theme 'genera-panel-border)] [hh (font-line-height 'heading)]
+         [sh (genera-dialog-strip)] [in (+ b 12)]
+         [share (/ (- w b b) (max 1 (length labels)))])
+    `((title ,(+ x in) ,(+ y b 6) ,(- w in in) ,hh)
+      (message ,(+ x in) ,(+ y b 6 hh 6 1 10) ,(- w in in)
+               ,(- h b 6 hh 6 1 10 10 1 sh b))
+      ,@(map (lambda (i)
+               (list 'button (+ x b (* i share)) (- (+ y h) b sh -2) share
+                     (ui-control-height)))
+             (iota (length labels))))))
+
+(define (genera-dialog x y w h flags title message)
+  (let* ([areas (ui-dialog-areas x y w h '())]
+         [t (cdr (assq 'title areas))] [m (cdr (assq 'message areas))]
+         [b (theme 'genera-panel-border)])
+    (ui-draw-panel x y w h '(dialog))
+    (draw-text (car t) (cadr t) (fit-text title (caddr t) 'heading) 'text
+               'heading)
+    (px-fill (+ x b) (+ (cadr t) (cadddr t) 6) (- w b b) 1 'text)
+    (fold-left (lambda (ly line)
+                 (draw-text (car m) ly line 'text 'ui)
+                 (+ ly (font-line-height 'ui)))
+               (cadr m) (ui-dialog-lines message (caddr m)))
+    (px-fill (+ x b) (- (+ y h) b (genera-dialog-strip) 1) (- w b b) 1
+             'text)))
+
+;; Under a dialog: the gray over a window not in use (UG p.2804).
+(define (genera-scrim x y w h flags) (px-fill x y w h 'genera-gray))
+
+;; Neither machine had a calendar; dates were typed (UG Fig. 144). Its
+;; authors would have set a month as a text table (lispm-apps.md 4.16;
+;; lispm-notes, answer 9): headed by the weekdays as a column's heading,
+;; a day a column three characters wide, its number at the right.
+(define (genera-calendar-cell) (round (* 3 (font-char-width 'ui))))
+
+;; Under the grid, Previous and Next, then Today and Clear, each in half
+;; of the width, which their words (and margin choices' boxes) set.
+(define (genera-calendar-areas x y w h)
+  (let* ([cell (genera-calendar-cell)] [b (ui-control-height)]
+         [lh (font-line-height 'ui)] [gx (+ x (/ (- w (* 7 cell)) 2))]
+         [gy (+ y 6 b lh 4)] [fy (+ gy (* 6 cell) 6)] [half (/ (- w 20) 2)])
+    `((title ,(+ x 8) ,(+ y 6) ,(- w 16) ,b)
+      (week ,gx ,(+ y 6 b) ,(* 7 cell) ,(+ lh 4))
+      (grid ,gx ,gy ,cell)
+      (prev ,(+ x 8) ,fy ,half ,b)
+      (next ,(+ x 12 half) ,fy ,half ,b)
+      (today ,(+ x 8) ,(+ fy b 2) ,half ,b)
+      (clear ,(+ x 12 half) ,(+ fy b 2) ,half ,b))))
+
+(define (genera-calendar-size)
+  (let* ([word (+ (text-width "Previous" (theme 'genera-command-font))
+                  (genera-choice-side) 20)]
+         [w (max (+ 16 (* 7 (genera-calendar-cell))) (+ 20 (* 2 word)))]
+         [t (cdr (assq 'today (ui-calendar-areas 0 0 w 0)))])
+    (values w (round (+ (cadr t) (cadddr t) 8)))))
+
+(define (genera-calendar x y w h flags title)
+  (let* ([areas (ui-calendar-areas x y w h)] [t (cdr (assq 'title areas))]
+         [wk (cdr (assq 'week areas))] [cell (/ (caddr wk) 7)]
+         [f (theme 'genera-heading-font)])
+    (ui-draw-panel x y w h '())
+    (apply draw-text-centered
+           (append t (list title 'text (theme 'genera-standout-font))))
+    (do ([i 0 (+ i 1)]) ((= i 7))
+      (let* ([s (substring "MoTuWeThFrSaSu" (* 2 i) (+ 2 (* 2 i)))]
+             [sx (- (+ (car wk) (* (+ i 1) cell)) 4 (text-width s f))]
+             [ty (+ (cadr wk) 2)]
+             [end (draw-text sx ty s 'text f)])
+        (when (theme 'genera-heading-underline)
+          (px-fill sx (+ ty (font-ascent f) 1) (- end sx) 1 'text))))))
+
+;; A day: today bold (the current value's emphasis); chosen, inverse; the
+;; keyboard's, underlined; the mouse's, boxed; another month's, faint.
+(define (genera-day x y w h flags label)
+  (let* ([on? (lambda (f) (memq f flags))]
+         [f (if (on? 'today) 'ui-bold 'ui)] [lh (font-line-height f)]
+         [ty (genera-text-y y h f)] [sel? (on? 'selected)])
+    (cond [sel? (px-fill x (- ty 1) w (+ lh 2) 'text)]
+          [(on? 'hover) (genera-hover x (- ty 1) w (+ lh 2))])
+    (draw-text (- (+ x w) 4 (text-width label f)) ty label
+               (cond [sel? 'window-bg] [(on? 'outside) 'text-faint]
+                     [else 'text])
+               f)
+    (when (on? 'cursor)
+      (px-fill (+ x 2) (+ ty lh) (- w 4) 1 (if sel? 'window-bg 'text)))))
+
+;; A person: the name, where it is written beside the avatar (so nothing
+;; more), or else the initials in a lozenge (shwarm.lisp:675-700).
+(define (genera-avatar-size flags name)
+  (if (memq 'named flags)
+      (values 0 0)
+      (values (px-lozenge-width (ui-initials name)) 9)))
+
+(define (genera-avatar x y w h flags name)
+  (unless (memq 'named flags) (px-lozenge x y (ui-initials name) 'text)))
+
+;;; Tasks' marks (apps/tasks.ss), each in ink: the shapes of Genera's
+;;; MOUSE font (WB Fig. 14) and the CADR's choice box.
+
+;; Priority, four bars, those above it hollow as a choice box off; a
+;; bug a filled circle, a feature a filled lozenge, a chore a hollow box;
+;; blocked a fat circle with a minus in it; a status none, its word is
+;; written beside (lispm-apps.md part 5).
+(define (genera-tasks-mark x y s what value)
+  (case what
+    [(status) 0]
+    [(priority)
+     (let ([level (case value [(urgent) 4] [(high) 3] [(normal) 2] [else 1])]
+           [bw (max 3 (floor (/ (- s 3) 4)))])
+       (do ([i 0 (+ i 1)]) ((= i 4) s)
+         (let ([bh (round (* s (/ (+ i 2) 5)))] [bx (+ x (* i (+ bw 1)))])
+           (if (< i level)
+               (px-fill bx (- (+ y s) bh) bw bh 'text)
+               (px-ring bx (- (+ y s) bh) bw bh 'text)))))]
+    [(kind)
+     (if (eq? value 'chore)
+         (begin (px-ring (+ x 2) (+ y 2) (- s 4) (- s 4) 'text) s)
+         (tasks-draw-mark* x y s what value))]
+    [(blocked)
+     (stroke-circle (+ x (/ s 2)) (+ y (/ s 2)) (- (* s 0.45) 1) 'text 2)
+     (px-fill (+ x (round (* s 0.3))) (+ y (floor (- (/ s 2) 1)))
+              (- s (* 2 (round (* s 0.3)))) 2 'text)
+     s]
+    [else (tasks-draw-mark* x y s what value)]))
+
+;; A due date: bold when it has passed (lispm-notes, answer 8), else
+;; plain; "Today" says itself.
+(define (genera-tasks-due x y w t today fnt)
+  (let* ([f (get-font fnt)]
+         [f (if (tasks-overdue? t today)
+                (font (font-family f) (font-size f) 'bold)
+                f)])
+    (draw-text x y (fit-text (tasks-due-label (task-due t) today) w f) 'text
+               f)))
+
+;; Where a dragged card would land: a box over the gray.
+(define (genera-tasks-slot x y w h)
+  (px-fill x y w h 'genera-gray)
+  (px-ring x y w h 'text))
+
+;; On a plain white screen, ink on paper whatever the palette.
 (define-style genera "Genera"
-  'palette 'genera  'wallpaper 'flat
+  'palette 'genera
+  'wallpaper 'flat
   'corner-radius 0   ; square, and so is everything drawn in it
-  'genera-border 2  'genera-margin 4
-  'genera-label-font 'ui-italic  'genera-label-align 'center
+  'genera-border 2
+  'genera-margin 4
+  'genera-label-font 'ui-italic
+  'genera-label-align 'center
   'genera-label-under 'margin
-  'frame-insets 'genera-insets  'frame-regions 'genera-regions
-  'frame-under 'genera-draw-under  'frame-over 'genera-draw-over
-  'ui-draw-button 'genera-button
+  'frame-insets 'genera-insets
+  'frame-regions 'genera-regions
+  'frame-under 'genera-draw-under
+  'frame-over 'genera-draw-over
   ;; the screen: no top bar; the who line at the bottom
   'topbar-height 0
   'taskbar-height (theme-rule (* 2 (genera-line)))
-  'draw-taskbar 'genera-draw-who-line  'taskbar-areas 'genera-who-line-areas
-  'taskbar-tick 'genera-who-line-tick  'mouse-doc-text 'genera-mouse-doc-text
+  'draw-taskbar 'genera-draw-who-line
+  'taskbar-areas 'genera-who-line-areas
+  'taskbar-tick 'genera-who-line-tick
+  'mouse-doc-text 'genera-mouse-doc-text
+  ;; the fonts: what an app shows in the code font (FIX, cptfont), its
+  ;; command words in the sans (JESS), titles in sans bold (SWISS), menus
+  ;; a size up, a pane's heading bold italic (lispm-apps.md part 6)
+  'ui (theme-rule (theme 'mono))
+  'ui-small (theme-rule (theme 'mono-small))
+  'ui-bold (theme-rule (theme 'mono-bold))
+  'genera-command-font (theme-font-rule 'ui 0)
+  'genera-standout-font 'title
+  'genera-choice-font 'mono
+  'genera-choice-bold 'mono-bold
+  'genera-heading-font 'mono-italic
+  'genera-heading-underline #t
+  'label-section-font 'ui-bold-italic
+  'label-section-upcase #f
+  'faint-text-font 'ui-italic-of
+  'text-caret 'block
+  'text-selection 'underline
+  ;; the sizes: a line of the font and a little
+  'control-height (theme-rule (round (+ (font-line-height 'ui) 6)))
+  'table-header-height (theme-rule (round (+ (font-line-height 'ui) 6)))
+  'table-row-height (theme-rule (round (+ (font-line-height 'ui) 6)))
+  ;; the menus: centered words, a blank cell between groups
+  'menu-font (theme-font-rule 'ui 2)
+  'menu-item-height
+  (theme-rule (round (+ (font-line-height (theme 'menu-font)) 4)))
+  'menu-pad 3
+  'menu-text-x 14
+  'menu-min-width 120
+  'menu-align 'center
+  'menu-ink 'text
+  'menu-ink-selected 'text
+  'menu-ink-pressed 'window-bg
+  'genera-separator-rule #t
+  'places '((menu genera-separator-rule #f))
+  'calendar-step-words #t
+  ;; the widgets
+  'surface-well-ring 1
+  'genera-hover-nudge 0
+  'genera-panel-border 2
+  'genera-shadow #t   ; shadow
+  'genera-choice-heavy #f
+  'genera-margin-choice #f
+  'ui-draw-button 'genera-button
+  'ui-button-size 'genera-button-size
+  'ui-draw-checkbox 'genera-checkbox
+  'ui-checkbox-size 'genera-checkbox-size
+  'ui-draw-toggle 'genera-toggle
+  'ui-toggle-size 'genera-toggle-size
+  'ui-draw-tab 'genera-tab
+  'ui-tabs-size 'genera-tabs-size
+  'ui-draw-field 'genera-field
+  'ui-text-box-areas 'genera-text-box-areas
+  'ui-text-box-size 'genera-text-box-size
+  'ui-draw-dropdown 'genera-dropdown
+  'ui-dropdown-size 'genera-dropdown-size
+  'ui-draw-chip 'genera-chip
+  'ui-chip-size 'genera-chip-size
+  'ui-chip-areas 'genera-chip-areas
+  'ui-draw-card 'genera-card
+  'ui-draw-scrollbar 'genera-scrollbar
+  'ui-scrollbar-areas 'genera-scrollbar-areas
+  'ui-draw-slider 'genera-slider
+  'ui-draw-progress 'genera-progress
+  'ui-draw-table-header 'genera-table-header
+  'ui-draw-table-row 'genera-table-row
+  'ui-draw-tree-row 'genera-tree-row
+  'ui-draw-dim 'genera-dim
+  'ui-draw-surface 'genera-surface
+  'ui-draw-panel 'genera-panel
+  'ui-draw-highlight 'genera-highlight
+  'ui-draw-highlight-over 'genera-highlight-over
+  'ui-draw-separator 'genera-separator
+  'ui-draw-focus 'genera-focus
+  'ui-draw-tooltip 'genera-tooltip
+  'ui-tooltip-size 'genera-tooltip-size
+  'ui-draw-dialog 'genera-dialog
+  'ui-dialog-size 'genera-dialog-size
+  'ui-dialog-areas 'genera-dialog-areas
+  'ui-draw-scrim 'genera-scrim
+  'ui-draw-calendar 'genera-calendar
+  'ui-calendar-size 'genera-calendar-size
+  'ui-calendar-areas 'genera-calendar-areas
+  'ui-draw-day 'genera-day
+  'ui-draw-avatar 'genera-avatar
+  'ui-avatar-size 'genera-avatar-size
+  'tasks-draw-mark 'genera-tasks-mark
+  'tasks-draw-due 'genera-tasks-due
+  'tasks-draw-slot 'genera-tasks-slot
+  'repl-paren-mark (stipple 'text #f "#..." "...." "..#." "....")
+  'settings-swatch-ring (stipple 'text 'window-bg "#." ".#")
   ;; the feel
-  'title-double-click 'none  'bell 'screen  'menu-hover 'outline
-  'mouse-doc #t  'scrollbar-side 'left
-  'options '(palette accent wallpaper ui-font ui-font-size mono-font
+  'title-double-click 'none
+  'bell 'screen
+  'menu-hover 'outline
+  'mouse-doc #t
+  'scrollbar-side 'left
+  'options '(palette
+             accent
+             wallpaper
+             ui-font
+             ui-font-size
+             mono-font
              mono-font-size
              (genera-border "Border" 1 4)
              (genera-margin "White margin" 0 8)
              (genera-label-font "Label font"
-              (("Italic" . ui-italic) ("Upright" . ui) ("Code" . mono)))))
+              (("Italic" . ui-italic)
+               ("Upright" . genera-command-font)
+               ("Code" . mono))))
+  ;; no color
+  'text-dim (genera-same 'text)
+  'text-faint (genera-same 'text)
+  'accent (genera-same 'text)
+  'accent-2 (genera-same 'text)
+  'red (genera-same 'text)
+  'orange (genera-same 'text)
+  'yellow (genera-same 'text)
+  'green (genera-same 'text)
+  'cyan (genera-same 'text)
+  'teal (genera-same 'text)
+  'magenta (genera-same 'text)
+  'window-border (genera-same 'text)
+  'window-border-focus (genera-same 'text)
+  'bg-0 (genera-same 'bg-1)
+  'bg-2 (genera-same 'bg-1)
+  'bg-3 (genera-same 'bg-1))

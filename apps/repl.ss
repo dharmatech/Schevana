@@ -1214,8 +1214,7 @@
                                 (when (< row shown)
                                   (fill-round-rect (+ pad (* col cw))
                                                    (+ top (* row lh) mark-top)
-                                                   cw th 3
-                                                   (alpha 'yellow 0.25))))
+                                                   cw th 3 'repl-paren-mark)))
                               (vector-set! colors j 'yellow))))
                         paren))
                      (draw-repl-line pad top text colors cols 0 shown cw lh)
@@ -1235,9 +1234,9 @@
                                              (+ top (* row lh) mark-top)
                                              cw th 'text-faint)]
                                [(repl-blink r)
-                                (fill-rect (+ pad (* col cw))
-                                           (+ top (* row lh) mark-top)
-                                           2 th 'accent)]))))))]
+                                (repl-draw-cursor (+ pad (* col cw))
+                                                  (+ top (* row lh) mark-top)
+                                                  cw th)]))))))]
                   [(eq? (car e) 'input)
                    (let ([colors (scheme-colors text 3)])
                      (vector-fill-range! colors 0 3 'text-faint)
@@ -1262,6 +1261,16 @@
                        lh w h (lambda (name) (name-kind name env))
                        (lambda (item) (completion-description r c item)))))
     (repl-pointer! r win)))
+
+;; The cursor before the character cw × th at (x, y): the text kit's
+;; caret, a bar, or a block in reverse video over the character.
+(define (repl-draw-cursor x y cw th)
+  (if (eq? (theme 'text-caret) 'block)
+      (px-invert x y cw th)
+      (fill-rect x y 2 th 'accent)))
+
+;; Under the parenthesis that matches the one at the cursor, and it.
+(color-default! 'repl-paren-mark (theme-rule (alpha 'yellow 0.25)))
 
 (define (vector-fill-range! v a b x)
   (do ([i a (+ i 1)]) ((>= i (min b (vector-length v)))) (vector-set! v i x)))

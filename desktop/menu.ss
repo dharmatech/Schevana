@@ -18,7 +18,7 @@
 ;; The menu's numbers are settings, a style's to give: an entry's height
 ;; (a rule from the font), a separator's, the room above the first entry
 ;; and below the last, the text's inset, the least width, the font and
-;; the entries' ink, chosen and not.
+;; the entries' ink, chosen and not, and where their text goes.
 (theme-default! 'menu-item-height
                 (theme-rule (max 26 (round (+ (font-line-height 'ui) 11)))))
 (theme-default! 'menu-separator-height 9)
@@ -32,6 +32,8 @@
 (theme-default! 'menu-choose 'click)
 (theme-default! 'menu-blink 0)
 (theme-default! 'menu-hover 'fill)
+;; the entries' text: left, menu-text-x in, or center (the Lisp machines')
+(theme-default! 'menu-align 'left)
 
 (defvar *menu-blink* #f)   ; (start-ms entry thunk) while a chosen one blinks
 ;; (x y entry): where a press held down opened the menu, and the entry
@@ -214,7 +216,13 @@
                                     (= what (menu-sel m)))]
                           [flags (if sel? (menu-entry-flags what) '())])
                      (when sel? (ui-draw-highlight (+ x 5) y (- w 10) h flags))
-                     (draw-text (+ x (theme 'menu-text-x)) (+ y (/ (- h lh) 2))
+                     (draw-text (if (eq? (theme 'menu-align) 'center)
+                                    (+ x (/ (- w (text-width
+                                                  (car (vector-ref es what))
+                                                  font))
+                                            2))
+                                    (+ x (theme 'menu-text-x)))
+                                (+ y (/ (- h lh) 2))
                                 (car (vector-ref es what))
                                 (theme (cond [(not sel?) 'menu-ink]
                                              [(and (memq 'outline flags)
@@ -247,8 +255,10 @@
             (let ([ex (draw-text (min (+ x 10)
                                       (- (+ x w) 13 (text-width f font)))
                                  ty f 'text font)])
-              (fill-rect (+ ex 1) (+ y (round (/ (- h lh 1) 2))) 1.5
-                         (round (+ lh 1)) 'accent)))))))
+              (if (eq? (theme 'text-caret) 'block)   ; the kit's caret
+                  (px-invert ex ty (font-char-width font) lh)
+                  (fill-rect (+ ex 1) (+ y (round (/ (- h lh 1) 2))) 1.5
+                             (round (+ lh 1)) 'accent))))))))
 
 ;;; The surface: over the bars, under the toasts.
 

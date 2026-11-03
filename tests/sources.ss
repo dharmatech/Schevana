@@ -302,12 +302,13 @@
 
 ;; What paints or chooses paint. Calling a part is what other code does
 ;; (a style's own then draws); making, saving or freeing an image is not
-;; painting.
+;; painting, nor is finding where the device's pixels lie (the matrix,
+;; px-device, px-snap: for a clip on whole pixels).
 (define (drawing-primitive? s)
   (and (not (memq s parts))
        (not (memq s '(cairo-create cairo-destroy cairo-image-surface-create
                       cairo-surface-destroy cairo-surface-write-to-png
-                      draw-into-layer!)))
+                      draw-into-layer! cairo-get-matrix px-device px-snap)))
        (or (exists (lambda (p) (string-prefix? p (symbol->string s)))
                    '("fill-" "stroke-" "draw-" "cairo-" "px-"))
            (and (memq s '(set-color! use-font! clear! blit-layer!)) #t))))

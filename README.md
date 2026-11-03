@@ -352,7 +352,12 @@ Decisions worth keeping in mind for the real design:
   `'mono`, `'title`, ...) is a rule that makes the font from the four
   font settings, `(font family size . opts)`, one record per font, so
   every theme asking for it shares its face, its metrics and the text
-  laid out in it; a style changes a role by setting it. The kit's shared
+  laid out in it; a style changes a role by setting it (Genera sets
+  `'ui` to the code font). Besides the regular, bold, small and italic
+  ones there are `'ui-bold-italic`, `'ui-small-bold` and `'mono-italic`.
+  Faint text (`'text-faint`) takes the font a style's `faint-text-font`
+  part makes of its own: Genera, with no gray, gives the kit's
+  `ui-italic-of`. The kit's shared
   sizes (`control-height`, `gap`, `pad`, ...) are rules from the fonts
   too, and a style may give its own pixels. Title bars and the bars take
   the larger of their own setting and what their text needs
@@ -384,7 +389,23 @@ Decisions worth keeping in mind for the real design:
   numbers as settings: `menu-item-height`, `menu-font`, ...), the toasts'
   and the popups' pieces (`ui-draw-panel`, `ui-draw-highlight`,
   `ui-draw-separator`, `ui-draw-card`), which menus, toasts, dialogs,
-  tooltips, the calendar and the REPL's completion list share. A
+  tooltips, the calendar and the REPL's completion list share;
+  `ui-draw-highlight-over` comes again after what a chosen row or entry
+  shows, for a style that inverts it. A person is the kit's avatar
+  (`ui-draw-avatar`, `ui-avatar-size`), and Tasks' own marks are its
+  parts (`tasks-draw-mark`: priority, kind, blocked, status;
+  `tasks-draw-due`, `tasks-draw-slot`). Settings say the rest: a text's
+  caret (`text-caret`: `bar` or `block` in reverse video as wide as the
+  character under it, the REPL's and a menu's filter's too) and
+  selection (`text-selection`: `fill` or `underline`), a section label's
+  font and case (`label-section-font`, `label-section-upcase`), where a
+  menu's entries go (`menu-align`: `left` or `center`), and whether the
+  calendar steps by glyphs or by the words Previous and Next
+  (`calendar-step-words`), and how wide a well's ring is, which a view
+  scrolling in it stops short of (`surface-well-ring`). A scroll view
+  clips on whole device pixels (`ui-call-with-pixel-clip`, which
+  Settings' own scrolling uses too), so what it cuts ends crisp at any
+  scale. A
   container draws its inside in its place (`with-place`: a text box's
   `field`, a table's `list`, `dialog`, `tooltip`, `menu`, the bars'
   `bar`, `toast`), so a style can color what sits there, an app's own
@@ -397,7 +418,10 @@ Decisions worth keeping in mind for the real design:
   draws it (capitals centered on a line), and a font made with `'crisp`
   is not antialiased. `kits/px.ss` draws on whole device pixels at any
   scale, never antialiased: `px-fill`, `px-bevel` (Motif's corners or
-  the Mac's), `px-ring`, `px-bits` for small pictures, `px-text`. The
+  the Mac's), `px-ring`, `px-bits` for small pictures, `px-text`,
+  `px-invert` (reverse video: ink and paper swap, in any palette),
+  `px-bitmap-text` (a bitmap font's text, the CADR's 5X5 among them)
+  and `px-lozenge`. The
   kit's `ui-draw-glyph` draws a window's buttons (`close`, `minimize`,
   `maximize`, `restore`, `shade`) and the triangles (`up`, `down`,
   `left`, `right`), which the styles share.
@@ -414,13 +438,25 @@ Decisions worth keeping in mind for the real design:
   what the mouse buttons do in reverse video ("Mouse-L: Move; Mouse-R:
   Window menu.") over the selected window, a field listing the windows
   and the status, in character columns; a window not selected is
-  grayed over, and buttons are command words. Its numbers are settings
-  (`genera-border`, `genera-margin`, `genera-label-font`), so the MIT
-  CADR, from MIT's System 99 sources (BSD), is Genera in a few settings:
-  a 1-pixel border and margin, the label upright in the code font at
-  the top of its strip under the content, and no gray (the CADR grayed
-  only covered windows). Each brings the palette of the same name and its
-  wallpaper (the `wallpaper` theme key).
+  grayed over. Every widget is Genera's own, or what its authors would
+  have made of their parts: no color (every hue is the palette's ink),
+  what an app shows in the code font and its command words in the sans;
+  a word boxed under the mouse, inverse video for what is chosen, bold
+  for a current value, italic for a hint, an underline for a field and
+  the keyboard's place; tags as Zmail's `{keywords}`, people's initials
+  in the CADR's lozenges (its 5X5 font, `px-lozenge`), a checkbox as a
+  choice box after its name, a switch as "Yes No", a dialog's buttons
+  as words in equal shares, menus' entries centered, a month as a text
+  table. Its numbers are settings (`genera-border`,
+  `genera-margin`, `genera-label-font`, `genera-command-font`, ...), so
+  the MIT CADR, from MIT's System 99 sources (BSD), is Genera in a few
+  settings: a 1-pixel border and margin, the label upright in the code
+  font at the top of its strip under the content, no gray (the CADR
+  grayed only covered windows), command words in the code font, menus
+  a size up, the standout in italic, a heavier choice box, a dialog's
+  buttons margin choices, and its 3-pixel scroll bar under the mouse.
+  Each brings the palette of the same name and its wallpaper (the
+  `wallpaper` theme key).
   Our own styles choose their feel where it suits them: Fold folds a
   window up to its title on a double click, Lambda rolls it into its tab
   on the wheel, Halo and Reticle show scroll bars under the pointer,
@@ -648,6 +684,34 @@ Life windows animate at 200%.
   `tests/sources.ss` checks it.
 - American spelling: color, gray, center.
 
+## Credits
+
+The CADR's 5X5 font in `kits/px.ss` (the glyphs of `px-5x5`) is MIT's,
+decoded from System 99's `fonts/5x5.qfasl`:
+
+Copyright (c) 1980, Massachusetts Institute of Technology. All rights
+reserved. Redistribution and use in source and binary forms, with or
+without modification, are permitted provided that the following
+conditions are met: Redistributions of source code must retain the above
+copyright notice, this list of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+Neither the names of the Massachusetts Institute of Technology nor the
+names of its contributors may be used to endorse or promote products
+derived from this software without specific prior written permission.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 ## Known gaps and open questions
 
 - Apps all share one environment. REPLs can be private or pure, but apps
@@ -675,10 +739,13 @@ Life windows animate at 200%.
   dragging a color slider in Settings shows about 15 frames a second at
   200%.
 - The built-in styles change mostly the windows (Genera and the CADR
-  their bars and buttons too, Interlisp its scroll bars), though
-  everything is a part a style may replace: each widget's drawing, size
-  and areas, the bars, menus, toasts, the popups' panel, highlight,
-  separator and card.
+  every widget too, Interlisp its scroll bars), though everything is a
+  part a style may replace: each widget's drawing, size and areas, the
+  bars, menus, toasts, the popups' panel, highlight, separator and card.
+  Under Genera and the CADR a tooltip still floats in its box (the
+  machines said it in the who line's documentation line, which shows
+  only what the mouse buttons do), and a dropdown's menu still ticks
+  the current choice.
   Settings draws with the kit's widgets and only its own pictures with
   its own code (the styles' miniatures, swatches, color tracks); its
   color list and its pane's scrolling are still its own. The

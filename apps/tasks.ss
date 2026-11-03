@@ -451,17 +451,6 @@
                   n))])
     (and (> n 0) (substring s 0 n))))
 
-;; "Pavel Uvarov" → "PU", "Claude" → "C".
-(define (tasks-initials name)
-  (let ([words (remp (lambda (w) (string=? w "")) (string-split name #\space))])
-    (if (null? words)
-        "?"
-        (list->string
-         (map (lambda (w) (char-upcase (string-ref w 0)))
-              (if (null? (cdr words))
-                  words
-                  (list (car words) (car (last-pair words)))))))))
-
 (define (tasks-overdue? t today)
   (and (task-due t) (not (eq? (task-status t) 'done))
        (< (ui-date->day (task-due t)) (ui-date->day today))))
@@ -1313,36 +1302,46 @@
 ;;; ------------------------------------------------------------------
 ;;; the app's own drawing: card, column, slot, marks, cells, empty states
 
-;; 1–4 bars: low, normal, high, urgent.
-(define (tasks-draw-priority x y s priority)
-  (let* ([level (- 4 (tasks-rank tasks-priorities priority))]
-         [color (case priority
-                  [(urgent) 'red] [(high) 'orange] [(normal) 'text-dim]
-                  [else 'text-faint])]
-         [bw (/ s 5)])
-    (do ([i 0 (+ i 1)]) ((= i 4))
-      (let ([bh (* s (/ (+ i 2) 5))])
-        (fill-round-rect (+ x (* i (+ bw (/ s 15)))) (+ y (- s bh)) bw bh 1
-                         (if (< i level) color (alpha 'text-faint 0.35)))))))
-
-;; Bug a circle, feature a diamond, chore a square: form and color both.
-(define (tasks-draw-kind x y s kind)
-  (let ([c (/ s 2)])
-    (case kind
-      [(bug) (fill-circle (+ x c) (+ y c) (* c 0.85) 'red)]
-      [(feature)
-       (fill-polygon (list (cons (+ x c) y) (cons (+ x s) (+ y c))
-                           (cons (+ x c) (+ y s)) (cons x (+ y c)))
-                     'accent)]
-      [else (fill-round-rect (+ x 1) (+ y 1) (- s 2) (- s 2) 2 'text-dim)])))
-
-;; One color per person, however the name was typed.
-(define (tasks-draw-avatar x y s name)
-  (let ([color (app-color
-                (string->symbol (string-downcase (tasks-trim name))))])
-    (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (/ s 2) color)
-    (draw-text-centered x y s s (tasks-initials name) (readable-on color)
-                        'ui-small)))
+;; A task's mark in the s-square at (x, y): what is priority (1–4 bars:
+;; low, normal, high, urgent), kind (bug a circle, feature a diamond,
+;; chore a square: form and color both), blocked (a no-entry sign) or
+;; status (its dot), value its value. Returns the width it took: s, or 0
+;; for none (a style may leave out a mark whose word is written beside
+;; it).
+(define-part (tasks-draw-mark x y s what value)
+  (case what
+    [(priority)
+     (let* ([level (- 4 (tasks-rank tasks-priorities value))]
+            [color (case value
+                     [(urgent) 'red] [(high) 'orange] [(normal) 'text-dim]
+                     [else 'text-faint])]
+            [bw (/ s 5)])
+       (do ([i 0 (+ i 1)]) ((= i 4))
+         (let ([bh (* s (/ (+ i 2) 5))])
+           (fill-round-rect (+ x (* i (+ bw (/ s 15)))) (+ y (- s bh)) bw bh
+                            1 (if (< i level)
+                                  color
+                                  (alpha 'text-faint 0.35))))))]
+    [(kind)
+     (let ([c (/ s 2)])
+       (case value
+         [(bug) (fill-circle (+ x c) (+ y c) (* c 0.85) 'red)]
+         [(feature)
+          (fill-polygon (list (cons (+ x c) y) (cons (+ x s) (+ y c))
+                              (cons (+ x c) (+ y s)) (cons x (+ y c)))
+                        'accent)]
+         [else (fill-round-rect (+ x 1) (+ y 1) (- s 2) (- s 2) 2
+                                'text-dim)]))]
+    [(blocked)
+     (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (* s 0.45) 'orange)
+     (fill-rect (+ x (* s 0.25)) (+ y (* s 0.41)) (* s 0.5) (* s 0.18)
+                (readable-on 'orange))]
+    [(status)
+     (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (/ s 3)
+                  (case value
+                    [(doing) 'accent] [(review) 'magenta] [(done) 'green]
+                    [else 'text-faint]))])
+  s)
 
 ;; A line of t's title at (x, y): faint for "Untitled", dim when t is
 ;; done. Returns the x after it.
@@ -1353,7 +1352,7 @@
              'ui))
 
 ;; t's due date at (x, y), cut to w: red when overdue, orange today.
-(define (tasks-draw-due x y w t today font)
+(define-part (tasks-draw-due x y w t today font)
   (draw-text x y (fit-text (tasks-due-label (task-due t) today) w font)
              (cond [(tasks-overdue? t today) 'red]
                    [(and (equal? (task-due t) today)
@@ -1362,35 +1361,29 @@
                    [else 'text-faint])
              font))
 
-;; Blocked: a no-entry sign in the s-square at (x, y).
-(define (tasks-draw-blocked x y s)
-  (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (* s 0.45) 'orange)
-  (fill-rect (+ x (* s 0.25)) (+ y (* s 0.41)) (* s 0.5) (* s 0.18)
-             (readable-on 'orange)))
-
-;; A status's dot, in the s-square at (x, y), as the other marks are.
-(define (tasks-draw-dot x y s status)
-  (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (/ s 3)
-               (case status
-                 [(doing) 'accent] [(review) 'magenta] [(done) 'green]
-                 [else 'text-faint])))
-
 ;; flags: hover, selected, floating (being dragged), blocked.
 (define (tasks-draw-card x y w h flags t today)
   (let* ([on? (lambda (f) (memq f flags))]
          [lh (font-line-height 'ui)] [sh (font-line-height 'ui-small)]
          [a (tasks-avatar-size)] [m (tasks-mark-size)]
          [y1 (+ y 10)] [right (- (+ x w) 10)])
-    (fill-round-rect x y w h 8 'bg-2)   ; bg-3 would hide the progress track
+    ;; bg-3 would hide the progress track; a square card's on whole device
+    ;; pixels, so its edge stays crisp over what it is dragged across
+    (if (<= (theme 'corner-radius) 0)
+        (px-fill x y w h 'bg-2)
+        (fill-round-rect x y w h 8 'bg-2))
     (ui-draw-card x y w h flags)
-    (tasks-draw-priority (+ x 10) (+ y1 (/ (- a m) 2)) m (task-priority t))
-    (tasks-draw-kind (+ x 16 m) (+ y1 (/ (- a m) 2)) m (task-kind t))
+    (tasks-draw-mark (+ x 10) (+ y1 (/ (- a m) 2)) m 'priority
+                     (task-priority t))
+    (tasks-draw-mark (+ x 16 m) (+ y1 (/ (- a m) 2)) m 'kind (task-kind t))
     (let ([end (draw-text (+ x 24 m m) (+ y1 (/ (- a sh) 2)) (task-label t)
                           'text-faint 'ui-small)])
       (when (on? 'blocked)
-        (tasks-draw-blocked (+ end 6) (+ y1 (/ (- a m) 2)) m)))
+        (tasks-draw-mark (+ end 6) (+ y1 (/ (- a m) 2)) m 'blocked #t)))
     (when (task-assignee t)
-      (tasks-draw-avatar (- right a) y1 a (task-assignee t)))
+      (let-values ([(aw ah) (ui-avatar-size '() (task-assignee t))])
+        (ui-draw-avatar (- right aw) (+ y1 (/ (- a ah) 2)) aw ah '()
+                        (task-assignee t))))
     (let*-values ([(lines cut?) (tasks-card-title w t)]
                   [(ty) (+ y1 a 6)])
       (for-each (lambda (line i)
@@ -1436,9 +1429,10 @@
   (let ([hh (tasks-column-header-height)] [lh (font-line-height 'ui)]
         [sh (font-line-height 'ui-small)] [m (tasks-mark-size)])
     (ui-draw-surface x y w h '(well))
-    (tasks-draw-dot (+ x 10) (+ y (/ (- hh m) 2)) m status)
-    (let ([end (draw-text (+ x 16 m) (+ y (/ (- hh lh) 2)) label 'text
-                          'ui-bold)])
+    (let* ([dw (tasks-draw-mark (+ x 10) (+ y (/ (- hh m) 2)) m 'status
+                                status)]
+           [end (draw-text (if (> dw 0) (+ x 16 m) (+ x 10))
+                           (+ y (/ (- hh lh) 2)) label 'text 'ui-bold)])
       (draw-text (+ end 8) (+ y (/ (- hh sh) 2)) (number->string count)
                  'text-faint 'ui-small))
     (when (memq 'empty flags)
@@ -1446,7 +1440,7 @@
                           'text-faint 'ui))))
 
 ;; Where a dragged card would land.
-(define (tasks-draw-slot x y w h)
+(define-part (tasks-draw-slot x y w h)
   (fill-round-rect x y w h 8 (alpha 'accent 0.15))
   (stroke-round-rect x y w h 8 'accent))
 
@@ -1465,7 +1459,8 @@
                        (task-label t) 'text-faint 'mono-small)]
       [(title)   ; the mark, the title; up to two tags in the room it leaves
        (let* ([tx (if (memq 'blocked flags)
-                      (begin (tasks-draw-blocked px my m) (+ px m 6))
+                      (begin (tasks-draw-mark px my m 'blocked #t)
+                             (+ px m 6))
                       px)]
               [end (tasks-draw-title
                     tx ty (fit-text (tasks-shown-title t) (- (+ px cw) tx) 'ui)
@@ -1479,20 +1474,22 @@
                  (ui-draw-chip cx (+ y (/ (- h gh) 2)) gw gh '() (car gs))
                  (loop (cdr gs) (+ cx gw 4)))))))]
       [(status)
-       (tasks-draw-dot px my m (task-status t))
-       (text (+ px m 8) (cdr (assq (task-status t) tasks-statuses)) 'text-dim)]
+       (let ([dw (tasks-draw-mark px my m 'status (task-status t))])
+         (text (if (> dw 0) (+ px m 8) px)
+               (cdr (assq (task-status t) tasks-statuses)) 'text-dim))]
       [(priority)
-       (tasks-draw-priority px my m (task-priority t))
+       (tasks-draw-mark px my m 'priority (task-priority t))
        (text (+ px m 8) (cdr (assq (task-priority t) tasks-priorities))
              'text-dim)]
       [(kind)
-       (tasks-draw-kind px my m (task-kind t))
+       (tasks-draw-mark px my m 'kind (task-kind t))
        (text (+ px m 8) (cdr (assq (task-kind t) tasks-kinds)) 'text-dim)]
       [(assignee)
-       (let ([a (tasks-avatar-size)] [who (task-assignee t)])
+       (let ([who (task-assignee t)])
          (if who
-             (begin (tasks-draw-avatar px (+ y (/ (- h a) 2)) a who)
-                    (text (+ px a 8) who 'text-dim))
+             (let-values ([(aw ah) (ui-avatar-size '(named) who)])
+               (ui-draw-avatar px (+ y (/ (- h ah) 2)) aw ah '(named) who)
+               (text (if (> aw 0) (+ px aw 8) px) who 'text-dim))
              (text px "—" 'text-faint)))]
       [(due)
        (when (task-due t) (tasks-draw-due px ty cw t today 'ui))]
@@ -1524,7 +1521,7 @@
     (draw-text px (+ y (/ (- h (font-line-height 'mono-small)) 2))
                (task-label t) 'text-faint 'mono-small)
     (when (memq 'blocked flags)
-      (tasks-draw-blocked (- tx m 6) (+ y (/ (- h m) 2)) m))
+      (tasks-draw-mark (- tx m 6) (+ y (/ (- h m) 2)) m 'blocked #t))
     (if where
         (begin (draw-text tx ty line 'text-faint 'ui)
                (when hint
@@ -1734,7 +1731,9 @@
                      (loop (cdr hs) (+ cy (car hs) between) (cons cy acc))))]
        [(bw bh) (ui-button-size #f 'plus)]
        [(d) (tasks-view-drag v)]
-       [(sel) (tasks-view-selected v)])
+       [(sel) (tasks-view-selected v)]
+       ;; the cards' view, short of a ring the well may have
+       [(vh) (- h hh (ui-surface-well-ring))])
     (tasks-draw-column x y w h
                        (if (and (null? tasks) (not target?)) '(empty) '())
                        status label (length tasks))
@@ -1746,8 +1745,8 @@
       (when i
         (ui-reveal! ui sid (list-ref tops i) (+ (list-ref tops i)
                                                 (list-ref heights i) between)
-                    (- h hh))))
-    (ui-scroll ui sid x (+ y hh) w (- h hh)
+                    vh)))
+    (ui-scroll ui sid x (+ y hh) w vh
       (lambda (top)
         (let ([slot (and target?
                          (let ([i (tasks-slot tops heights
@@ -1962,7 +1961,7 @@
                    (lambda () (tasks-view-page?-set! v #f))
                    'glyph 'chevron-left 'quiet #t 'tip "Back  Esc"))
     (ui-draw-label lx y iw bh '(mono) id)
-    (tasks-draw-kind (+ lx iw 10) (+ y (/ (- bh m) 2)) m (task-kind t))
+    (tasks-draw-mark (+ lx iw 10) (+ y (/ (- bh m) 2)) m 'kind (task-kind t))
     (ui-draw-label (+ lx iw 16 m) y (- (+ x cw) lx iw 16 m bw) bh '(dim)
                    (cdr (assq (task-kind t) tasks-kinds)))
     (+ y bh (ui-gap))))

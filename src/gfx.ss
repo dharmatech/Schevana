@@ -318,6 +318,13 @@
     (theme-default! (car roles) (cadr roles))
     (loop (cddr roles))))
 
+;; Faint text's font: its own (#f), or what a style's procedure makes of
+;; it, a part (Genera, with no gray, sets its hints in italic).
+(theme-default! 'faint-text-font #f)
+(define (faint-font color f)
+  (let ([make (and (eq? color 'text-faint) (theme-part 'faint-text-font))])
+    (if make (make f) f)))
+
 ;; The screen's scale changed: each font is measured again.
 (define (fonts-rescaled!)
   (vector-for-each (lambda (f) (font-cache-set! f #f))
@@ -360,7 +367,7 @@
     [(x y str) (draw-text x y str 'text 'ui)]
     [(x y str color) (draw-text x y str color 'ui)]
     [(x y str color font)
-     (let ([f (get-font font)])
+     (let ([f (faint-font color (get-font font))])
        (use-font! f)
        (set-color! color)
        (cairo-move-to *cr* x (+ y (font-ascent f)))

@@ -1785,7 +1785,7 @@
               (equal? (fits? 200 '("abcdefghijklmnopqrstuvwx" "b")) '(1 1))
               (equal? (fits? 100 '("abcdefghijklmnopqrstuvwx")) '(1 0)))))
 
-(check "tasks-neighbor, tasks-tag, tasks-initials"
+(check "tasks-neighbor, tasks-tag, ui-initials"
        (and (eq? (tasks-neighbor ts t2) t3) (eq? (tasks-neighbor ts t4) t3)
             (not (tasks-neighbor (list t1) t1))
             (equal? (map tasks-tag '("  My Tag " "a,b" "" "   "))
@@ -1795,8 +1795,8 @@
             (equal? (tasks-tag "dÜnï Cödé Long Tag Name Here")
                     "dünï-cödé-long-tag-name")
             (equal? (tasks-tag "ends-in-") "ends-in-")
-            (equal? (map tasks-initials '("Pavel Uvarov" "Claude"
-                                          "ada lovelace byron"))
+            (equal? (map ui-initials '("Pavel Uvarov" "Claude"
+                                       "ada lovelace byron"))
                     '("PU" "C" "AB"))))
 
 (check "a task's tags: made by tasks-tag, each once, in the order given, \
@@ -2490,8 +2490,18 @@
                                   corner-radius 4)))
                    (nord #t mac nord 4 gradient
                          ((mac palette nord corner-radius 4)))
+                   ;; a v1 file holds every color: those the Genera
+                   ;; style inks are its changes
                    (genera #t genera genera 0 flat
-                           ((genera palette genera accent #x3366cc)))
+                           ((genera palette genera bg-2 #xf0f0f0
+                                    bg-3 #xd8d8d8 text-dim #x222222
+                                    text-faint #x666666 accent #x3366cc
+                                    accent-2 #x444444 red #x8b0000
+                                    orange #x6b4400 yellow #x5c5c00
+                                    green #x1f5f1f cyan #x1f5566
+                                    teal #x1f5f55 magenta #x661f66
+                                    window-border #xc7c7c7
+                                    window-border-focus #x8ea5d3)))
                    (deleted #t mac tokyo-night 4 gradient
                             ((mac palette tokyo-night corner-radius 4)))))))
 
@@ -4400,7 +4410,7 @@
            (equal? (list (car r) (cadr r)) (caddr r)))))
 
 (check "Genera's buttons are command words: plain, boxed under the \
-        pointer, reversed while pressed"
+        pointer and while pressed, reversed while chosen"
        (with-style 'genera
          (lambda ()
            (let ([at (lambda (flags)
@@ -4416,7 +4426,354 @@
                  [ink (color->pixel 'text)] [paper (color->pixel 'window-bg)])
              (and (equal? (at '()) (list paper paper))
                   (equal? (at '(hover)) (list ink paper))
-                  (equal? (at '(pressed)) (list ink ink)))))))
+                  (equal? (at '(pressed hover)) (list ink paper))
+                  (equal? (at '(selected)) (list ink ink)))))))
+
+(check "faint text is in its font's italic, bold kept, where a style says \
+        so ('faint-text-font, Genera's); other text and styles keep theirs"
+       (and (with-style 'mac
+              (lambda () (eq? (faint-font 'text-faint (get-font 'ui))
+                              (get-font 'ui))))
+            (with-style 'genera
+              (lambda ()
+                (let ([f (faint-font 'text-faint (get-font 'mono-bold))])
+                  (and (= (font-slant f) CAIRO_FONT_SLANT_ITALIC)
+                       (= (font-weight f) CAIRO_FONT_WEIGHT_BOLD)
+                       (eq? (faint-font 'text (get-font 'mono))
+                            (get-font 'mono))))))))
+
+(check "the CADR's lozenge: 9 pixels high, 9 + 6 a character wide, pointed \
+        ends, the name in capitals of MIT's 5X5"
+       (let* ([img (image 30 12 1
+                          (lambda ()
+                            (fill-rect 0 0 30 12 #xffffff)
+                            (px-lozenge 0 0 "a" #x000000)))]
+              [r (list (px-lozenge-width "AB")
+                       (map (lambda (p) (= (apply pixel-at img p) #xff000000))
+                            '((0 4) (3 1) (3 7) (4 0) (4 8) (14 4) (11 1)
+                              (6 2) (5 2) (5 4) (9 4) (6 6) (5 6))))])
+         (cairo-surface-destroy img)
+         (equal? r '(21 (#t #t #t #t #t #t #t #t #f #t #t #f #t)))))
+
+(check "Genera chooses in inverse video: a row's 2-pixel box, its inside \
+        turned once its cells are drawn (ui-draw-highlight-over); Mac turns \
+        nothing"
+       (let ([at (lambda (style)
+                   (with-style style
+                     (lambda ()
+                       (let* ([img (image 100 24 1
+                                          (lambda ()
+                                            (fill-rect 0 0 100 24 #xffffff)
+                                            (ui-draw-table-row 0 0 100 24
+                                                               '(selected))
+                                            (fill-rect 10 8 6 6 #x000000)
+                                            (ui-draw-highlight-over
+                                             0 0 100 24 '())))]
+                              [ps (map (lambda (p) (apply pixel-at img p))
+                                       '((0 0) (50 12) (12 10)))])
+                         (cairo-surface-destroy img)
+                         ps))))])
+         (and (equal? (at 'genera) '(#xff000000 #xff000000 #xffffffff))
+              (= (caddr (at 'mac)) #xff000000))))
+
+(check "a table calls ui-draw-highlight-over on its chosen row after the \
+        row's cells, and on no other"
+       (with-test-styles
+        (lambda ()
+          (let ([seen '()] [ui (make-ui)])
+            (define-style test-over "Test"
+              'ui-draw-highlight-over
+              (lambda (x y w h flags) (set! seen (cons 'over seen))))
+            (set-style! 'test-over)
+            (let ([win (apply open-window "T" 'size '(300 . 200)
+                              'pos '(100 . 100) 'ui ui
+                              'draw (lambda (win w h)
+                                      (ui-begin! ui)
+                                      (ui-table ui 't 0 0 w h '((a "A" 100))
+                                                '(1 2 3) 2 void
+                                                (lambda (row k x y w h flags)
+                                                  (set! seen (cons row seen))))
+                                      (ui-end! ui w h))
+                              (ui-handlers ui))])
+              (steps 2)
+              (close-window! win)
+              (steps 1)
+              (let loop ([s (reverse seen)] [prev #f] [overs 0])
+                (cond [(null? s) (> overs 0)]
+                      [(eq? (car s) 'over)
+                       (and (eqv? prev 2) (loop (cdr s) 'over (+ overs 1)))]
+                      [else (loop (cdr s) (car s) overs)])))))))
+
+(check "Tasks' marks and avatars are a style's: Genera leaves out a status's \
+        mark (its word is beside it) and an avatar beside the name, else \
+        the initials in a lozenge"
+       (let ([mark (lambda (style)
+                     (with-style style
+                       (lambda ()
+                         (let* ([w #f]
+                                [img (image 20 20 1
+                                            (lambda ()
+                                              (set! w (tasks-draw-mark
+                                                       2 2 14 'status
+                                                       'todo))))])
+                           (cairo-surface-destroy img)
+                           w))))]
+             [size (lambda (style flags)
+                     (with-style style
+                       (lambda ()
+                         (call-with-values
+                           (lambda () (ui-avatar-size flags "Pavel Uvarov"))
+                           list))))])
+         (and (= (mark 'mac) 14) (= (mark 'genera) 0)
+              (equal? (size 'genera '()) '(21 9))
+              (equal? (size 'genera '(named)) '(0 0))
+              (equal? (size 'mac '(named)) (size 'mac '())))))
+
+(check "Genera's caret is a block in reverse video and its selection an \
+        underline (text-caret, text-selection)"
+       (let ([probe
+              (lambda (style text at x y)
+                (set-style! style)
+                (let-values ([(win ui) (field-window text)])
+                  (focus-window! win)
+                  (ui-focus! ui 'f at)
+                  (invalidate! win)
+                  (steps 2)
+                  (let-values ([(cx cy cw ch) (content-rect win)])
+                    (let ([p (canvas-pixel (+ cx x) (+ cy y))]
+                          [ink (color->pixel 'text)])
+                      (close-window! win)
+                      (steps 1)
+                      (= p ink)))))])
+         (let ([r (list (probe 'genera "" 0 25 30) (probe 'mac "" 0 25 30)
+                        (probe 'genera "MMMM" #t 26 38))])
+           (set-style! 'mac)
+           (equal? r '(#t #f #t)))))
+
+(check "a style may center its menus' entries (menu-align, the Lisp \
+        machines'), and a section label keep its case and take its font"
+       (let ([first-ink
+              (lambda (style)
+                (set-style! style)
+                (open-menu! 200 200 (list (cons "a much wider entry" void)
+                                          (cons "ii" void)))
+                (steps 2)
+                (let* ([a (cdr (assv 1 (placed-menu-areas *menu*)))]
+                       [x (car a)] [y (cadr a)] [w (caddr a)] [h (cadddr a)]
+                       [bg (canvas-pixel (+ x w -6) (+ y (quotient h 2)))]
+                       [at (let loop ([i 12])   ; clear of a round corner
+                             (cond [(>= i (- w 12)) #f]
+                                   [(exists (lambda (dy)
+                                              (not (= bg (canvas-pixel
+                                                          (+ x i) (+ y dy)))))
+                                            (iota (exact (- h 4))))
+                                    (/ i w)]
+                                   [else (loop (+ i 1))]))])
+                  (close-menu!)
+                  (steps 1)
+                  at))])
+         (let ([r (list (first-ink 'genera) (first-ink 'mac))])
+           (set-style! 'mac)
+           (and (> (car r) 1/3) (< (cadr r) 1/3)
+                (with-style 'genera
+                  (lambda ()
+                    (and (equal? (ui-label-text '(section) "Checklist")
+                                 "Checklist")
+                         (eq? (ui-label-font '(section)) 'ui-bold-italic))))
+                (equal? (ui-label-text '(section) "Checklist")
+                        "CHECKLIST")))))
+
+(check "a dropdown showing its 'label, not a choice, says so (flag label), \
+        so Genera sets a value in bold and a label plain"
+       (with-test-styles
+        (lambda ()
+          (let ([seen '()] [ui (make-ui)])
+            (define-style test-dd "Test"
+              'ui-draw-dropdown
+              (lambda (x y w h flags label)
+                (set! seen (cons (cons label (and (memq 'label flags) #t))
+                                 seen))))
+            (set-style! 'test-dd)
+            (let ([win (apply open-window "D" 'size '(300 . 100)
+                              'pos '(100 . 100) 'ui ui
+                              'draw (lambda (win w h)
+                                      (ui-begin! ui)
+                                      (ui-dropdown ui 'a 10 10 100 24
+                                                   '(("One" . 1)) 1 void)
+                                      (ui-dropdown ui 'b 10 40 100 24
+                                                   '(("One" . 1)) #f void
+                                                   'label "Kind")
+                                      (ui-end! ui w h))
+                              (ui-handlers ui))])
+              (steps 2)
+              (close-window! win)
+              (steps 1)
+              (and (equal? (assoc "One" seen) '("One" . #f))
+                   (equal? (assoc "Kind" seen) '("Kind" . #t))))))))
+
+;; Pixels of an image drawn by thunk in Genera, scale s, extra settings
+;; over it: ((x y) ...) read in device pixels.
+(define (genera-pixels pw ph s at thunk . extra)
+  (apply with-style 'genera
+         (lambda ()
+           (let* ([img (image pw ph s thunk)]
+                  [ps (map (lambda (p) (apply pixel-at img p)) at)])
+             (cairo-surface-destroy img)
+             ps))
+         extra))
+
+(check "px-invert swaps ink and paper in any palette (Genera in Nord, \
+        Paper), and black on white as XOR did"
+       (for-all
+        (lambda (palette)
+          (with-style 'genera
+            (lambda ()
+              (equal? (genera-pixels 20 10 1 '((5 5) (15 5))
+                                     (lambda ()
+                                       (fill-rect 0 0 20 10 'window-bg)
+                                       (fill-rect 10 0 10 10 'text)
+                                       (px-invert 0 0 20 10))
+                                     'palette palette)
+                      (list (color->pixel 'text) (color->pixel 'window-bg))))
+            'palette palette))
+        '(nord paper genera)))
+
+(check "a block caret is as wide as the character under it, the font's \
+        width past the end"
+       (and (= (ui-caret-block-width "iM" 0 'ui) (text-width "i" 'ui))
+            (= (ui-caret-block-width "iM" 1 'ui) (text-width "M" 'ui))
+            (= (ui-caret-block-width "iM" 2 'ui) (font-char-width 'ui))
+            (< (text-width "i" 'ui) (text-width "M" 'ui))))
+
+(check "a scroll view clips on whole device pixels: at 150 % what it cuts \
+        ends in ink or paper"
+       (let* ([img (image 30 30 1.5
+                          (lambda ()
+                            (fill-rect 0 0 20 20 #xffffff)
+                            (ui-call-with-pixel-clip 1.3 1.3 10.4 10.4
+                                             (lambda ()
+                                               (fill-rect 0 0 20 20
+                                                          #x000000)))))]
+              [ps (map (lambda (i) (pixel-at img i i)) (iota 20))])
+         (cairo-surface-destroy img)
+         (for-all (lambda (p) (memv p '(#xff000000 #xffffffff))) ps)))
+
+(check "Genera's square things at 150 % on whole device pixels: a Tasks \
+        card's paper, Settings' font sample's box"
+       (begin
+         (tasks-reset!)
+         (let ([crisp? (lambda (ps)
+                         (for-all (lambda (p) (memv p '(#xff000000
+                                                        #xffffffff)))
+                                  ps))]
+               [row (map (lambda (x) (list x 30)) (iota 8))])
+           (and (crisp? (genera-pixels 60 60 1.5 row
+                                       (lambda ()
+                                         (fill-rect 0 0 40 40 'text)
+                                         (tasks-draw-card 1.3 1.3 30 30 '()
+                                                          (car *tasks*)
+                                                          '(2026 10 31)))))
+                (crisp? (genera-pixels 60 60 1.5 row
+                                       (lambda ()
+                                         (fill-rect 0 0 40 40 'text)
+                                         (settings-draw-font-sample
+                                          1.3 1.3 30))))))))
+
+(check "Genera inverts Settings' chosen tab, its mark inside it in ink, and \
+        its chosen color row"
+       (let ([ink #xff000000])
+         (and (equal? (genera-pixels 100 24 1 '((2 12) (90 3))
+                                     (lambda ()
+                                       (fill-rect 0 0 100 24 #xffffff)
+                                       (settings-draw-tab 0 0 100 24
+                                                          '(selected)
+                                                          "Theme")))
+                      (list ink ink))
+              (equal? (genera-pixels 200 28 1 '((150 4))
+                                     (lambda ()
+                                       (fill-rect 0 0 200 28 #xffffff)
+                                       (settings-draw-color-row
+                                        0 0 200 28 'red '(selected))))
+                      (list ink)))))
+
+(check "Genera's field underline shows in a half-size miniature, and a \
+        menu filter's caret is its block"
+       (let ([ink #xff000000])
+         (and (exists (lambda (p) (= p ink))
+                      (genera-pixels 20 10 1/2
+                                     (map (lambda (x) (list x 9)) (iota 20))
+                                     (lambda ()
+                                       (fill-rect 0 0 40 20 #xffffff)
+                                       (ui-draw-field 0 0 40 20 '()))))
+              (with-style 'genera
+                (lambda ()
+                  (let ([x (+ 10 (text-width "ab" (theme 'menu-font)) 2)])
+                    (equal? (genera-pixels
+                             100 30 1 (list (list (exact (floor x)) 15))
+                             (lambda ()
+                               (draw-menu-filter (make-menu 0 0 '() 0 "ab" #t
+                                                            #f)
+                                                 0 0 100 30)))
+                            (list ink))))))))
+
+(check "the calendar's steps are the words Previous and Next under Genera \
+        (calendar-step-words), glyphs elsewhere"
+       (let ([doc
+              (lambda (style)
+                (set-style! style)
+                (let* ([ui (make-ui)]
+                       [win (apply open-window "C" 'size '(400 . 400)
+                                   'pos '(100 . 100) 'ui ui
+                                   'draw (lambda (win w h)
+                                           (ui-begin! ui)
+                                           (ui-date-field ui 'd 10 10 150 24
+                                                          '(2026 11 2) void)
+                                           (ui-end! ui w h))
+                                   (ui-handlers ui))])
+                  (steps 2)
+                  (ui-state-popup-set! ui (cons 'd (ui-date->day
+                                                    '(2026 11 2))))
+                  (invalidate! win)
+                  (steps 2)
+                  (let ([r (ui-find ui '(d prev))])
+                    (close-window! win)
+                    (steps 1)
+                    (and r (ui-region-doc r)))))])
+         (let ([r (list (doc 'genera) (doc 'mac))])
+           (set-style! 'mac)
+           (equal? r '(((L . "Previous")) ((L . "Press")))))))
+
+(check "a board column's ring shows under the card it cuts off (Genera: \
+        the cards' view stops short of its well's ring, surface-well-ring)"
+       (begin
+         (set-style! 'genera)
+         (tasks-reset!)
+         (let* ([win (tasks)] [ui (window-ref win 'ui)])
+           (focus-window! win)
+           (steps 3)
+           (let*-values ([(cx cy cw ch) (content-rect win)]
+                         [(f) (ui-region-frame (ui-find ui '(column todo)))]
+                         ;; the well's last row: the board's, a pad up
+                         [(ps) (map (lambda (dx)
+                                      (canvas-pixel (+ cx (car f) dx)
+                                                    (+ cy ch (- (ui-pad)) -1)))
+                                    '(40 60 80))]
+                         [(ink) (color->pixel 'text)])
+             (close-window! win)
+             (steps 1)
+             (set-style! 'mac)
+             (for-all (lambda (p) (= p ink)) ps)))))
+
+(check "Settings' chosen color row shows its swatch in its own color over \
+        Genera's inverse video, its ring a stipple of ink and paper"
+       (with-style 'genera
+         (lambda ()
+           (equal? (genera-pixels 200 28 1 '((20 14) (12 6) (13 6))
+                                  (lambda ()
+                                    (fill-rect 0 0 200 28 #xffffff)
+                                    (settings-draw-color-row
+                                     0 0 200 28 'accent '(selected))))
+                   (list (color->pixel 'accent) #xff000000 #xffffffff)))))
 
 (check "Genera's who line: no top bar; what the mouse does reversed across \
         its top line, in Genera's words; its fields at character columns; \

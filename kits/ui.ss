@@ -639,6 +639,18 @@
 ;;; ------------------------------------------------------------------
 ;;; shared drawing
 
+;; More font roles, from the font settings as the core's are: Genera's
+;; pane headings and fixed italic, the CADR's current choice.
+(theme-default! 'ui-bold-italic (theme-font-rule 'ui 0 'bold 'italic))
+(theme-default! 'mono-italic (theme-font-rule 'mono 0 'italic))
+(theme-default! 'ui-small-bold (theme-font-rule 'ui -2 'bold))
+
+;; f's italic, bold kept: a style's 'faint-text-font where it has no gray
+;; (Genera's hints and type descriptions).
+(define (ui-italic-of f)
+  (apply font (font-family f) (font-size f) 'italic
+         (if (= (font-weight f) CAIRO_FONT_WEIGHT_BOLD) '(bold) '())))
+
 ;; The ring of a widget that has the keyboard from Tab.
 (define-part (ui-draw-focus x y w h flags r)
   (stroke-round-rect (- x 3) (- y 3) (+ w 6) (+ h 6) (+ r 3)
@@ -932,11 +944,22 @@
 ;;; labels and surfaces: an app's text and strips, so it never names a
 ;;; font, a color or a fill
 
+;; A section's label: its font, and whether it is in capitals (Genera
+;; heads a pane in bold italic instead).
+(theme-default! 'label-section-font 'ui-small)
+(theme-default! 'label-section-upcase #t)
+
 (define (ui-label-font flags)
   (cond [(memq 'heading flags) 'heading]
-        [(or (memq 'hint flags) (memq 'section flags)) 'ui-small]
+        [(memq 'section flags) (theme 'label-section-font)]
+        [(memq 'hint flags) 'ui-small]
         [(memq 'mono flags) 'mono-small]
         [else 'ui]))
+
+(define (ui-label-text flags text)
+  (if (and (memq 'section flags) (theme 'label-section-upcase))
+      (string-upcase text)
+      text))
 
 ;; flags: a role (heading body dim hint section mono), wrap, center
 ;; or right. Without wrap the text is cut to w and centered in h; with it,
@@ -948,7 +971,7 @@
                            (memq 'mono flags))
                        'text-faint]
                       [else 'text])]
-         [text (if (memq 'section flags) (string-upcase text) text)]
+         [text (ui-label-text flags text)]
          [lh (font-line-height font)]
          [at (lambda (s)
                (cond [(memq 'right flags) (- (+ x w) (text-width s font))]
@@ -966,7 +989,7 @@
 ;; (values w h); w matters only with wrap.
 (define-part (ui-label-size flags text w)
   (let* ([font (ui-label-font flags)] [lh (font-line-height font)]
-         [text (if (memq 'section flags) (string-upcase text) text)])
+         [text (ui-label-text flags text)])
     (if (memq 'wrap flags)
         (values w (* lh (length (ui-label-lines text w font))))
         (values (text-width text font) lh))))
@@ -1018,6 +1041,12 @@
      (cond [(memq 'toolbar flags)
             (fill-rect x (- (+ y h) 1) w 1 'window-border)]
            [(memq 'side flags) (fill-rect x y 1 h 'window-border)])]))
+
+;; How wide a well's ring is, if its style draws one (Genera's 1-pixel
+;; box): a view that scrolls in the well stops short of it, so that what
+;; it cuts never covers it.
+(theme-default! 'surface-well-ring 0)
+(define (ui-surface-well-ring) (theme 'surface-well-ring))
 
 ;;; ------------------------------------------------------------------
 ;;; text field and text area: one box, a row or wrapped rows
@@ -1111,7 +1140,11 @@
 ;; box: never a box of its own). An area of lines taller than its box
 ;; has a scroll bar.
 (define (ui-text-box ui id x y w h text on-change area? opts)
-  (let* ([own (ui-opt-flags opts '(large bare search single inner))]
+  (let* ([own (append (ui-opt-flags opts '(large bare search single inner))
+                      ;; an area of lines: a box of its own, not a field
+                      (if (and area? (not (plist-ref opts 'single #f)))
+                          '(lines)
+                          '()))]
          [areas (ui-text-box-areas x y w h own)]
          [a (car areas)] [tx (list-ref a 1)] [ty (list-ref a 2)]
          [tw (list-ref a 3)] [th (list-ref a 4)] [font (list-ref a 5)]
@@ -1295,7 +1328,11 @@
                                [x1 (if (> hi e)
                                        (+ (measure (substring text s e)) 4)
                                        (measure (substring text s hi)))])
-                          (fill-rect (+ rx x0) ry (- x1 x0) lh 'selection)))
+                          (if (eq? (theme 'text-selection) 'underline)
+                              (px-fill (+ rx x0) (+ ry lh -1) (- x1 x0) 1
+                                       'text)
+                              (fill-rect (+ rx x0) ry (- x1 x0) lh
+                                         'selection))))
                       ;; unfocused at its start, the last row in view says
                       ;; that more follows
                       (draw-text rx ry
@@ -1313,9 +1350,25 @@
                                  'text font)))
                   (loop (+ r 1))))))
         (when (memq 'caret flags)
-          (fill-rect (+ (- tx dx) (edit-caret-x lay caret) -1)
-                     (- (+ ty (* lh (edit-row-at lay caret))) dy)
-                     2 lh 'accent))))))
+          (let ([cx (+ (- tx dx) (edit-caret-x lay caret))]
+                [cy (- (+ ty (* lh (edit-row-at lay caret))) dy)])
+            (if (eq? (theme 'text-caret) 'block)
+                (px-invert cx cy (ui-caret-block-width text caret font) lh)
+                (fill-rect (- cx 1) cy 2 lh 'accent))))))))
+
+;; How the text's caret and selection show: a bar and a fill, or as the
+;; Lisp machines showed them, a block in reverse video over the character
+;; and an underline (block, underline).
+(theme-default! 'text-caret 'bar)
+(theme-default! 'text-selection 'fill)
+
+;; A block caret is as wide as the character under it; at the end of the
+;; text or of a line, the font's own width.
+(define (ui-caret-block-width text i font)
+  (if (and (< i (string-length text))
+           (not (char=? (string-ref text i) #\newline)))
+      (text-width (string (string-ref text i)) font)
+      (font-char-width font)))
 
 ;;; ------------------------------------------------------------------ scroll
 
@@ -1343,7 +1396,8 @@
       (ui-state-clip-set! ui (call-with-values
                                (lambda () (ui-cut x y w h clip))
                                list))
-      (let* ([bottom (call-with-clip x y w h (lambda () (body (- y off))))]
+      (let* ([bottom (ui-call-with-pixel-clip x y w h
+                                              (lambda () (body (- y off))))]
              [content (- bottom (- y off))]
              [most (max 0 (- content h))]
              [now (car (ui-memo ui id '(0 . 0)))]
@@ -1398,6 +1452,13 @@
                 (hashtable-set! (window-props win) 'scrollbar
                                 (list bx by bw bh (ui-flags ui bid)
                                       (/ new content) (/ h content)))))))))))
+
+;; thunk drawn clipped to x y w h, its edges on whole device pixels, so
+;; that what it cuts ends in a crisp edge at any scale: every scroll
+;; view's clip, the kit's and an app's own.
+(define (ui-call-with-pixel-clip x y w h thunk)
+  (let-values ([(x0 y0) (px-snap x y)] [(x1 y1) (px-snap (+ x w) (+ y h))])
+    (call-with-clip x0 y0 (- x1 x0) (- y1 y0) thunk)))
 
 ;; A scroll bar at x y w h, for a view h high showing content from off on:
 ;; pressing it, on its thumb or beside it, and dragging set the offset by
@@ -1529,7 +1590,9 @@
                     (let cells ([cs columns] [cx x])
                       (unless (null? cs)
                         (cell row (caar cs) cx ry (caddr (car cs)) rh flags)
-                        (cells (cdr cs) (+ cx (caddr (car cs))))))))))
+                        (cells (cdr cs) (+ cx (caddr (car cs))))))
+                    (when (eq? row selected)
+                      (ui-draw-highlight-over x ry w rh '()))))))
             (+ top (* n rh))))))))
 
 ;; The new row index for a key, #f for any other: Up/Down ±1,
@@ -1777,7 +1840,9 @@
                     (let cells ([cs (cdr columns)] [cx (+ x w0)])
                       (unless (null? cs)
                         (cell node (caar cs) cx ry (caddr (car cs)) rh flags)
-                        (cells (cdr cs) (+ cx (caddr (car cs)))))))))
+                        (cells (cdr cs) (+ cx (caddr (car cs))))))
+                    (when (memq 'selected flags)
+                      (ui-draw-highlight-over x ry w rh '())))))
               (+ top (* n rh)))))))))
 
 ;; A tree's rows are a table's height.
@@ -1922,6 +1987,41 @@
     (+ (cadr f) (cadddr f))))
 
 ;;; ------------------------------------------------------------------
+;;; avatar
+
+;; "Pavel Uvarov" → "PU", "Claude" → "C".
+(define (ui-initials name)
+  (let ([words (remp (lambda (w) (string=? w "")) (string-split name #\space))])
+    (if (null? words)
+        "?"
+        (list->string
+         (map (lambda (w) (char-upcase (string-ref w 0)))
+              (if (null? (cdr words))
+                  words
+                  (list (car words) (car (last-pair words)))))))))
+
+;; A person, by name: flags may hold named (the name is written beside
+;; it, so a style may leave it out: (values 0 0)). => (values w h)
+(define-part (ui-avatar-size flags name)
+  (let ([s (round (+ (font-line-height 'ui-small) 7))]) (values s s)))
+
+;; A circle of one color per person, however the name was typed (spaces
+;; around it, capitals), and the initials.
+(define-part (ui-draw-avatar x y w h flags name)
+  (let ([color (let trim ([i 0] [j (string-length name)])
+                 (cond [(and (< i j) (char-whitespace? (string-ref name i)))
+                        (trim (+ i 1) j)]
+                       [(and (< i j)
+                             (char-whitespace? (string-ref name (- j 1))))
+                        (trim i (- j 1))]
+                       [else (app-color (string->symbol
+                                         (string-downcase
+                                          (substring name i j))))]))])
+    (fill-circle (+ x (/ w 2)) (+ y (/ w 2)) (/ w 2) color)
+    (draw-text-centered x y w w (ui-initials name) (readable-on color)
+                        'ui-small)))
+
+;;; ------------------------------------------------------------------
 ;;; progress, tooltip
 
 (define-part (ui-draw-progress x y w h flags frac)
@@ -1967,6 +2067,11 @@
          (fill-round-rect x y w h 5 (alpha 'accent 0.22))]
         [(memq 'pressed flags) (px-fill x y w h 'text)]
         [else (px-ring x y w h 'text)]))
+
+;; The chosen entry or row again, after what is drawn on it: nothing
+;; here; a style that inverts what is chosen does it now (Genera's
+;; inverse video: the text on it must turn too).
+(define-part (ui-draw-highlight-over x y w h flags) (void))
 
 ;; A line across the middle of the box, between a menu's groups.
 (define-part (ui-draw-separator x y w h flags)
@@ -2020,11 +2125,12 @@
     (ui-draw-dropdown x y w h
                       (apply ui-flags ui id
                              (append (if open? '(open) '())
-                                     (ui-opt-flags opts '(set))))
+                                     (ui-opt-flags opts '(set label))))
                       (or (plist-ref opts 'label #f)
                           (if i (car (list-ref choices i)) "")))))
 
-;; flags: open, set (accent border and text), placeholder.
+;; flags: open, set (accent border and text), placeholder, label (it
+;; shows its 'label, not a choice).
 (define-part (ui-draw-dropdown x y w h flags label)
   (let ([lh (font-line-height 'ui)] [hot? (memq 'hover flags)]
         [set? (memq 'set flags)] [s (+ (ui-glyph-size) 2)])
@@ -2118,9 +2224,11 @@
                             (format "~a ~a" (vector-ref ui-month-titles
                                                         (- (cadr cd) 1))
                                     (car cd)))
-          (button 'prev #f (lambda () (move (ui-add-months cursor -1)))
+          (button 'prev (and (theme 'calendar-step-words) "Previous")
+                  (lambda () (move (ui-add-months cursor -1)))
                   'glyph 'chevron-left)
-          (button 'next #f (lambda () (move (ui-add-months cursor 1)))
+          (button 'next (and (theme 'calendar-step-words) "Next")
+                  (lambda () (move (ui-add-months cursor 1)))
                   'glyph 'chevron-right)
           (let* ([g (area 'grid)] [gx (car g)] [gy (cadr g)] [cell (caddr g)])
             (do ([i 0 (+ i 1)]) ((= i 42))
@@ -2143,6 +2251,9 @@
           (button 'clear "Clear" (lambda () (close) (on-select #f))))))))
 
 (define (ui-calendar-cell) (max 28 (round (* (font-line-height 'ui) 1.9))))
+
+;; The month's steps as glyphs, or as the words Previous and Next.
+(theme-default! 'calendar-step-words #f)
 
 (define-part (ui-calendar-size)
   (let* ([w (+ 20 (* 7 (ui-calendar-cell)))]

@@ -766,14 +766,23 @@
 
 ;; A row of the color list: its swatch and its name; flags: selected,
 ;; hover.
+;; The swatch comes last, after a style that inverts the chosen row has:
+;; its own color, whatever the row's.
 (define (settings-draw-color-row x y w h key flags)
   (cond [(memq 'selected flags) (ui-draw-highlight (+ x 4) y (- w 8) h '())]
         [(memq 'hover flags)
          (ui-draw-highlight (+ x 4) y (- w 8) h '(hover))])
-  (fill-round-rect (+ x 12) (+ y (/ (- h 16) 2)) 16 16 4 key)
-  (stroke-round-rect (+ x 12) (+ y (/ (- h 16) 2)) 16 16 4 (alpha 'text 0.25))
   (ui-draw-label (+ x 38) y (- w 46) h
-                 (if (memq 'selected flags) '() '(dim)) (symbol->string key)))
+                 (if (memq 'selected flags) '() '(dim)) (symbol->string key))
+  (when (memq 'selected flags)
+    (ui-draw-highlight-over (+ x 4) y (- w 8) h '()))
+  (fill-round-rect (+ x 12) (+ y (/ (- h 16) 2)) 16 16 4 key)
+  (stroke-round-rect (+ x 12) (+ y (/ (- h 16) 2)) 16 16 4
+                     'settings-swatch-ring))
+
+;; A swatch's ring, which reads on its row, chosen or not: a stipple of ink
+;; and paper where a style inverts the chosen row (Genera).
+(color-default! 'settings-swatch-ring (theme-rule (alpha 'text 0.25)))
 
 (define (settings-draw-big-swatch x y d color)
   (fill-round-rect x y d d 12 color)
@@ -797,7 +806,7 @@
     (ui-draw-surface x ly lw lh '(well))
     ;; for the wheel; the rows sit on top
     (ui-area ui 'color-list x ly lw lh #f)
-    (call-with-clip x (+ ly 4) lw (- lh 8)
+    (ui-call-with-pixel-clip x (+ ly 4) lw (- lh 8)
       (lambda ()
         (let loop ([rs rows] [ry (- (+ ly 6) scroll)])
           (unless (or (null? rs) (> ry (+ ly lh)))
@@ -938,8 +947,10 @@
         (vector-fill-range! colors 0 3 'accent)
         (draw-repl-line (+ x 18) (+ y code-y (* i lh))
                         text colors 999 0 1 cw lh)))
-    (fill-round-rect x y w ph 8 'bg-0)
-    (stroke-round-rect x y w ph 8 'window-border)
+    (if (<= (theme 'corner-radius) 0)   ; square: on whole device pixels
+        (begin (px-fill x y w ph 'bg-0) (px-ring x y w ph 'window-border))
+        (begin (fill-round-rect x y w ph 8 'bg-0)
+               (stroke-round-rect x y w ph 8 'window-border)))
     (call-with-clip x y w ph
       (lambda ()
         (draw-text (+ x 18) (+ y 14)
@@ -1004,11 +1015,14 @@
 ;; A tab in the sidebar: flags selected, hover, focused.
 (define (settings-draw-tab x y w h flags label)
   (let ([selected? (memq 'selected flags)])
-    (cond [selected?
-           (ui-draw-highlight x y w h '())
-           (fill-round-rect x (+ y (/ h 2) -8) 3 16 1.5 'accent)]
+    (cond [selected? (ui-draw-highlight x y w h '())]
           [(memq 'hover flags) (ui-draw-highlight x y w h '(hover))])
     (ui-draw-label (+ x 14) y (- w 20) h (if selected? '() '(dim)) label)
+    (when selected?
+      (ui-draw-highlight-over x y w h '())
+      ;; its mark after that, so a style that inverts the tab keeps it
+      ;; whole (in ink on ink)
+      (fill-round-rect x (+ y (/ h 2) -8) 3 16 1.5 'accent))
     (when (memq 'focused flags) (ui-draw-focus x y w h flags 5))))
 
 (define (settings-sidebar ui st sw h)
@@ -1088,7 +1102,7 @@
          [x (+ sw 28)] [cw (- w x 28)]
          [scroll (settings-st-pane-scroll st)]
          [y (- 20 scroll)]
-         [bottom (call-with-clip (+ sw 1) 0 (- w sw 1) h
+         [bottom (ui-call-with-pixel-clip (+ sw 1) 0 (- w sw 1) h
                    (lambda ()
                      ;; under its widgets: the pointer here shows the
                      ;; pane's bar on hover

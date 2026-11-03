@@ -576,7 +576,8 @@
                                         'accent 'mono-bold)))
                          (caddr row))
                (draw-text (- (+ x w) kind-w -4) (+ ry (/ (- rh small-lh) 2))
-                          (cadr row) 'text-faint 'ui-small)))))
+                          (cadr row) 'text-faint 'ui-small)))
+         (when selected? (ui-draw-highlight-over (+ x 4) ry (- w 8) rh '()))))
      rows (iota count))
     ;; where the rows shown are in the whole list, on the style's side, no
     ;; wider than the names' inset (Interlisp's bars are 24)
