@@ -13,8 +13,8 @@
 ;;; new one. The window keeps the flock and its rules, as plain data:
 ;;; (window-ref win 'flock) => (#<boid at 451.2 87.0 moving 1.6 -3.1> ...)
 ;;; (window-set! win 'rules (boids-random-rules))
-;;; R: random rules · D: the defaults · S: scatter · H: the rules window
-;;; · Space: pause
+;;; R: random rules · D: the defaults · S: scatter · Space: pause
+;;; H: the rules window, beside the flock (it closes with the flock)
 
 ;;; ------------------------------------------------------------------ vectors
 
@@ -293,7 +293,7 @@
 ;; often the window ticks.
 (define boids-step-ms 15)
 
-(define boids-count 150)
+(define boids-count 150)   ; how many a new window starts with
 
 (define (boids-bar-height) (max 26 (round (+ (font-line-height 'ui-small) 13))))
 
@@ -518,8 +518,23 @@
                 (ui-handlers ui 'key (lambda (win key mods)
                                        (window-call flock-win 'key key mods)
                                        #t))
-                ;; the kit's tick, then: a change from elsewhere shows
+                ;; the kit's tick, then: a change from elsewhere shows, and
+                ;; fonts grown in Settings get room for the rows
                 (list 'tick (lambda (win)
                               (ui-tick ui win)
+                              (let-values ([(w h) (boids-rules-size)])
+                                (boids-grow-to! win w h))
                               (unless (equal? shown (now-shown))
                                 (invalidate! win))))))))))
+
+;; Grows win's content to at least w × h, moved left or up as far as it
+;; takes to stay on the desktop. It never shrinks: a size set by hand
+;; holds.
+(define (boids-grow-to! win w h)
+  (let-values ([(cw ch) (window-content-size win)])
+    (when (and (or (> w cw) (> h ch)) (not (shaded? win)))
+      (resize-window! win (max w cw) (max h ch))
+      (let-values ([(dx dy dw dh) (desktop-rect)])
+        (move-window! win
+          (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
+          (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))))

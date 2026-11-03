@@ -1060,6 +1060,21 @@
            (and (not (rules-win))
                 (begin (window-call win 'key #\h '())
                        (rules-win) #t))))
+  ;; as when fonts grow in Settings: the rows ask for more room
+  (check "Boids: the rules window grows when its rows need more, on screen"
+         (let-values ([(w h) (window-content-size (rules-win))]
+                      [(dx dy dw dh) (desktop-rect)])
+           (define (grown-by! dw)
+             (fluid-let ([boids-rules-size (lambda () (values (+ w dw) h))])
+               (steps 1))
+             (let-values ([(w2 h2) (window-content-size (rules-win))])
+               (and (= w2 (+ w dw)) (= h2 h))))
+           (and (grown-by! 40)
+                (= (window-x (rules-win))
+                   (+ (window-x win) (window-w win) 12))   ; it fit there
+                (grown-by! 400)
+                (= (+ (window-x (rules-win)) (window-w (rules-win)))
+                   (+ dx dw)))))                           ; it moved left
   (check "Boids: closing the flock closes its rules window"
          (begin (close-window! win) (not (rules-win)))))
 

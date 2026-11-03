@@ -160,6 +160,9 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (tasks-tree)                               ; what waits for what, nested
 ; in a task's description, Ctrl+E opens it in a window of its own
 (tasks-list 'status 'doing 'assignee "Pavel")
+(boids)                                    ; a flock, its rules beside it
+(window-set! (find-window 'boids) 'rules (boids-random-rules))
+(define (boid-sees? b other fov) #t)       ; eyes all around; (reload!) undoes
 (define (draw-wallpaper w h) (fill-gradient 0 0 w h #x102030 #x301020))
 ; every window looks focused; (reload!) undoes it
 (define (draw-window win) (draw-window* win #t))
@@ -219,8 +222,8 @@ styles and palettes with the others, and the saved look may name them.
 ## Architecture
 
 ```
-apps/        ordinary procedures: repl  clock  life  sketch  monitor
-             settings  tasks
+apps/        ordinary procedures: repl  clock  life  boids  sketch
+             monitor  settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
 palettes/    named colors: catppuccin  genera  gruvbox  interlisp  nord
              paper  tokyo-night
@@ -596,8 +599,11 @@ This tests the drawing layer piece by piece: the measuring context,
 text cut to fit measuring no more of a long text than its width could
 show, cached shadows against the stacked ones, pixmaps, Life's
 generations against a plain reference (a step allocates nothing), its
-grid against one rectangle per cell, and the invalidation calls; and,
-with no window, the edit kit (insertion, erasing, caret moves, words,
+grid against one rectangle per cell, Boids' flocking (the Niva
+version's tests, its first step to the last digit, the speed limits, a
+flock carried over a reload) and its rules window (where it opens, its
+sliders, buttons and keys), and the invalidation calls; and, with no
+window, the edit kit (insertion, erasing, caret moves, words,
 selection, pages, the most characters a text may hold, what an edit
 changed, wrapping against a plain rule with even and uneven widths and
 against breaking a character at a time, the rows a layout keeps and
@@ -703,6 +709,12 @@ Life windows animate at 200%.
 - American spelling: color, gray, center.
 
 ## Credits
+
+Boids (`apps/boids.ss`) is ported from Eduardo Cavazos's
+[Boids in Niva](https://github.com/dharmatech/boids-niva) (MIT). Its two
+blocker rules, clear view and back off, follow Gary William Flake's *The
+Computational Beauty of Nature* (MIT Press, 1998), written from his
+description.
 
 The CADR's 5X5 font in `kits/px.ss` (the glyphs of `px-5x5`) is MIT's,
 decoded from System 99's `fonts/5x5.qfasl`:
