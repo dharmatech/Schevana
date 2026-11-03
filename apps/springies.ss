@@ -7,6 +7,12 @@
 ;;;
 ;;; The simulation is pure: the particles are a vector, and a step makes a
 ;;; new one. The world is y-up, as XSpringies' is; only drawing flips it.
+;;; The window keeps the model, its particles, springs and settings, as
+;;; plain data:
+;;; (window-ref win 'particles) => #(#<particle at 214.3 260.0 ...> ...)
+;;; (springies-set! win 'time-step 0.002)
+;;; 1 2 3: ball, tire, snake · R: start over · K: kick · G: gravity
+;;; Space: pause
 
 ;;; ------------------------------------------------------------------ points
 
@@ -164,13 +170,19 @@
 ;; How a model runs, as a plist: gravity's pull, down, in pixels a second
 ;; squared (980: a pixel a centimeter), whether it is on, the time a step
 ;; takes, in seconds, and how many steps a frame makes. A frame comes
-;; about 60 times a second, so 4 steps of 1/240 s keep the time real.
-(define springies-default-settings
-  '(gravity 980.0 gravity? #t time-step 0.004 steps 4))
+;; about 60 times a second, so 4 steps of 1/240 s keep the time real:
+;; (gravity 980.0 gravity? #t time-step 0.004 steps 4)
 
 (define (springies-setting settings key)
   (let ([v (plist-ref settings key 'none)])
     (if (eq? v 'none) (errorf 'springies-setting "no setting ~s" key) v)))
+
+;; Settings with key's value v, the others as they were, in their order.
+(define (springies-set-setting settings key v)
+  (cond [(null? settings) (errorf 'springies-set-setting "no setting ~s" key)]
+        [(eq? (car settings) key) (cons* key v (cddr settings))]
+        [else (cons* (car settings) (cadr settings)
+                     (springies-set-setting (cddr settings) key v))]))
 
 (define (springies-gravity settings)
   (if (springies-setting settings 'gravity?)
@@ -227,10 +239,42 @@
                                        (vector-ref particles b)))))))
        pairs))
 
-;; A ball: two rings of n particles, the inner half the outer's size. Each
-;; particle is joined to its neighbors on its ring and to the two nearest
-;; it on the other: the band between the rings is braced quads, so it
-;; holds its shape. Thrown up and to the right, spinning.
+;; The pairs that brace a ladder of k rungs, its rails the particles from
+;; index a and from index b: each joined to the next along its rail and
+;; to the one across its rung, and two braces crossing each square
+;; between rungs, so it holds its shape. Closed, the last rung's square
+;; reaches back to the first: two rings make a band.
+(define (springies-ladder a b k closed?)
+  (define (next i) (mod (+ i 1) k))
+  (apply append
+         (map (lambda (i)
+                (cons (list (+ a i) (+ b i))   ; the rung
+                      (if (or closed? (< (+ i 1) k))
+                          (list (list (+ a i) (+ a (next i)))
+                                (list (+ b i) (+ b (next i)))
+                                (list (+ a i) (+ b (next i)))
+                                (list (+ a (next i)) (+ b i)))
+                          '())))
+              (iota k))))
+
+;; A velocity of up to speed along each axis, either way.
+(define (springies-random-velocity speed)
+  (make-pt (- (random (* 2.0 speed)) speed) (- (random (* 2.0 speed)) speed)))
+
+;; The particles kicked: all pushed one random way, and each a little its
+;; own way too, so the body flies off wobbling.
+(define (springies-kick particles)
+  (let ([push (springies-random-velocity 400.0)])
+    (vector-map (lambda (p)
+                  (make-particle (particle-position p)
+                                 (pt+ (particle-velocity p)
+                                      (pt+ push
+                                           (springies-random-velocity 100.0)))
+                                 (particle-mass p) (particle-elasticity p)))
+                particles)))
+
+;; A ball: a band between two rings of 12, the inner half the outer's
+;; size. Stiff and bouncy, thrown up and to the right, spinning.
 (define (springies-ball w h)
   (let* ([n 12] [r (/ (min w h) 7.0)] [c (make-pt (* w 0.3) (* h 0.5))]
          [particles
@@ -238,21 +282,64 @@
            (springies-body (append (springies-ring c r n)
                                    (springies-ring c (/ r 2.0) n))
                            c (make-pt 150.0 250.0) 2.0 1.0 0.9))])
-    (define (outer i) (mod i n))
-    (define (inner i) (+ n (mod i n)))
     (make-springies-model
      particles
-     (springies-springs particles
-                        (apply append
-                               (map (lambda (i)
-                                      (list (list (outer i) (outer (+ i 1)))
-                                            (list (inner i) (inner (+ i 1)))
-                                            (list (outer i) (inner i))
-                                            (list (outer i) (inner (+ i 1)))
-                                            (list (outer (+ i 1)) (inner i))))
-                                    (iota n)))
-                        10000.0 12.0)
-     springies-default-settings)))
+     (springies-springs particles (springies-ladder 0 n n #t) 10000.0 12.0)
+     '(gravity 980.0 gravity? #t time-step 0.004 steps 4))))
+
+;; A tire: its tread a band between two rings of 16, and a heavy hub at
+;; the center on a spoke to each particle of the inner ring. The tread is
+;; softer than the spokes and grips (a bounce keeps half the speed); it is
+;; thick, the inner ring 0.6 the outer's size: at 0.75 the hub's landing
+;; folds it. Dropped rolling to the right: spinning as fast as it moves.
+(define (springies-tire w h)
+  (let* ([n 16] [r (/ (min w h) 6.0)] [c (make-pt (* w 0.2) (* h 0.6))]
+         [v (make-pt 200.0 0.0)] [spin (/ -200.0 r)]
+         [particles
+          (list->vector
+           (append (springies-body (append (springies-ring c r n)
+                                           (springies-ring c (* r 0.6) n))
+                                   c v spin 1.0 0.5)
+                   (springies-body (list c) c v spin 8.0 0.5)))])
+    (make-springies-model
+     particles
+     (append (springies-springs particles (springies-ladder 0 n n #t)
+                                8000.0 10.0)
+             (springies-springs particles
+                                (map (lambda (i) (list (* 2 n) (+ n i)))
+                                     (iota n))
+                                20000.0 15.0))
+     '(gravity 980.0 gravity? #t time-step 0.003 steps 5))))
+
+;; A snake: a ladder of 16 rungs, its body soft enough to bend. No
+;; gravity, and a kick to set it going, so it floats and writhes; a bounce
+;; keeps all its speed.
+(define (springies-snake w h)
+  (let* ([k 16] [gap (/ (min w h) 20.0)]
+         [x0 (- (/ w 2.0) (* gap (- k 1) 0.5))] [y (/ h 2.0)]
+         [rail (lambda (y)
+                 (map (lambda (i) (make-pt (+ x0 (* gap i)) y)) (iota k)))]
+         [particles
+          (springies-kick
+           (list->vector
+            (springies-body (append (rail (+ y (/ gap 2.0)))
+                                    (rail (- y (/ gap 2.0))))
+                            pt-zero pt-zero 0.0 1.0 1.0)))])
+    (make-springies-model
+     particles
+     (springies-springs particles (springies-ladder 0 k k #f) 600.0 1.0)
+     '(gravity 980.0 gravity? #f time-step 0.005 steps 4))))
+
+;; The models by name, in the order of their keys: 1, 2 and 3.
+(define springies-models '(ball tire snake))
+
+;; The model named name, made to fit a w × h box.
+(define (springies-build name w h)
+  (case name
+    [(ball) (springies-ball w h)]
+    [(tire) (springies-tire w h)]
+    [(snake) (springies-snake w h)]
+    [else (errorf 'springies-build "no model ~s" name)]))
 
 ;;; ------------------------------------------------------------------ the app
 
@@ -275,22 +362,99 @@
                        (fill-circle x y (particle-radius p) 'yellow)))
                    particles))
 
+(define (springies-bar-height)
+  (max 26 (round (+ (font-line-height 'ui-small) 13))))
+
+;; The status line under the box.
+(define (springies-status-text model particles springs gravity? frame-ms
+                               running?)
+  (format "~a: ~a masses, ~a springs~a   ~a   1 2 3 model · r reset · \
+           k kick · g gravity · space pause"
+          (string-titlecase (symbol->string model))
+          (vector-length particles) (length springs)
+          (if gravity? "" ", no gravity")
+          (if running? (format "~,1f ms a frame" frame-ms) "paused")))
+
+;; The box in win: its content above the status line.
+(define (springies-box-size win)
+  (let-values ([(w h) (window-content-size win)])
+    (values w (max 1 (- h (springies-bar-height))))))
+
+;; What the keys do to the model in win. Choosing a model brings its
+;; settings; Reset starts the model over and keeps them.
+(define (springies-choose! win name)
+  (let-values ([(w h) (springies-box-size win)])
+    (let ([model (springies-build name w h)])
+      (window-set! win 'model name)
+      (window-set! win 'particles (springies-model-particles model))
+      (window-set! win 'springs (springies-model-springs model))
+      (window-set! win 'settings (springies-model-settings model)))))
+
+(define (springies-reset! win)
+  (let-values ([(w h) (springies-box-size win)])
+    (let ([model (springies-build (window-ref win 'model) w h)])
+      (window-set! win 'particles (springies-model-particles model))
+      (window-set! win 'springs (springies-model-springs model)))))
+
+(define (springies-kick! win)
+  (window-set! win 'particles (springies-kick (window-ref win 'particles))))
+
+(define (springies-set! win key v)
+  (window-set! win 'settings
+    (springies-set-setting (window-ref win 'settings) key v)))
+
+(define (springies-toggle-gravity! win)
+  (springies-set! win 'gravity?
+    (not (springies-setting (window-ref win 'settings) 'gravity?))))
+
+(define (springies-toggle-running! win)
+  (window-set! win 'running? (not (window-ref win 'running?))))
+
 (define-app (springies) "Springies"
-  (let* ([w 760] [h 520] [model (springies-ball w h)] [last-step 0])
-    (open-window "Springies"
-      'size (cons w h)
-      'particles (springies-model-particles model)
-      'springs (springies-model-springs model)
-      'settings (springies-model-settings model)
-      'tick (lambda (win)
-              (when (>= (- (now-ms) last-step) springies-step-ms)
-                (set! last-step (now-ms))
-                (let-values ([(w h) (window-content-size win)])
-                  (window-set! win 'particles
-                    (springies-frame (window-ref win 'particles)
-                                     (window-ref win 'springs)
-                                     (window-ref win 'settings) w h)))))
-      'draw (lambda (win w h)
-              (fill-rect 0 0 w h 'bg-0)
-              (draw-springies (window-ref win 'particles)
-                              (window-ref win 'springs) h)))))
+  (let ([w 760] [h 520] [last-step 0]
+        [frame-ms 0.0])   ; a frame's time, smoothed
+    (define (frame! win)
+      (let-values ([(w h) (springies-box-size win)])
+        (let ([t0 (current-time 'time-monotonic)])
+          (window-set! win 'particles
+            (springies-frame (window-ref win 'particles)
+                             (window-ref win 'springs)
+                             (window-ref win 'settings) w h))
+          (set! frame-ms (+ (* frame-ms 0.95) (* (ms-since t0) 0.05))))))
+    (let ([win
+           (open-window "Springies"
+             'size (cons w (+ h (springies-bar-height)))
+             'running? #t
+             'tick (lambda (win)
+                     (when (and (window-ref win 'running?)
+                                (>= (- (now-ms) last-step) springies-step-ms))
+                       (set! last-step (now-ms))
+                       (frame! win)))
+             'draw (lambda (win w h)
+                     (let ([bar (springies-bar-height)]
+                           [particles (window-ref win 'particles)]
+                           [springs (window-ref win 'springs)])
+                       (fill-rect 0 0 w (- h bar) 'bg-0)
+                       (draw-springies particles springs (- h bar))
+                       (fill-rect 0 (- h bar) w bar 'bg-1)
+                       (draw-text 10 (+ (- h bar) 5)
+                                  (springies-status-text
+                                   (window-ref win 'model) particles springs
+                                   (springies-setting
+                                    (window-ref win 'settings) 'gravity?)
+                                   frame-ms (window-ref win 'running?))
+                                  'text-faint 'ui-small)))
+             'key (lambda (win key mods)
+                    (case key
+                      [(#\1 #\2 #\3)
+                       (springies-choose! win
+                         (list-ref springies-models
+                                   (- (char->integer key)
+                                      (char->integer #\1))))]
+                      [(#\r) (springies-reset! win)]
+                      [(#\k) (springies-kick! win)]
+                      [(#\g) (springies-toggle-gravity! win)]
+                      [(#\space) (springies-toggle-running! win)])
+                    (invalidate! win)))])
+      (springies-choose! win 'ball)
+      win)))

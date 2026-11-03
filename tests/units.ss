@@ -1280,10 +1280,21 @@
               (test-pt-close? (particle-velocity in) -3.0 1.0 0.0)
               (eq? (particle-bounce free 100.0 100.0) free))))
 
-(check "Springies: the ball's springs join particles it has, each at rest"
-       (let* ([m (springies-ball 760.0 520.0)]
-              [ps (springies-model-particles m)])
-         (for-all (lambda (s)
+(define (test-models) (map (lambda (name) (springies-build name 760.0 520.0))
+                           springies-models))
+
+;; Each pair once: two springs between the same particles would be one
+;; spring twice as stiff.
+(check "Springies: each model's springs join particles it has, each pair \
+        once, each at rest"
+       (for-all
+        (lambda (m)
+          (let ([ps (springies-model-particles m)]
+                [ss (springies-model-springs m)])
+            (define (ends s) (list (min (spring-a s) (spring-b s))
+                                   (max (spring-a s) (spring-b s))))
+            (and (for-all
+                  (lambda (s)
                     (and (< -1 (spring-a s) (vector-length ps))
                          (< -1 (spring-b s) (vector-length ps))
                          (not (= (spring-a s) (spring-b s)))
@@ -1292,23 +1303,120 @@
                                            (vector-ref ps (spring-a s)))
                                           (particle-position
                                            (vector-ref ps (spring-b s))))))))
-                  (springies-model-springs m))))
+                  ss)
+                 (= (length ss)
+                    (length (fold-left (lambda (seen s)
+                                         (if (member (ends s) seen)
+                                             seen
+                                             (cons (ends s) seen)))
+                                       '() ss))))))
+        (test-models)))
 
-;; 5 seconds at 60 frames a second.
-(check "Springies: the ball bounces about and stays in its box, whole"
-       (let ([m (springies-ball 760.0 520.0)])
-         (let loop ([ps (springies-model-particles m)] [i 0])
-           (if (< i 300)
-               (loop (springies-frame ps (springies-model-springs m)
-                                      (springies-model-settings m)
-                                      760.0 520.0)
-                     (+ i 1))
-               (for-all (lambda (p)
-                          (let ([q (particle-position p)]
-                                [r (particle-radius p)])
-                            (and (<= r (pt-x q) (- 760.0 r))
-                                 (<= r (pt-y q) (- 520.0 r)))))
-                        (vector->list ps))))))
+;; 5 seconds at 60 frames a second; the snake kicked again halfway. Whole:
+;; no spring stretched or squeezed by half.
+(check "Springies: each model moves about and stays in its box, whole"
+       (for-all
+        (lambda (m)
+          (let ([ss (springies-model-springs m)])
+            (let loop ([ps (springies-model-particles m)] [i 0])
+              (if (< i 300)
+                  (loop (springies-frame (if (= i 150) (springies-kick ps) ps)
+                                         ss (springies-model-settings m)
+                                         760.0 520.0)
+                        (+ i 1))
+                  (and (not (for-all eq? (vector->list ps)
+                                     (vector->list
+                                      (springies-model-particles m))))
+                       (for-all (lambda (p)
+                                  (let ([q (particle-position p)]
+                                        [r (particle-radius p)])
+                                    (and (<= r (pt-x q) (- 760.0 r))
+                                         (<= r (pt-y q) (- 520.0 r)))))
+                                (vector->list ps))
+                       (for-all
+                        (lambda (s)
+                          (< 0.5
+                             (/ (pt-norm
+                                 (pt- (particle-position
+                                       (vector-ref ps (spring-a s)))
+                                      (particle-position
+                                       (vector-ref ps (spring-b s)))))
+                                (spring-rest-length s))
+                             1.5))
+                        ss))))))
+        (test-models)))
+
+(check "Springies: only the snake starts without gravity"
+       (equal? (map (lambda (m)
+                      (springies-setting (springies-model-settings m)
+                                         'gravity?))
+                    (test-models))
+               '(#t #t #f)))
+
+(check "Springies: a kick moves every particle, from where it was"
+       (let* ([ps (springies-model-particles (springies-ball 760.0 520.0))]
+              [kicked (springies-kick ps)])
+         (for-all (lambda (p q)
+                    (and (eq? (particle-position p) (particle-position q))
+                         (not (equal? (pt-x (particle-velocity p))
+                                      (pt-x (particle-velocity q))))))
+                  (vector->list ps) (vector->list kicked))))
+
+(check "Springies: setting a setting keeps the others, and their order"
+       (let* ([settings '(gravity 980.0 gravity? #t time-step 0.004 steps 4)]
+              [set (springies-set-setting settings 'time-step 0.002)])
+         (and (= (springies-setting set 'time-step) 0.002)
+              (equal? (plist-keys set) (plist-keys settings))
+              (= (springies-setting set 'steps) 4)
+              (raises? (lambda () (springies-set-setting settings 'drag 1.0)))
+              (raises? (lambda () (springies-setting settings 'drag))))))
+
+;; The keys, through the window's own handler. A clock moved a second on
+;; past the last such tick lets a tick step, however fast the checks run.
+(let ([win (springies)] [later 0])
+  (define (key! k) (window-call win 'key k '()))
+  (define (particles) (window-ref win 'particles))
+  (define (setting key) (springies-setting (window-ref win 'settings) key))
+  (define (tick-later!)
+    (set! later (+ later 1000))
+    (fluid-let ([now-ms (let ([t (+ (now-ms) later)]) (lambda () t))])
+      (steps 1)))
+  (check "Springies: it opens on the ball, running"
+         (and (eq? (window-ref win 'model) 'ball)
+              (window-ref win 'running?)))
+  (check "Springies: 1, 2 and 3 choose the ball, the tire and the snake, \
+          each with its settings"
+         (begin
+           (key! #\3)
+           (and (eq? (window-ref win 'model) 'snake)
+                (not (setting 'gravity?))
+                (begin (key! #\2) (eq? (window-ref win 'model) 'tire))
+                (= (setting 'time-step) 0.003)
+                (begin (key! #\1) (eq? (window-ref win 'model) 'ball)))))
+  (check "Springies: G turns gravity off and on; R starts over, keeping it"
+         (begin
+           (key! #\g)
+           (tick-later!)
+           (let ([moved (particles)])
+             (key! #\r)
+             (and (not (setting 'gravity?))
+                  (not (eq? (particles) moved))
+                  (eq? (window-ref win 'model) 'ball)
+                  (begin (key! #\g) (setting 'gravity?))))))
+  (check "Springies: K kicks"
+         (let ([before (particles)])
+           (key! #\k)
+           (not (eq? (particles) before))))
+  (check "Springies: Space holds the particles still, and again sets them \
+          going"
+         (let ([before (begin (key! #\space) (particles))])
+           (tick-later!)
+           (let ([held? (eq? (particles) before)])
+             (key! #\space)
+             (tick-later!)
+             (and held? (window-ref win 'running?)
+                  (not (eq? (particles) before))))))
+  (close-window! win))
 
 (check "Springies: a frame leaves the particles it steps as they were"
        (let* ([m (springies-ball 760.0 520.0)]
