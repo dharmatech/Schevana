@@ -223,9 +223,10 @@ apps/        ordinary procedures: repl  clock  life  sketch  monitor
              settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
 palettes/    named colors: catppuccin  genera  gruvbox  interlisp  nord
-             paper  tokyo-night
+             open-look  paper  tokyo-night
 styles/      styles: cadr  cons  curses  draft  fold  genera  halo
-             interlisp  lambda  mac  reticle  slab  spine  windows
+             interlisp  lambda  mac  open-look  reticle  slab  spine
+             windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows
@@ -233,6 +234,8 @@ kits/        color: hue, saturation and lightness; complete: a completion
              list beside a caret (matching, keys, clicks, placement);
              edit: text editing, pure, and a text's rows, computed only
              as far as they are shown; fill: gradient and glow fills;
+             olgl: OPEN LOOK's glyph fonts, the pictures OLGX draws its
+             fixed-size parts from, at 10, 12, 14 and 19 point;
              pixmap: pixel buffers drawn scaled up; px: pixel art on
              whole device pixels (rectangles, bevels, small pictures,
              text); theme: which layer gives a setting, what a palette
@@ -475,6 +478,29 @@ Decisions worth keeping in mind for the real design:
   buttons margin choices, and its 3-pixel scroll bar under the mouse.
   Each brings the palette of the same name and its wallpaper (the
   `wallpaper` theme key).
+  OPEN LOOK (Sun, 1988) as OpenWindows drew it: olwm's frames through
+  OLGX, from XView 3.2's sources on the X11R6 contrib tape, under Sun's
+  notice (see Credits), with Sun's Functional Specification of 1989
+  where the code is silent. A window is the window color in a 2-pixel
+  outline, 3 while it has the focus; its header holds the window button,
+  which closes it to the taskbar, and the title, bold, centered right of
+  it; an L-shaped resize corner at each corner is the only place it
+  resizes from. The focus is a band across the header, of ink in 2D and
+  recessed in 3D (`open-look-depth`), or olwm's two lines
+  (`open-look-focus`). A window opened with `'pop-up #t` has a pushpin
+  instead of the button, pinned in: pulling it out dismisses the window,
+  and a pop-up keeps its size, as XView's do. One with a `'footer` (a
+  string, or `(left . right)`) shows it under the pane in the title's
+  font. Everything comes in OPEN LOOK's four sizes, 10, 12, 14 and 19
+  point, the nearest the text size: OLGX's glyph fonts (`kits/olgl.ss`)
+  drawn pixel for pixel, olwm's numbers, and the 3D shades OLGX takes
+  from the window color (`open-look-window`): BG2 90 % of its value,
+  BG3 50 %, the highlight 120 %. Rendered headless where olwm's own
+  screenshots have their frames, at every size in 2D and 3D, its frames
+  are olwm's to the pixel but for three pixels at 14 and 19 point where
+  olwm's corner shows the desktop through. Its palette is OpenWindows'
+  #cccccc and its workspace's #40a0c0; it asks for Lucida Sans,
+  OpenWindows' face, and takes the sans where that is not installed.
   Our own styles choose their feel where it suits them: Fold folds a
   window up to its title on a double click, Lambda rolls it into its tab
   on the wheel, Halo and Reticle show scroll bars under the pointer,
@@ -729,6 +755,39 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The OPEN LOOK style's glyphs in `kits/olgl.ss` are Sun's glyph fonts,
+`olgl10/12/14/19.bdf` from the X11R6 contrib tape, under their notice:
+
+Copyright 1989 by Sun Microsystems, Inc. Mountain View, CA. Permission
+to use, copy, modify, and distribute this software and its documentation
+for any purpose and without fee is hereby granted, provided that the
+above copyright notices appear in all copies and that both those
+copyright notices and this permission notice appear in supporting
+documentation, and that the name of Sun Microsystems not be used in
+advertising or publicity pertaining to distribution of the software
+without specific, written prior permission. Sun Microsystems make no
+representations about the suitability of this software for any purpose.
+It is provided "as is" without express or implied warranty. SUN
+MICROSYSTEMS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO
+EVENT SHALL SUN MICROSYSTEMS BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF
+USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+Its shades and frame in `styles/open-look.ss` are translated from OLGX
+and olwm (XView 3.2), whose notice asks for these words:
+
+(c) Copyright 1989, 1990, 1991 Sun Microsystems, Inc. Sun design patents
+pending in the U.S. and foreign countries. OPEN LOOK is a trademark of
+USL. Used by written permission of the owners.
+
+(c) Copyright Bigelow & Holmes 1986, 1985. Lucida is a registered
+trademark of Bigelow & Holmes. Permission to use the Lucida trademark is
+hereby granted only in association with the images and fonts described
+in this file.
 
 ## Known gaps and open questions
 

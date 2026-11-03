@@ -5392,6 +5392,83 @@
                  (steps 1)
                  (not focus)))))))
 
+;;; OPEN LOOK: olwm's frame, OLGX's shades and glyphs
+
+(check "OLGX's shades of the window color: #cccccc's BG2, BG3 and \
+        highlight are #b7b7b7, #666666 and #f4f4f4, the workspace's \
+        #3a8fac, #204f5f and #4dc0e6, white's highlight white"
+       (let ([of (lambda (c) (map (lambda (k) (open-look-shade c k))
+                                  '(bg2 bg3 highlight)))])
+         (and (equal? (of #xcccccc) '(#xb7b7b7 #x666666 #xf4f4f4))
+              (equal? (of #x40a0c0) '(#x3a8fac #x204f5f #x4dc0e6))
+              (equal? (of #xffffff) '(#xe5e5e5 #x7f7f7f #xffffff)))))
+
+(check "the glyph kit has OLGX's four fonts: resize corners 10, 11, 12 and \
+        14 square, the window button 14, 16, 18 and 22 wide, the pushpin \
+        two sizes, 10's as 12's and 14's as 19's"
+       (let ([wh (lambda (size name)
+                   (let ([g (olgl-glyph size name)]) (list (car g) (cadr g))))])
+         (and (equal? (map (lambda (s) (wh s 'ul-resize-outline))
+                           '(10 12 14 19))
+                      '((10 10) (11 11) (12 12) (14 14)))
+              (equal? (map (lambda (s) (car (wh s 'abbrev-menu-button)))
+                           '(10 12 14 19))
+                      '(14 16 18 22))
+              (equal? (olgl-glyph 10 'menu-pin-out)
+                      (olgl-glyph 12 'menu-pin-out))
+              (equal? (olgl-glyph 14 'menu-pin-in) (olgl-glyph 19 'menu-pin-in))
+              (not (equal? (olgl-glyph 12 'menu-pin-in)
+                           (olgl-glyph 14 'menu-pin-in)))
+              (not (olgl-glyph 12 'no-such-glyph))
+              (equal? (map olgl-size '(9 12 13 15 20)) '(10 12 12 14 19)))))
+
+(check "open-look's frame is olwm's at each size: arms of 5, 5, 6 and 6, \
+        23, 25, 29 and 35 above the pane, a footer's 16, 18, 21 and 27 more \
+        below"
+       (begin
+         (set-style! 'open-look)
+         (let ([r (map (lambda (size)
+                         (set-theme! 'ui-font-size size)
+                         (let ([w (open-window "F" 'size '(300 . 200)
+                                               'footer "Left")])
+                           (let-values ([(l t r b) (frame-insets w)])
+                             (close-window! w)
+                             (list size (style-insets 'open-look) b))))
+                       '(10 12 14 19))])
+           (reset-style!)
+           (set-style! 'mac)
+           (equal? r '((10 (5 23 5 5) 21) (12 (5 25 5 5) 23)
+                       (14 (6 29 6 6) 27) (19 (6 35 6 6) 33))))))
+
+(check "a focused open-look window has olwm's 3-pixel outline and its \
+        header's recessed BG2 band in 3D, a band of ink in 2D; an \
+        unfocused one, 2 pixels and BG1"
+       (let ([probe
+              (lambda (depth focus?)
+                (set-style! 'open-look)
+                (set-theme! 'open-look-depth depth)
+                (let ([w (open-window "Probe" 'size '(300 . 200)
+                                      'pos '(100 . 100))]
+                      [other (open-window "Other" 'size '(100 . 80)
+                                          'pos '(600 . 400))])
+                  (focus-window! (if focus? w other))
+                  (steps 2)
+                  (let ([px (lambda (dx dy)
+                              (canvas-pixel (+ (window-x w) dx)
+                                            (+ (window-y w) dy)))])
+                    (let ([r (list (= (px 2 60) (color->pixel 'text))
+                                   (px 200 12))])
+                      (close-window! w)
+                      (close-window! other)
+                      (steps 1)
+                      r))))])
+         (let ([r (list (probe '3d #t) (probe '2d #t) (probe '3d #f))])
+           (reset-style!)
+           (set-style! 'mac)
+           (equal? r (list (list #t (color->pixel #xb7b7b7))
+                           (list #t (color->pixel #x000000))
+                           (list #f (color->pixel #xcccccc)))))))
+
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)
             (member "src/wm.ss" *schevana-sources*)
