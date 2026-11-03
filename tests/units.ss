@@ -1418,6 +1418,78 @@
                   (not (eq? (particles) before))))))
   (close-window! win))
 
+(check "Springies: a tether pulls its particle to its point, damped against \
+        the particle's speed; among springs, it pulls that one alone"
+       (let* ([ps (vector (test-particle 10.0 20.0 0.0 0.0 1.0 1.0)
+                          (test-particle 50.0 50.0 2.0 -1.0 1.0 1.0))]
+              [t (make-tether 1 (make-pt 60.0 40.0) 100.0 5.0)]
+              [forces (springies-forces ps (list t))])
+         (and (test-pt-close? (tether-force t ps) 990.0 -995.0 0.0)
+              (eq? (vector-ref forces 0) pt-zero)
+              (test-pt-close? (vector-ref forces 1) 990.0 -995.0 0.0))))
+
+(check "Springies: the particle nearest a point, within reach"
+       (let ([ps (vector (test-particle 0.0 0.0 0.0 0.0 1.0 1.0)
+                         (test-particle 30.0 0.0 0.0 0.0 1.0 1.0)
+                         (test-particle 60.0 0.0 0.0 0.0 1.0 1.0))])
+         (and (= (springies-nearest ps (make-pt 40.0 5.0) 50.0) 1)
+              (= (springies-nearest ps (make-pt 100.0 0.0) 50.0) 2)
+              (not (springies-nearest ps (make-pt 200.0 0.0) 50.0)))))
+
+;; The mouse, through the window's handlers, at a particle's place on the
+;; screen: y flipped.
+(let ([win (springies)] [later 0])
+  (define (particle i) (vector-ref (window-ref win 'particles) i))
+  (define (screen-of i)
+    (let-values ([(w h) (springies-box-size win)])
+      (let ([q (particle-position (particle i))])
+        (values (pt-x q) (- h (pt-y q))))))
+  (define (tick-later!)
+    (set! later (+ later 1000))
+    (fluid-let ([now-ms (let ([t (+ (now-ms) later)]) (lambda () t))])
+      (steps 1)))
+  (check "Springies: a press near a particle holds it on the pointer's \
+          tether, one far from all holds none"
+         (let-values ([(x y) (screen-of 5)])
+           (window-call win 'mouse-down (+ x 4) (- y 3) 'left 1)
+           (let ([t (window-ref win 'tether)])
+             (window-call win 'mouse-up (+ x 4) (- y 3) 'left)
+             (and t (= (tether-particle t) 5)
+                  (test-pt-close? (tether-point t)
+                                  (+ (pt-x (particle-position (particle 5))) 4)
+                                  (+ (pt-y (particle-position (particle 5))) 3)
+                                  1e-9)
+                  (not (window-ref win 'tether))
+                  (begin (window-call win 'mouse-down 1 1 'left 1)
+                         (not (window-ref win 'tether)))))))
+  ;; held 100 pixels up, against two frames let be
+  (check "Springies: the held particle follows the pointer, until let go"
+         (let*-values ([(x y) (screen-of 5)] [(w h) (springies-box-size win)])
+           (window-call win 'mouse-down x y 'left 1)
+           (window-call win 'mouse-move x (- y 100))
+           (let* ([frame (lambda (ps)
+                           (springies-frame ps (window-ref win 'springs)
+                                            (window-ref win 'settings) w h))]
+                  [let-be (vector-ref (frame (frame (window-ref win
+                                                                'particles)))
+                                      5)])
+             (tick-later!)
+             (tick-later!)
+             (let ([pulled (> (pt-y (particle-position (particle 5)))
+                              (+ (pt-y (particle-position let-be)) 1.0))])
+               (window-call win 'mouse-up x (- y 100) 'left)
+               (and pulled (not (window-ref win 'tether)))))))
+  (check "Springies: choosing a model, or starting over, lets go"
+         (let-values ([(x y) (screen-of 5)])
+           (window-call win 'mouse-down x y 'left 1)
+           (window-call win 'key #\2 '())
+           (and (not (window-ref win 'tether))
+                (let-values ([(x y) (screen-of 5)])
+                  (window-call win 'mouse-down x y 'left 1)
+                  (window-call win 'key #\r '())
+                  (not (window-ref win 'tether))))))
+  (close-window! win))
+
 (check "Springies: a frame leaves the particles it steps as they were"
        (let* ([m (springies-ball 760.0 520.0)]
               [ps (springies-model-particles m)]

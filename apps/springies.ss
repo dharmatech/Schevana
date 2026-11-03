@@ -12,7 +12,7 @@
 ;;; (window-ref win 'particles) => #(#<particle at 214.3 260.0 ...> ...)
 ;;; (springies-set! win 'time-step 0.002)
 ;;; 1 2 3: ball, tire, snake · R: start over · K: kick · G: gravity
-;;; Space: pause
+;;; Space: pause · drag: pull a mass
 
 ;;; ------------------------------------------------------------------ points
 
@@ -107,6 +107,21 @@
                           (* (spring-damping s) apart)))
                     len))))))
 
+;; A spring from a point that holds still to a particle, by its place in
+;; the vector, of no length at rest: how the pointer holds a particle. It
+;; goes among the springs.
+(define-record-type tether
+  (nongenerative schevana-springies-tether)
+  (fields particle point stiffness damping))
+
+;; The force tether t pulls its particle with: toward its point, damped
+;; against the particle's velocity.
+(define (tether-force t particles)
+  (let ([p (vector-ref particles (tether-particle t))])
+    (pt- (pt* (pt- (tether-point t) (particle-position p))
+              (tether-stiffness t))
+         (pt* (particle-velocity p) (tether-damping t)))))
+
 ;;; ------------------------------------------------------------------ motion
 ;;; A state is the particles, a vector of them. Runge-Kutta needs states
 ;;; to add and scale, as vectors do, and a state's rate of change to be a
@@ -114,13 +129,16 @@
 ;;; velocity, its velocity at its acceleration.
 
 ;; The springs' forces on each particle, summed: a vector like particles.
+;; A tether among the springs pulls its one particle.
 (define (springies-forces particles springs)
   (let ([forces (make-vector (vector-length particles) pt-zero)])
     (define (push! i f) (vector-set! forces i (pt+ (vector-ref forces i) f)))
     (for-each (lambda (s)
-                (let ([f (spring-force s particles)])
-                  (push! (spring-a s) f)
-                  (push! (spring-b s) (pt* f -1.0))))
+                (if (tether? s)
+                    (push! (tether-particle s) (tether-force s particles))
+                    (let ([f (spring-force s particles)])
+                      (push! (spring-a s) f)
+                      (push! (spring-b s) (pt* f -1.0)))))
               springs)
     forces))
 
@@ -311,23 +329,28 @@
                                 20000.0 15.0))
      '(gravity 980.0 gravity? #t time-step 0.003 steps 5))))
 
-;; A snake: a ladder of 16 rungs, its body soft enough to bend. No
-;; gravity, and a kick to set it going, so it floats and writhes; a bounce
-;; keeps all its speed.
+;; A snake: a ladder of 12 rungs, each half again as long as the gap
+;; between them. No gravity, and a kick to set it going, so it floats and
+;; writhes; a bounce keeps all its speed.
+;;
+;; A body of springs can fold: a square's rails cross, and it stays
+;; inside out. Whipped against a wall, a soft snake (600) folded in half
+;; the runs; this one, stiffer, wider and shorter, in none left alone,
+;; though a hard yank by the pointer can still fold it (R starts over).
 (define (springies-snake w h)
-  (let* ([k 16] [gap (/ (min w h) 20.0)]
+  (let* ([k 12] [gap (/ (min w h) 20.0)] [half-rung (* gap 0.75)]
          [x0 (- (/ w 2.0) (* gap (- k 1) 0.5))] [y (/ h 2.0)]
          [rail (lambda (y)
                  (map (lambda (i) (make-pt (+ x0 (* gap i)) y)) (iota k)))]
          [particles
           (springies-kick
            (list->vector
-            (springies-body (append (rail (+ y (/ gap 2.0)))
-                                    (rail (- y (/ gap 2.0))))
+            (springies-body (append (rail (+ y half-rung))
+                                    (rail (- y half-rung)))
                             pt-zero pt-zero 0.0 1.0 1.0)))])
     (make-springies-model
      particles
-     (springies-springs particles (springies-ladder 0 k k #f) 600.0 1.0)
+     (springies-springs particles (springies-ladder 0 k k #f) 3000.0 5.0)
      '(gravity 980.0 gravity? #f time-step 0.005 steps 4))))
 
 ;; The models by name, in the order of their keys: 1, 2 and 3.
@@ -347,20 +370,45 @@
 ;; the window ticks.
 (define springies-step-ms 15)
 
-;; The springs as lines, then the particles over them as dots. The box is
-;; h high: the world is y-up, the screen y-down.
-(define (draw-springies particles springs h)
-  (define (at p)
-    (let ([q (particle-position p)]) (values (pt-x q) (- h (pt-y q)))))
+;; The springs as lines, then the particles over them as dots, and the
+;; pointer's tether, if it holds one. The box is h high: the world is
+;; y-up, the screen y-down.
+(define (draw-springies particles springs tether h)
+  (define (at q) (values (pt-x q) (- h (pt-y q))))
+  (define (particle-at i) (at (particle-position (vector-ref particles i))))
   (for-each (lambda (s)
-              (let-values ([(x1 y1) (at (vector-ref particles (spring-a s)))]
-                           [(x2 y2) (at (vector-ref particles (spring-b s)))])
+              (let-values ([(x1 y1) (particle-at (spring-a s))]
+                           [(x2 y2) (particle-at (spring-b s))])
                 (draw-line x1 y1 x2 y2 'teal 1.5)))
             springs)
   (vector-for-each (lambda (p)
-                     (let-values ([(x y) (at p)])
+                     (let-values ([(x y) (at (particle-position p))])
                        (fill-circle x y (particle-radius p) 'yellow)))
-                   particles))
+                   particles)
+  (when tether
+    (let-values ([(x1 y1) (particle-at (tether-particle tether))]
+                 [(x2 y2) (at (tether-point tether))])
+      (draw-line x1 y1 x2 y2 'accent 1.5)
+      (fill-circle x2 y2 3 'accent))))
+
+;; The particle in particles nearest q, by its place, if one is within
+;; reach of it.
+(define (springies-nearest particles q reach)
+  (let loop ([i 0] [best #f] [best-d reach])
+    (if (= i (vector-length particles))
+        best
+        (let ([d (pt-norm (pt- (particle-position (vector-ref particles i))
+                               q))])
+          (if (<= d best-d)
+              (loop (+ i 1) i d)
+              (loop (+ i 1) best best-d))))))
+
+;; How the pointer holds particle i at q: stiff enough to lift the ball a
+;; hand's breadth under it (its weight stretches the tether 94 pixels),
+;; and damped well past swinging. Stiffer, or less damped, a quick drag
+;; sends the model flying into the walls, where the snake folds: at 2000
+;; and 20 it folded in 8 drags of 9, at 500 and 100 in 2.
+(define (springies-pointer-tether i q) (make-tether i q 500.0 100.0))
 
 (define (springies-bar-height)
   (max 26 (round (+ (font-line-height 'ui-small) 13))))
@@ -380,21 +428,46 @@
   (let-values ([(w h) (window-content-size win)])
     (values w (max 1 (- h (springies-bar-height))))))
 
+;; The point in the world at x, y in win's content: y flipped.
+(define (springies-world-point win x y)
+  (let-values ([(w h) (springies-box-size win)])
+    (make-pt (inexact x) (inexact (- h y)))))
+
 ;; What the keys do to the model in win. Choosing a model brings its
-;; settings; Reset starts the model over and keeps them.
+;; settings; Reset starts the model over and keeps them. Either lets go
+;; of what the pointer held.
 (define (springies-choose! win name)
   (let-values ([(w h) (springies-box-size win)])
     (let ([model (springies-build name w h)])
       (window-set! win 'model name)
       (window-set! win 'particles (springies-model-particles model))
       (window-set! win 'springs (springies-model-springs model))
-      (window-set! win 'settings (springies-model-settings model)))))
+      (window-set! win 'settings (springies-model-settings model))
+      (window-set! win 'tether #f))))
 
 (define (springies-reset! win)
   (let-values ([(w h) (springies-box-size win)])
     (let ([model (springies-build (window-ref win 'model) w h)])
       (window-set! win 'particles (springies-model-particles model))
-      (window-set! win 'springs (springies-model-springs model)))))
+      (window-set! win 'springs (springies-model-springs model))
+      (window-set! win 'tether #f))))
+
+;; What the mouse does: a press within 50 pixels of a particle holds the
+;; nearest on the pointer's tether, which follows the pointer until the
+;; button comes up.
+(define (springies-grab! win x y)
+  (let* ([q (springies-world-point win x y)]
+         [i (springies-nearest (window-ref win 'particles) q 50.0)])
+    (when i (window-set! win 'tether (springies-pointer-tether i q)))))
+
+(define (springies-pull! win x y)
+  (let ([t (window-ref win 'tether)])
+    (when t
+      (window-set! win 'tether
+        (springies-pointer-tether (tether-particle t)
+                                  (springies-world-point win x y))))))
+
+(define (springies-let-go! win) (window-set! win 'tether #f))
 
 (define (springies-kick! win)
   (window-set! win 'particles (springies-kick (window-ref win 'particles))))
@@ -415,16 +488,20 @@
         [frame-ms 0.0])   ; a frame's time, smoothed
     (define (frame! win)
       (let-values ([(w h) (springies-box-size win)])
-        (let ([t0 (current-time 'time-monotonic)])
+        (let ([t0 (current-time 'time-monotonic)]
+              [springs (window-ref win 'springs)]
+              [tether (window-ref win 'tether)])
           (window-set! win 'particles
             (springies-frame (window-ref win 'particles)
-                             (window-ref win 'springs)
+                             (if tether (cons tether springs) springs)
                              (window-ref win 'settings) w h))
           (set! frame-ms (+ (* frame-ms 0.95) (* (ms-since t0) 0.05))))))
     (let ([win
            (open-window "Springies"
              'size (cons w (+ h (springies-bar-height)))
+             'mouse-doc '((L . "Pull a mass"))
              'running? #t
+             'tether #f
              'tick (lambda (win)
                      (when (and (window-ref win 'running?)
                                 (>= (- (now-ms) last-step) springies-step-ms))
@@ -435,7 +512,8 @@
                            [particles (window-ref win 'particles)]
                            [springs (window-ref win 'springs)])
                        (fill-rect 0 0 w (- h bar) 'bg-0)
-                       (draw-springies particles springs (- h bar))
+                       (draw-springies particles springs
+                                       (window-ref win 'tether) (- h bar))
                        (fill-rect 0 (- h bar) w bar 'bg-1)
                        (draw-text 10 (+ (- h bar) 5)
                                   (springies-status-text
@@ -455,6 +533,11 @@
                       [(#\k) (springies-kick! win)]
                       [(#\g) (springies-toggle-gravity! win)]
                       [(#\space) (springies-toggle-running! win)])
-                    (invalidate! win)))])
+                    (invalidate! win))
+             'mouse-down (lambda (win x y button clicks)
+                           (when (eq? button 'left) (springies-grab! win x y)))
+             'mouse-move (lambda (win x y) (springies-pull! win x y))
+             'mouse-up (lambda (win x y button)
+                         (when (eq? button 'left) (springies-let-go! win))))])
       (springies-choose! win 'ball)
       win)))
