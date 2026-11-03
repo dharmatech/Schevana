@@ -673,6 +673,9 @@
   ;; the fonts: what an app shows in the code font (FIX, cptfont), its
   ;; command words in the sans (JESS), titles in sans bold (SWISS), menus
   ;; a size up, a pane's heading bold italic (lispm-apps.md part 6)
+  ;; the code font the sans's size, so that an app's text and the command
+  ;; words beside it stand as tall (one family: one x-height)
+  'mono-font-size 13
   'ui (theme-rule (theme 'mono))
   'ui-small (theme-rule (theme 'mono-small))
   'ui-bold (theme-rule (theme 'mono-bold))
@@ -766,6 +769,8 @@
   'menu-hover 'outline
   'mouse-doc #t
   'scrollbar-side 'left
+  ;; the content clear of it, as beside a pane's margin
+  'scrollbar-margin 4
   'options '(palette
              accent
              wallpaper

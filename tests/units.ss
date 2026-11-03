@@ -4531,8 +4531,8 @@
 
 (check "Genera's caret is a block in reverse video and its selection an \
         underline (text-caret, text-selection)"
-       (let ([probe
-              (lambda (style text at x y)
+       (let ([probe   ; ink at x on any of the rows ys
+              (lambda (style text at x ys)
                 (set-style! style)
                 (let-values ([(win ui) (field-window text)])
                   (focus-window! win)
@@ -4540,13 +4540,18 @@
                   (invalidate! win)
                   (steps 2)
                   (let-values ([(cx cy cw ch) (content-rect win)])
-                    (let ([p (canvas-pixel (+ cx x) (+ cy y))]
-                          [ink (color->pixel 'text)])
+                    (let ([ink? (exists (lambda (y)
+                                          (= (canvas-pixel (+ cx x) (+ cy y))
+                                             (color->pixel 'text)))
+                                        ys)])
                       (close-window! win)
                       (steps 1)
-                      (= p ink)))))])
-         (let ([r (list (probe 'genera "" 0 25 30) (probe 'mac "" 0 25 30)
-                        (probe 'genera "MMMM" #t 26 38))])
+                      ink?))))])
+         ;; the block over the field's middle; the underline below the
+         ;; text's baseline, wherever the font's size puts it
+         (let ([r (list (probe 'genera "" 0 25 '(30))
+                        (probe 'mac "" 0 25 '(30))
+                        (probe 'genera "MMMM" #t 26 '(35 36 37 38 39 40)))])
            (set-style! 'mac)
            (equal? r '(#t #f #t)))))
 

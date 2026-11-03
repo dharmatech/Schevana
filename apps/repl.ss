@@ -1063,7 +1063,7 @@
                   (loop (+ j 1) #f)]
                  [else (str (+ j 1))]))]
             [(memv c '(#\( #\[ #\) #\]))
-             (fill! i (+ i 1) 'text-faint)
+             (fill! i (+ i 1) 'repl-paren)
              (loop (+ i 1) (memv c '(#\( #\[)))]
             [(memv c '(#\' #\` #\,)) (fill! i (+ i 1) 'cyan) (loop (+ i 1) #f)]
             [(char-whitespace? c) (loop (+ i 1) after-open?)]
@@ -1271,6 +1271,10 @@
 
 ;; Under the parenthesis that matches the one at the cursor, and it.
 (color-default! 'repl-paren-mark (theme-rule (alpha 'yellow 0.25)))
+
+;; Parentheses: as quiet as faint text, but code, not a hint, so a style's
+;; faint-text font (Genera's italic) leaves them as the rest of the code.
+(color-default! 'repl-paren (theme-rule (theme 'text-faint)))
 
 (define (vector-fill-range! v a b x)
   (do ([i a (+ i 1)]) ((>= i (min b (vector-length v)))) (vector-set! v i x)))

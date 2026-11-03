@@ -1130,6 +1130,13 @@
 ;; Inside a column: its cards' margin at either side, the room above the
 ;; first card and between two, and the + button's from the header's end.
 (define (tasks-column-insets) (values 10 8 8 6))
+
+;; A column's cards' left and right insets: its side, or the room a
+;; style's scroll bar keeps beside them (Genera's), if more.
+(define (tasks-card-insets)
+  (let-values ([(side first between edge) (tasks-column-insets)])
+    (values (max side (ui-scrollbar-inset 'left))
+            (max side (ui-scrollbar-inset 'right)))))
 (define (tasks-label-width)
   (max 72 (+ 16 (widest-text '("Status" "Priority" "Kind" "Assignee" "Due"
                                "Tags" "Blocked by" "Blocks")
@@ -1706,10 +1713,10 @@
                               (- h pad pad) (eqv? i target)))
               cols (iota n))
     (when moving   ; as wide as the cards in a column
-      (let-values ([(side first between edge) (tasks-column-insets)])
+      (let-values ([(left right) (tasks-card-insets)])
         (ui-later! ui
           (lambda (ww wh)
-            (let-values ([(w h) (tasks-card-size (- cw side side) moving)])
+            (let-values ([(w h) (tasks-card-size (- cw left right) moving)])
               (tasks-draw-card (- (tasks-drag-x d) (tasks-drag-gx d))
                                (- (tasks-drag-y d) (tasks-drag-gy d))
                                w h '(floating) moving today))))))))
@@ -1720,8 +1727,9 @@
   (let*-values
       ([(ui) (tasks-view-ui v)] [(hh) (tasks-column-header-height)]
        [(side first between edge) (tasks-column-insets)]
+       [(left right) (tasks-card-insets)]
        [(label) (cdr (assq status tasks-statuses))]
-       [(card-w) (- w side side)] [(sid) (list 'column status)]
+       [(card-w) (- w left right)] [(sid) (list 'column status)]
        [(heights) (map (lambda (t)
                          (let-values ([(cw ch) (tasks-card-size card-w t)]) ch))
                        tasks)]
@@ -1761,7 +1769,7 @@
                          ch))])
           (let loop ([ts tasks] [hs heights] [i 0] [cy (+ top first)])
             (let ([cy (if (eqv? i slot)
-                          (begin (tasks-draw-slot (+ x side) cy card-w dh)
+                          (begin (tasks-draw-slot (+ x left) cy card-w dh)
                                  (+ cy dh between))
                           cy)])
               (if (null? ts)
@@ -1769,7 +1777,7 @@
                   (begin
                     ;; only the cards in view: a long column stays cheap
                     (when (and (< cy (+ y h)) (> (+ cy (car hs)) (+ y hh)))
-                      (tasks-card v (car ts) (+ x side) cy card-w (car hs)
+                      (tasks-card v (car ts) (+ x left) cy card-w (car hs)
                                   today))
                     (loop (cdr ts) (cdr hs) (+ i 1)
                           (+ cy (car hs) between)))))))))))

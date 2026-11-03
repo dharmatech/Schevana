@@ -541,7 +541,10 @@
                                   (apply max (map (lambda (r)
                                                     (string-length (car r)))
                                                   rows)))
-                            (complete-kinds-width rows)))))])
+                            (complete-kinds-width rows)
+                            ;; room a style keeps beside its scroll bar
+                            (ui-scrollbar-inset 'left)
+                            (ui-scrollbar-inset 'right)))))])
     (values w
             (+ 8 (* (length rows) (complete-row-height))
                (if (string=? sig "")
@@ -554,19 +557,24 @@
          [small-lh (font-line-height 'ui-small)]
          [kind-w (complete-kinds-width rows)]
          [count (length rows)] [above? (memq 'above flags)]
-         [rows-y (complete-rows-y y h count flags)])
+         [rows-y (complete-rows-y y h count flags)]
+         ;; the rows, clear of a scroll bar the style keeps room for
+         [bar? (> n count)]
+         [left (max 4 (if bar? (ui-scrollbar-inset 'left) 0))]
+         [right (max 4 (if bar? (ui-scrollbar-inset 'right) 0))]
+         [rx (+ x left)] [rw (- w left right)])
     (ui-draw-panel x y w h '(menu))
     (for-each
      (lambda (row i)
        (let ([ry (+ rows-y (* i rh))] [name (car row)]
              [selected? (cadddr row)])
-         (cond [selected? (ui-draw-highlight (+ x 4) ry (- w 8) rh '())]
+         (cond [selected? (ui-draw-highlight rx ry rw rh '())]
                [(list-ref row 4)
-                (ui-draw-highlight (+ x 4) ry (- w 8) rh '(hover popup))])
+                (ui-draw-highlight rx ry rw rh '(hover popup))])
          (if (memq 'message flags)
-             (draw-text (+ x 10) (+ ry (/ (- rh (font-line-height 'ui)) 2))
+             (draw-text (+ rx 6) (+ ry (/ (- rh (font-line-height 'ui)) 2))
                         name 'text-dim 'ui)
-             (let ([tx (+ x 10)]
+             (let ([tx (+ rx 6)]
                    [ty (+ ry (/ (- rh (font-line-height 'mono)) 2))])
                (draw-text tx ty name (if selected? 'text 'text-dim) 'mono)
                (for-each (lambda (j)
@@ -575,9 +583,9 @@
                                         (string (string-ref name j))
                                         'accent 'mono-bold)))
                          (caddr row))
-               (draw-text (- (+ x w) kind-w -4) (+ ry (/ (- rh small-lh) 2))
+               (draw-text (- (+ rx rw) kind-w -8) (+ ry (/ (- rh small-lh) 2))
                           (cadr row) 'text-faint 'ui-small)))
-         (when selected? (ui-draw-highlight-over (+ x 4) ry (- w 8) rh '()))))
+         (when selected? (ui-draw-highlight-over rx ry rw rh '()))))
      rows (iota count))
     ;; where the rows shown are in the whole list, on the style's side, no
     ;; wider than the names' inset (Interlisp's bars are 24)

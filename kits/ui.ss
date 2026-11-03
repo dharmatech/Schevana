@@ -1380,7 +1380,8 @@
 ;; on the right where there is none) and shows it
 ;; always or while the pointer is over the view (scrollbar-show hover;
 ;; outside, over the margin); it lies over the content, which never
-;; reflows for it.
+;; reflows for it: content that keeps clear of it asks how far
+;; (ui-scrollbar-inset).
 (define (ui-scroll ui id x y w h body)
   (let ([off (car (ui-memo ui id '(0 . 0)))]
         [clip (ui-state-clip ui)])
@@ -1504,7 +1505,22 @@
 (theme-default! 'scrollbar-width 10)
 (theme-default! 'scrollbar-side 'right)
 (theme-default! 'scrollbar-show 'always)
+;; The room content keeps clear past a bar always shown at its left or
+;; right: #f, none (the bar lies over the content), or a margin past the
+;; bar's width (Genera's).
+(theme-default! 'scrollbar-margin #f)
 (define (ui-scrollbar-width) (theme 'scrollbar-width))
+
+;; What a scroll view's content keeps clear for its bar on side (left or
+;; right): the kit's tables and trees keep it, and an app's own content
+;; may (Tasks' cards).
+(define (ui-scrollbar-inset side)
+  (let ([m (theme 'scrollbar-margin)])
+    (if (and m
+             (eq? side (theme 'scrollbar-side))
+             (eq? (theme 'scrollbar-show) 'always))
+        (+ (ui-scrollbar-width) m)
+        0)))
 
 ;; The window's outside scroll bar, which its main scroll view leaves in
 ;; its 'scrollbar while it shows: a style that leaves a margin for it
@@ -1546,7 +1562,11 @@
 (define (ui-table ui id x y w h columns rows selected on-select cell . opts)
   (with-place 'list
     (lambda ()
-      (let* ([hh (ui-table-header-height)] [rh (ui-table-row-height)]
+      (let* (;; the scroll view's, its bar in a margin the content keeps
+             [sx x] [sw w]
+             [x (+ sx (ui-scrollbar-inset 'left))]
+             [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [hh (ui-table-header-height)] [rh (ui-table-row-height)]
              [sort (plist-ref opts 'sort #f)]
              [tip (plist-ref opts 'tip (lambda (r) #f))]
              [on-sort (plist-ref opts 'on-sort (lambda (k) #f))]
@@ -1567,7 +1587,7 @@
               (loop (cdr cs) (+ cx cw)))))
         (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))
         (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
-        (ui-scroll ui body x (+ y hh) w view-h
+        (ui-scroll ui body sx (+ y hh) sw view-h
           (lambda (top)
             (let ([vy (+ y hh)])
               (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])
@@ -1759,7 +1779,11 @@
                  . opts)
   (with-place 'list
     (lambda ()
-      (let* ([hh (ui-table-header-height)] [rh (ui-tree-row-height)]
+      (let* (;; the scroll view's, its bar in a margin the content keeps
+             [sx x] [sw w]
+             [x (+ sx (ui-scrollbar-inset 'left))]
+             [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [hh (ui-table-header-height)] [rh (ui-tree-row-height)]
              [tip (plist-ref opts 'tip (lambda (node w) #f))]
              [on-open (plist-ref opts 'on-open (lambda (node) #f))]
              [on-menu (plist-ref opts 'on-menu (lambda (node x y) #f))]
@@ -1791,7 +1815,7 @@
           (let ([i (ui-tree-index rows selected)])
             (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))))
         (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
-        (ui-scroll ui body x (+ y hh) w view-h
+        (ui-scroll ui body sx (+ y hh) sw view-h
           (lambda (top)
             (let ([vy (+ y hh)])
               (do ([i (max 0 (exact (floor (/ (- vy top) rh)))) (+ i 1)])

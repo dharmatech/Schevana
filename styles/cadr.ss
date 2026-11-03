@@ -52,7 +52,9 @@
   'genera-label-align 'top
   'genera-label-under 'content
   'frame-over 'frame-over*
-  ;; the fonts (tvdefs.lisp:211-216, choice.lisp:911-914)
+  ;; the fonts (tvdefs.lisp:211-216, choice.lisp:911-914): all in the
+  ;; code font, so at its own size, not Genera's
+  'mono-font-size 14
   'genera-command-font 'mono
   'genera-standout-font 'ui-italic
   'heading (theme-font-rule 'ui 1 'italic)
