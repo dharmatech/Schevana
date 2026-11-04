@@ -28,8 +28,9 @@
 ;;; step, a keystroke in a title, two in one step, a card dragged), a
 ;;; keystroke in a long text's worst cases there, in the details and in
 ;;; the description's editor, maximized, the Tree there with the seed and
-;;; with 2,000 tasks more in chains, and a busy process's share of the
-;;; main thread while S30T animates at 200% (printed, not bounded). Fails
+;;; with 2,000 tasks more in chains, a busy process's share of the main
+;;; thread while S30T animates at 200%, and the profiler's cost: a step
+;;; with profiling on and off (printed, not bounded). Fails
 ;;; (exit 1) unless every measured step drew a frame, an idle step takes
 ;;; under 0.2 ms and uploads nothing (with Tasks open too), a keystroke in
 ;;; a long text keeps within its budget, a step of the Tree with 2,000
@@ -733,6 +734,63 @@
 (printf "a busy process while S30T animates at 200%: ~a% of its loops with \
          Life paused, ~,1f frames a second\n"
         (exact (round (* 100.0 (/ busy-loops busy-alone)))) busy-fps)
+
+;;; ------------------------------------------------------------------
+;;; the profiler's cost
+;;; A step with profiling on and off, in turns of 20 steps, 10 turns
+;;; each: S30T animating (the main thread's ms, medians), an idle step
+;;; (30 paused Life windows), and a busy process with Life paused (its
+;;; loops a second, 1 s each way, twice).
+
+(define profile-cost-was (profiling?))
+
+(define (profile-cost-steps measure)   ; (values on off): medians
+  (let loop ([turn 0] [on '()] [off '()])
+    (if (= turn 20)
+        (values (median on) (median off))
+        (let ([on? (even? turn)])
+          (profiling! on?)
+          (steps 2 81)
+          (let ([ms (map (lambda (i) (measure)) (iota 20))])
+            (if on?
+                (loop (+ turn 1) (append ms on) off)
+                (loop (+ turn 1) on (append ms off))))))))
+
+(define (profile-cost-frames pct)
+  (set-theme! 'scale pct)
+  (scene! 'S30T)
+  (profile-cost-steps (lambda ()
+                        (let ([m0 (main-ms)]) (steps 1 81) (- (main-ms) m0)))))
+
+(define (profile-cost-idle)
+  (set-theme! 'scale 100)
+  (scene! 'S30)
+  (for-each (lambda (w) (window-call w 'key #\space '())) (windows))
+  (steps 3 0)
+  (profile-cost-steps (lambda ()
+                        (let ([w0 (wall-ms)]) (schevana-step! 0)
+                          (- (wall-ms) w0)))))
+
+(newline)
+(for-each
+ (lambda (pct)
+   (let-values ([(on off) (profile-cost-frames pct)])
+     (printf "profiling's cost, S30T at ~a%: a step on ~,3f ms, off ~,3f ms \
+              (~,1f%)\n"
+             pct on off (* 100 (/ (- on off) off)))))
+ '(100 200))
+(let-values ([(on off) (profile-cost-idle)])
+  (printf "profiling's cost, an idle step: on ~,4f ms, off ~,4f ms\n" on off))
+(let* ([runs (map (lambda (on?)
+                    (profiling! on?)
+                    (let-values ([(loops fps) (busy-run 100 #f 1000)]) loops))
+                  '(#t #f #t #f))]
+       [on (+ (car runs) (caddr runs))] [off (+ (cadr runs) (cadddr runs))])
+  (printf "profiling's cost, a busy process: on ~a, off ~a loops a second \
+           (~,1f%)\n"
+          (exact (round (/ on 2))) (exact (round (/ off 2)))
+          (* 100 (/ (- on off) off))))
+(profiling! profile-cost-was)
 
 (define failures 0)
 (define (assert! name ok)

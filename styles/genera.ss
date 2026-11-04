@@ -763,6 +763,17 @@
   'tasks-draw-slot 'genera-tasks-slot
   'repl-paren-mark (stipple 'text #f "#..." "...." "..#." "....")
   'settings-swatch-ring (stipple 'text 'window-bg "#." ".#")
+  ;; a chart's series apart by patterns of ink; a share of its bars in
+  ;; solid ink (the accent's), a bar marked grayed
+  'chart-1 (stipple 'text #f "#." "#.")
+  'chart-2 (stipple 'text #f "#.." "..." "...")
+  'chart-3 (stipple 'text #f "##" "..")
+  'chart-4 (stipple 'text #f "#.." ".#." "..#")
+  'chart-5 (stipple 'text #f "#." ".#")
+  'chart-6 (stipple 'text #f "#..." "...." "..#." "....")
+  'chart-7 (stipple 'text #f "##" ".#")
+  'chart-8 'text
+  'chart-mark 'genera-gray
   ;; the feel
   'title-double-click 'none
   'bell 'screen

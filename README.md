@@ -153,6 +153,10 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (bind-key! '(ctrl shift #\l) life)
 ; watch it in (monitor); Ctrl+C or kill!
 (spawn "busy" (lambda () (let loop () (loop))))
+(monitor)                                  ; where the time and memory go
+(profiling! #f)                            ; the profiler off (on at boot)
+(profile-history! 60 30)                   ; a minute of steps, 30 of seconds
+(profile-totals (profile-seconds))         ; what each window, ... spent
 (tasks)                                    ; a task manager; tasks are data
 (add-task! "Fix the menu" 'priority 'high 'tags '("ui"))   ; shows at once
 (set-task! "Fix the" 'status 'review)      ; by title, id (27) or "TASK-27"
@@ -175,6 +179,67 @@ Define a new app and it appears in the launcher immediately:
               (draw-text-centered 0 0 w h (number->string n) 'accent 'big))
       'mouse-down (lambda (win x y button clicks) (set! n (+ n 1))))))
 ```
+
+## Monitor
+
+`(monitor)`, or Monitor in the launcher, shows where the world's time
+and memory go, as the profiler (`desktop/profile.ss`) measures them.
+The profiler runs whether Monitor is open or not, from boot, until
+Monitor's Profiling or `(profiling! #f)` turns it off: a step of 30 Life
+windows costs about 1% more with it (`tests/bench.ss`), and it
+allocates nothing. Its unit is a step, one `schevana-step!` (the wait
+for host events, then events, timers, processes, ticks, the frame and
+its upload), and it is level 1: Schevana's own accounting, with nothing
+in an app's code instrumented.
+
+- **Steps:** the last 10 seconds in columns of equal time, each showing
+  the slowest step that ended in it, its time stacked by phase (events,
+  timers, processes, ticks, render, present and the collector; idle,
+  mostly the wait for host events, left out), with a line at a frame's
+  16.7 ms; the scale doubles from two frames as slow steps need. Hover
+  a column for what its step spent: its phases and its three largest
+  consumers; click it to pause there.
+- **Consumers:** every window, surface (the desktop, the bars, the menu,
+  the toasts) and process, and the collector, by milliseconds a second
+  over the last 5 seconds, with the average and the longest a step, the
+  calls a second and a line of the last minute. A window's row opens to
+  its handlers (`draw`, `tick`, `key`, ...) and its frame, the style's
+  drawing around the content; a surface's to its draw and its tick. A
+  row selected shows its share of every bar. A window's name focuses
+  it, and a process's Kill kills it. Two windows of one title are told
+  apart by their ids (`Life (window 3)`); a window's row says once it
+  is closed, a process's once it has ended.
+- **Memory:** the heap, the bytes allocated a second and the collector's
+  time a second, over the seconds kept.
+
+At the top, Profiling turns the profiler on or off for the whole world
+(`(profiling! #f)`), Pause holds Monitor's view still (the profiler goes
+on), Clear forgets the history, and two menus say how long it is: every
+step of the last 30 seconds (at most 100 a second of them) and each
+second's sums for the last 10 minutes, by default (`(profile-history! 30
+10)`). With profiling off, Monitor lists the windows (a click focuses
+one) and the processes (a click kills one), the heap and the last
+frame's time.
+
+The history is data, read in place: `(profile-steps)` and
+`(profile-seconds)` give the steps kept and the seconds done as seqs,
+the newest first; `(profile-step-ms seq)`, `(profile-step-phase-ms seq
+'render)`, `(profile-step-ref seq 'heap)` and `(profile-step-uses seq)`
+(what each key spent: a window's handler, a surface, a process) read a
+step, and `profile-second-ms`, ... a second; `(profile-totals seconds)`
+sums seconds by subject, the most first, each with its parts, and
+`(profile-totals steps #t)` steps. The steps go into a ring of 2
+minutes, each second's sums into one of an hour and the last minute's
+uses into one of their own, all made once; a window or a process is
+kept by its id, with its title or name when first seen, so the history
+keeps no closed window or ended process alive. Monitor
+draws all of it with the widget kit: its charts (`ui-bar-chart`,
+`ui-draw-line-chart`, `ui-draw-sparkline`, `ui-draw-legend`), its tree,
+its tables and its labels. A chart's series are the kit's color
+settings `chart-1` to `chart-8`, from the palette's hues, and
+`chart-mark`, `chart-share` and `chart-rule` its mark, its share and its
+reference lines: Genera and the CADR, which have no color, give them as
+stipples of ink.
 
 ## Your own apps, styles, palettes and wallpapers
 
@@ -229,7 +294,8 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
-             default keys, the commands that arrange the windows
+             default keys, the commands that arrange the windows, the
+             profiler
 kits/        color: hue, saturation and lightness; complete: a completion
              list beside a caret (matching, keys, clicks, placement);
              edit: text editing, pure, and a text's rows, computed only
@@ -239,12 +305,14 @@ kits/        color: hue, saturation and lightness; complete: a completion
              text); theme: which layer gives a setting, what a palette
              would show; ui: immediate-mode widgets (buttons, text fields
              and areas, dropdowns, tabs, checkboxes, a table, a tree,
-             chips, a date picker, scroll views, tooltips, a dialog),
+             chips, a date picker, scroll views, tooltips, a dialog,
+             charts: stacked bars, lines, a sparkline, a legend),
              keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
-src/proc     processes + watchdog (Chez engines); notify, report-error!
+src/proc     processes + watchdog (Chez engines); notify, report-error!;
+             the profiler's hook
 src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors, stipples and gradients,
              fonts and ink, operators, rotation, device pixels, layers,
@@ -543,7 +611,8 @@ Decisions worth keeping in mind for the real design:
   them as one full-width rectangle. The other rows need no look: after
   every frame the second buffer equals the screen, and a new canvas asks
   for the whole screen. A frame that changes nothing uploads and
-  presents nothing. Monitor shows the last frame's time (drawing it and
+  presents nothing. Monitor shows where each step's time goes (below),
+  or, with profiling off, the last frame's time (drawing it and
   comparing its rows) and the rows it uploaded. A process may be
   switched out at any call while frames go on, so typed in a REPL (or
   called by a handler) `(render-frame!)` only asks for a frame, asking
@@ -552,6 +621,34 @@ Decisions worth keeping in mind for the real design:
   compositor plan: every window drawn into an image of its own when it
   changes, and the images composed, on the CPU and then on the GPU;
   threads only when measured.
+- **The profiler hooks into the core.** `src/proc.ss` keeps one hook,
+  `*profile-span*` (`#f`, or a pair of procedures, begin and end), and
+  `with-profile-span`, in which five places run their work: the step
+  (`schevana-step!`), `safely` (each phase of the main loop, each
+  surface's draw and tick), a window's handler (`window-call`, keyed
+  by the window's id and the handler's kind), its drawing
+  (`draw-window-clipped`, the id) and a process's turn (`run-procs!`,
+  the process's id: in its turn a process runs slices for its share of
+  the time left). Off, each costs a variable read and a branch, and
+  the key is not even computed; nothing is allocated either way. On
+  (at boot; `(profiling! #f)` turns it off), `desktop/profile.ss`
+  times each on `now-ns`, the monotonic clock in fixnum ns
+  (`SDL_GetTicksNS`), on a stack of fixed depth, giving each its self
+  time (its time less the spans inside it), so that the parts add up
+  to the step; the step's end adds them up into tables cleared, not
+  made again, and rings made once. A span allocates nothing; a step's
+  books allocate their one guard, under which an error turns the
+  profiler off, reported once, and the world goes on. A raise out of a
+  span leaves it open until the step's end closes it with the rest. A
+  span inside an engine (a handler, a process) runs untimed, since an
+  engine can be suspended halfway, and so does one outside a step, on
+  another thread or past the stack's depth. While on, the collector's
+  work is a span of its own, `gc` (its collect-request handler), and
+  the memory numbers come from the collector's counters. The history is
+  in defvars, so a reload keeps it. Off, a step costs what it did
+  (`tests/bench.ss`); on, a step of 30 Life windows costs about 1%
+  more, an idle step 10 µs more, and a busy process gets about 1% less
+  done.
 
 ## Tests
 
@@ -582,12 +679,14 @@ keys, a shared blocker's later rows, a later row a change takes away, a
 collapse that hides the selection, a search dimming rows or leaving
 nothing to show, a keystroke that works out no tree again, a task
 deleted there, the keys listed; a reload that changes the task record
-and keeps every task) and from the REPL's procedures, reloads the
-sources, runs the host's SDL code (uploads, presents, resize events, the
-window's size) against a stand-in that replaces every SDL call, so no
-window opens, and writes screenshots to the given folder. It never
-touches your real `~/.schevana-theme.ss`, and no test reads
-`~/.schevana.d`.
+and keeps every task) and from the REPL's procedures, uses Monitor (the
+profiler collecting with it closed, its graphs, a window's name and a
+process's Kill, Profiling off, the rows that focus and kill then, and on
+again), reloads the sources (the profiler's history kept), runs the
+host's SDL code (uploads, presents, resize events, the window's size)
+against a stand-in that replaces every SDL call, so no window opens, and
+writes screenshots to the given folder. It never touches your real
+`~/.schevana-theme.ss`, and no test reads `~/.schevana.d`.
 
 ```bash
 scheme --script tests/units.ss out
@@ -617,7 +716,18 @@ notes as wide as they fit, a task record from before a reload carried
 over, the tree widget's rows (only expanded nodes' children asked for),
 keys, indentation and dimmed rows, and the characters a keystroke in
 Tasks measures, the same with a title of 100,000 characters as with one
-of 10,000.
+of 10,000. The kit's charts: the bar chart's areas, the bar under the
+pointer and a press on one reported by index, and each chart's look its
+part's, under a style that replaces it. And the profiler: on at boot,
+off (no step kept, no clock read) and on again, nothing allocated by
+20,000 spans, spans nesting and every step's parts adding up to it, a
+slow window first among the consumers, a busy process's share, a
+collection in the memory numbers and as a span of its own, a span
+inside an engine, on another thread or past the stack's depth untimed,
+a raise out of a span, a collector made to fail turning itself off with
+one error while the world draws on, a closed window and an ended
+process not kept alive, two windows of one title told apart, the
+history's lengths, and the charts' colors in every style.
 
 ```bash
 scheme --script tests/frame.ss out
@@ -695,7 +805,8 @@ draws a screenful of text, and a jump within 2.5 times), the Tree there
 with the seed and with 2,000 tasks more in chains (a key, Space and the
 wheel, the least of three rounds: within 1.5 times the seed's), and
 prints how much of the main thread a busy REPL evaluation gets while 30
-Life windows animate at 200%.
+Life windows animate at 200%, and what profiling costs: a step with it
+on and off (S30T at 100% and 200%, an idle step, a busy process).
 
 ## Conventions
 

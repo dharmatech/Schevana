@@ -73,28 +73,29 @@
     [else (set! *held-events* (cons ev *held-events*))]))
 
 ;; One turn of the world: events, timers, processes, ticks, and a frame
-;; if something asked for one.
+;; if something asked for one. The profiler's unit: a step.
 (define (schevana-step! wait-ms)
-  (let* ([hold? (reload-holding?)]
-         [evs (append (if hold? '() (reverse *held-events*))
-                      (host-events (if (pair? *injected*) 0 wait-ms))
-                      *injected*)])
-    (unless hold? (set! *held-events* '()))
-    (set! *injected* '())
-    (set! *input-step?* (pair? evs))
-    (for-each
-     (lambda (ev)
-       (safely 'event
-               (lambda () (if hold? (hold-event! ev) (handle-event! ev)))))
-     evs))
-  (unless (reload-holding?) (safely 'timers run-timers!))
-  (safely 'procs (lambda () (run-procs! 10)))
-  (unless (reload-holding?)
-    (safely 'tick wm-tick!)
-    (let ([damage *dirty*])
-      (set! *dirty* #f)
-      (safely 'render (lambda () (render-frame! damage))))
-    (safely 'present host-present-damage!)))
+  (with-profile-span 'step #f
+    (let* ([hold? (reload-holding?)]
+           [evs (append (if hold? '() (reverse *held-events*))
+                        (host-events (if (pair? *injected*) 0 wait-ms))
+                        *injected*)])
+      (unless hold? (set! *held-events* '()))
+      (set! *injected* '())
+      (set! *input-step?* (pair? evs))
+      (for-each
+       (lambda (ev)
+         (safely 'event
+                 (lambda () (if hold? (hold-event! ev) (handle-event! ev)))))
+       evs))
+    (unless (reload-holding?) (safely 'timers run-timers!))
+    (safely 'procs (lambda () (run-procs! 10)))
+    (unless (reload-holding?)
+      (safely 'tick wm-tick!)
+      (let ([damage *dirty*])
+        (set! *dirty* #f)
+        (safely 'render (lambda () (render-frame! damage))))
+      (safely 'present host-present-damage!))))
 
 (define (schevana-run!)
   (set! *running* #t)

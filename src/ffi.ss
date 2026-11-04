@@ -94,6 +94,7 @@
 (define-foreign sdl-init "SDL_Init" (unsigned-32) bool)
 (define-foreign sdl-quit "SDL_Quit" () void)
 (define-foreign sdl-get-error "SDL_GetError" () string)
+(define-foreign sdl-get-ticks-ns "SDL_GetTicksNS" () unsigned-64)
 (define-foreign sdl-set-hint "SDL_SetHint" (string string) bool)
 (define-foreign sdl-create-window "SDL_CreateWindow"
   (string int int unsigned-64) uptr)

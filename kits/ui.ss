@@ -2059,6 +2059,174 @@
 (define (ui-progress-height) (theme 'progress-height))
 
 ;;; ------------------------------------------------------------------
+;;; charts: stacked bars, lines, a sparkline, a legend
+;;; A series is drawn in the color the app gives it: the kit's chart-1 to
+;;; chart-8 are settings from the palette's hues, so a style gives its own
+;;; (Genera, which has no color, stipples). A mark behind a bar, a share
+;;; of the bars and the reference lines are chart-mark, chart-share and
+;;; chart-rule.
+
+(color-default! 'chart-1 'yellow)
+(color-default! 'chart-2 'orange)
+(color-default! 'chart-3 'magenta)
+(color-default! 'chart-4 'green)
+(color-default! 'chart-5 'cyan)
+(color-default! 'chart-6 'teal)
+(color-default! 'chart-7 'red)
+(color-default! 'chart-8 'accent-2)
+(color-default! 'chart-mark (alpha 'text 0.12))
+(color-default! 'chart-share 'accent)
+(color-default! 'chart-rule 'text-faint)
+
+;; A stacked bar chart, a bar a value (a step, say), the newest at the
+;; right. bars, the oldest first: (segments . share), segments ((color .
+;; value) ...) bottom up, share how much of the bar to show in chart-share
+;; (#f: none). top: the value at the chart's top; rules: ((value . label)
+;; ...), reference lines labeled in a scale at the left. The bar marked
+;; (its index, or #f) and the one under the pointer show a mark; a left
+;; press on a bar calls (on-press index). => the index of the bar under
+;; the pointer, or #f
+(define (ui-bar-chart ui id x y w h bars top rules marked on-press)
+  (let* ([n (length bars)] [areas (ui-bar-chart-areas x y w h n rules)]
+         [plot (cdr (assq 'plot areas))] [win (current-window)])
+    (for-each (lambda (i)
+                (let-values ([(bx bw) (ui-bar-chart-bar areas n i)])
+                  (when (>= bx (car plot))
+                    (ui-region! ui (list id i) bx (cadr plot) bw (cadddr plot)
+                      'doc '((L . "Select"))
+                      'on (lambda (ev)
+                            (and (eq? (car ev) 'press)
+                                 (eq? (list-ref ev 3) 'left)
+                                 (begin (on-press i) #t)))))))
+              (iota n))
+    (let* ([r (ui-region-at ui (ui-state-mx ui) (ui-state-my ui))]
+           [rid (and r (ui-region-id r))]
+           [hover (and win (eq? (window-hover win) 'content) (pair? rid)
+                       (equal? (car rid) id) (pair? (cdr rid)) (cadr rid))])
+      (ui-draw-bar-chart x y w h '()
+                         (map (lambda (b i)
+                                (list (car b) (cdr b)
+                                      (cond [(eqv? i hover) 'hover]
+                                            [(eqv? i marked) 'marked]
+                                            [else #f])))
+                              bars (iota n))
+                         top rules)
+      hover)))
+
+;; Its pieces: the plot, right of the scale's labels and 4 clear of the
+;; other edges, and the bars' width: whole pixels, at most 6, at least 1,
+;; for n bars. ((plot x y w h) (bar w))
+(define-part (ui-bar-chart-areas x y w h n rules)
+  (let* ([g (+ 12 (widest-text (map cdr rules) 'ui-small))]
+         [pw (- w g 4)])
+    (list (list 'plot (+ x g) (+ y 4) pw (- h 4))
+          (list 'bar (max 1 (min 6 (floor (/ pw (max n 1)))))))))
+
+;; Bar i of n by the areas: the newest at the plot's right; one left of
+;; the plot does not fit. => (values x w)
+(define (ui-bar-chart-bar areas n i)
+  (let ([plot (cdr (assq 'plot areas))] [bw (cadr (assq 'bar areas))])
+    (values (+ (car plot) (- (caddr plot) (* bw (- n i)))) bw)))
+
+;; bars: (segments share mark) each, mark hover, marked or #f; the
+;; segments of a color filled at once.
+(define-part (ui-draw-bar-chart x y w h flags bars top rules)
+  (let* ([n (length bars)] [areas (ui-bar-chart-areas x y w h n rules)]
+         [plot (cdr (assq 'plot areas))] [px (car plot)] [py (cadr plot)]
+         [pw (caddr plot)] [ph (cadddr plot)] [bottom (+ py ph)]
+         [high (lambda (v) (* ph (/ (min v top) top)))]
+         [rects (make-eq-hashtable)]   ; color -> ((x y w h) ...)
+         [colors '()])                 ; the series', as they come
+    (define (rect! color r)
+      (unless (or (hashtable-contains? rects color)
+                  (memq color '(chart-mark chart-share)))
+        (set! colors (cons color colors)))
+      (hashtable-update! rects color (lambda (rs) (cons r rs)) '()))
+    (ui-draw-surface x y w h '(well))
+    (for-each
+     (lambda (bar i)
+       (let-values ([(bx bw) (ui-bar-chart-bar areas n i)])
+         (when (>= bx px)
+           (let ([gap (if (>= bw 3) 1 0)])
+             (when (caddr bar) (rect! 'chart-mark (list bx py bw ph)))
+             (fold-left (lambda (top-y s)
+                          (let ([sh (high (cdr s))])
+                            (rect! (car s)
+                                   (list bx (- top-y sh) (- bw gap) sh))
+                            (- top-y sh)))
+                        bottom (car bar))
+             (when (cadr bar)
+               (let ([sh (high (cadr bar))])
+                 (rect! 'chart-share
+                        (list bx (- bottom sh) (- bw gap) sh))))))))
+     bars (iota n))
+    ;; the marks under the series, the share over them
+    (for-each (lambda (c)
+                (let ([rs (hashtable-ref rects c '())])
+                  (when (pair? rs) (fill-rects rs c))))
+              (append '(chart-mark) (reverse colors) '(chart-share)))
+    (for-each (lambda (r)
+                (let ([ly (+ (- bottom (round (high (car r)))) 0.5)])
+                  (draw-line px ly (+ px pw) ly 'chart-rule)
+                  (draw-text (+ x 6) (- ly (/ (font-line-height 'ui-small) 2))
+                             (cdr r) 'text-faint 'ui-small)))
+              rules)))
+
+;; values, the oldest first, as points across x y w h rising to top (1
+;; clear of the bottom). => ((x . y) ...)
+(define (ui-chart-points x y w h values top)
+  (let ([n (length values)])
+    (map (lambda (v i)
+           (cons (+ x (* w (/ i (max 1 (- n 1)))))
+                 (- (+ y h) 1 (* (- h 2) (if (> top 0) (/ (min v top) top)
+                                             0)))))
+         values (iota n))))
+
+;; values, the oldest first, as a line rising to their most; flags:
+;; selected (its row is), in chart-share.
+(define-part (ui-draw-sparkline x y w h flags values)
+  (when (> (length values) 1)
+    (draw-polyline (ui-chart-points x y w h values (apply max 0 values))
+                   (if (memq 'selected flags) 'chart-share 'text-dim) 1)))
+
+;; series: ((color value ...) ...), the oldest first over one span, each
+;; rising to its own most, in a well.
+(define-part (ui-draw-line-chart x y w h flags series)
+  (ui-draw-surface x y w h '(well))
+  (for-each (lambda (s)
+              (when (> (length (cdr s)) 1)
+                (draw-polyline (ui-chart-points (+ x 4) (+ y 4) (- w 8) (- h 8)
+                                                (cdr s)
+                                                (apply max 0 (cdr s)))
+                               (car s) 1)))
+            series))
+
+;; A legend in a row: keys ((color . label) ...), a swatch and its label
+;; each, those that fit in w.
+(define-part (ui-draw-legend x y w h flags keys)
+  (let ([lh (font-line-height 'ui-small)] [end (+ x w)])
+    (fold-left (lambda (lx k)
+                 (let ([kw (ui-legend-key-width (cdr k))])
+                   (if (> (+ lx kw) end)
+                       lx
+                       (begin
+                         (fill-rect lx (+ y (/ (- h lh) 2) 2) (- lh 4) (- lh 4)
+                                    (car k))
+                         (draw-text (+ lx lh) (+ y (/ (- h lh) 2)) (cdr k)
+                                    'text-dim 'ui-small)
+                         (+ lx kw 12)))))
+               x keys)))
+
+(define (ui-legend-key-width label)
+  (+ (font-line-height 'ui-small) 4 (text-width label 'ui-small)))
+
+;; (values w h): all of its keys in a row.
+(define-part (ui-legend-size keys)
+  (values (+ (apply + (map (lambda (k) (ui-legend-key-width (cdr k))) keys))
+             (* 12 (max 0 (- (length keys) 1))))
+          (font-line-height 'ui-small)))
+
+;;; ------------------------------------------------------------------
 ;;; popups: what menus, toasts, dialogs, calendars, tooltips and the
 ;;; completion list share, so that a style restyles them all at once
 

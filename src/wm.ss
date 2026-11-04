@@ -424,11 +424,13 @@
         (begin
           (when (memq kind '(key text mouse-down mouse-up wheel))
             (invalidate! win))
-          (safe-call kind
-                     (lambda ()
-                       (parameterize ([current-window win])
-                         (in-window-theme win (lambda () (apply h win args)))))
-                     (lambda (c) (window-crash! win kind c) #f)))
+          (with-profile-span (window-id win) kind
+            (safe-call kind
+                       (lambda ()
+                         (parameterize ([current-window win])
+                           (in-window-theme win
+                                            (lambda () (apply h win args)))))
+                       (lambda (c) (window-crash! win kind c) #f))))
         #f)))
 
 ;; The whole screen: a handler stopped partway may have left shared state
@@ -1015,11 +1017,13 @@
 ;; a redefined draw-window draws, it is drawn again when win changes or
 ;; moves.
 (define (draw-window-clipped win)
-  (apply (lambda (x0 y0 x1 y1)
-           (let ([s *scale*])
-             (call-with-clip (/ x0 s) (/ y0 s) (/ (- x1 x0) s) (/ (- y1 y0) s)
-               (lambda () (draw-window win)))))
-         (extent-box win)))
+  (with-profile-span (window-id win) #f
+    (apply (lambda (x0 y0 x1 y1)
+             (let ([s *scale*])
+               (call-with-clip (/ x0 s) (/ y0 s) (/ (- x1 x0) s)
+                               (/ (- y1 y0) s)
+                 (lambda () (draw-window win)))))
+           (extent-box win))))
 
 ;; Does box a hold box b whole?
 (define (holds? a b)

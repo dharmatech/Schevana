@@ -2930,14 +2930,94 @@
   (uninstall-desktop-entry!)
   (check "and uninstalling removes it" (not (exists file-exists? files))))
 
-;; Reloading the sources keeps the world's state.
-(let ([n (length (windows))])
+;; The profiler: on at boot, it collects with Monitor closed. Monitor
+;; draws its graphs; a window's name focuses it and a process's Kill
+;; kills it; the Profiling checkbox turns it off, and Monitor lists the
+;; windows and processes in tables, whose rows focus and kill as they
+;; always did; and on again.
+(let ([m (find-window 'monitor)]) (when m (close-window! m)))
+(steps 2)
+(check "profiling is on at boot, and collects with Monitor closed"
+       (let ([s (car (profile-steps))])
+         (steps 1)
+         (and (profiling?) (not (find-window 'monitor))
+              (not (eqv? s (car (profile-steps)))))))
+(let* ([target (open-window "Target"   ; drawn at every step, slowly: a top row
+                 'size '(200 . 100) 'pos '(1000 . 420)
+                 'tick (lambda (win) (invalidate! win))
+                 'draw (lambda (win w h)
+                         (let ([t (+ (real-time) 2)])
+                           (let loop () (when (< (real-time) t) (loop))))))]
+       [busy (lambda () (spawn "monitored" (lambda () (let loop () (loop)))))]
+       [p (busy)]
+       [m (monitor)]
+       [ui (window-ref m 'ui)]
+       [bars (lambda ()
+               (filter (lambda (r)
+                         (let ([id (ui-region-id r)])
+                           (and (pair? id) (eq? (car id) 'monitor-steps))))
+                       (ui-state-regions ui)))]
+       [row (lambda (table x xs)   ; x's row in the table of xs, by id
+              (list table 'row (list-index (lambda (y) (eq? y x)) xs)))]
+       [window-row (lambda ()
+                     (row 'monitor-windows target
+                          (sort (lambda (a b) (< (window-id a) (window-id b)))
+                                (windows))))])
+  (move-window! m 20 40)
+  (focus-window! m)
+  ;; the Consumers sum seconds done: one with Target in it done, and
+  ;; Monitor's view moved on (twice a second) since
+  (let ([until (+ (real-time) 1700)])
+    (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
+  (steps 1)
+  (screenshot (string-append out-dir "/monitor.png"))
+  (check "Monitor draws its graphs: a bar a step, a row a consumer"
+         (and (not (window-error m)) (>= (length (bars)) 20)
+              (ui-find ui (list 'monitor-kill (proc-id p)))
+              (ui-find ui (list 'monitor-focus (window-id target)))))
+  (click-ui! m (list 'monitor-focus (window-id target)))
+  (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
+  (focus-window! m)
+  (steps 2)
+  (click-ui! m (list 'monitor-kill (proc-id p)))
+  (check "a process's Kill in Monitor kills it" (not (memq p (procs))))
+  (click-ui! m 'profiling)
+  (let ([p (busy)])
+    (steps 2)
+    (check "Monitor's Profiling turns it off, and Monitor lists the windows \
+            and processes in tables"
+           (and (not (profiling?)) (not *profile-span*) (null? (bars))
+                (ui-find ui (window-row))
+                (ui-find ui (row 'monitor-procs p (procs)))))
+    (click-ui! m (window-row))
+    (check "where a window's row focuses it" (eq? (focused-window) target))
+    (focus-window! m)
+    (steps 2)
+    (click-ui! m (row 'monitor-procs p (procs)))
+    (check "and a process's row kills it" (not (memq p (procs)))))
+  (click-ui! m 'profiling)
+  (let ([until (+ (real-time) 700)])
+    (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
+  (check "and on again: the bars come back"
+         (and (profiling?) (pair? *profile-span*)
+              (pair? (bars)) (not (window-error m))))
+  (close-window! m)
+  (close-window! target)
+  (steps 2))
+
+;; Reloading the sources keeps the world's state, and the profiler's
+;; history.
+(let ([n (length (windows))] [s (car (profile-steps))])
   (reload!)
   (check "reload asks for the whole screen" (eq? *dirty* #t))
   (steps 2)
   (check "reload keeps windows" (= n (length (windows))))
   (check "windows still draw after reload"
-         (not (window-error (find-window 'clock)))))
+         (not (window-error (find-window 'clock))))
+  (check "reload keeps the profiler's history, and it goes on"
+         (and (profiling?) (pair? *profile-span*)
+              (memv s (profile-steps))
+              (not (eqv? s (car (profile-steps)))))))
 (let ([s (settings)])
   (steps 2)
   (click-ui! s '(tab theme))
@@ -3300,6 +3380,7 @@
        #t)]
     [(sdl-render-present)
      (lambda (r) (set! fake-presents (+ fake-presents 1)) #t)]
+    [(sdl-get-ticks-ns) (top-level-value name)]   ; the clock: SDL's own
     [else (lambda args
             (set! fake-unfaked (cons name fake-unfaked))
             (errorf name "the fake SDL has no stand-in for this"))]))

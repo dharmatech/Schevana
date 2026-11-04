@@ -18,6 +18,37 @@
 (define handler-fuel 50000000)   ; per handler call; roughly 0.1s of pure Scheme
 (define slice-fuel 10000)        ; per process slice; roughly 15us
 
+;; The profiler's hook: #f, or (begin . end), procedures that
+;; desktop/profile.ss sets while on: (begin key part) opens a span of key
+;; (a symbol, or a window's or a process's id) and part (a window
+;; handler's kind, or #f; #t for a process's turn); (end outer?) closes
+;; the span open innermost, or with outer? true (the step's end) the
+;; outermost, and any a raise left open. Five places run their work in
+;; with-profile-span: the step, safely, a window's handler (window-call)
+;; and drawing (draw-window-clipped), and a process's turn (run-procs!).
+;; Off, each costs a variable read and a branch; key and part are
+;; computed only while the hook is set; nothing is allocated either way,
+;; and nothing is kept across the work (a value live across an engine's
+;; run costs Chez a copy of the frame).
+(defvar *profile-span* #f)
+
+(define-syntax with-profile-span
+  (lambda (x)
+    (syntax-case x ()
+      [(_ key part body ...)
+       (with-syntax ([outer? (equal? (syntax->datum #'key) ''step)])
+         #'(let ([span *profile-span*])
+             (if span
+                 (begin
+                   ((car span) key part)
+                   (call-with-values (lambda () body ...)
+                     (case-lambda
+                       [(v) (let ([s *profile-span*]) (when s ((cdr s) outer?)))
+                            v]
+                       [vs (let ([s *profile-span*]) (when s ((cdr s) outer?)))
+                           (apply values vs)])))
+                 (begin body ...))))])))
+
 (define (make-timeout-condition who)
   (condition (make-error) (make-who-condition who)
              (make-message-condition
@@ -42,7 +73,8 @@
 
 ;; For trusted system code: errors are reported, but there is no fuel limit.
 (define (safely who thunk)
-  (guard (c [#t (report-error! who c)]) (thunk)))
+  (with-profile-span who #f
+    (guard (c [#t (report-error! who c)]) (thunk))))
 
 ;;; ------------------------------------------------------------------
 ;;; notifications
@@ -151,13 +183,23 @@
 
 (define (procs-ready?) (exists proc-may-run? *procs*))
 
-;; Run ready processes round-robin until budget-ms has elapsed.
+;; Run ready processes until budget-ms has elapsed, round-robin: in its
+;; turn each runs slices for its share of the time left, while it may.
 (define (run-procs! budget-ms)
   (let ([deadline (+ (now-ms) budget-ms)])
     (let loop ()
       (let ([ready (filter proc-may-run? *procs*)])
         (when (and (pair? ready) (< (now-ms) deadline))
-          (for-each (lambda (p) (when (proc-may-run? p) (run-slice! p))) ready)
+          (for-each
+           (lambda (p)
+             (let ([until (+ (now-ms) (/ (- deadline (now-ms))
+                                         (length ready)))])
+               (with-profile-span (proc-id p) #t
+                 (let turn ()
+                   (when (and (memq p *procs*) (proc-may-run? p))
+                     (run-slice! p)
+                     (when (< (now-ms) until) (turn)))))))
+           ready)
           (loop))))))
 
 ;; Give up the CPU for ms milliseconds (only inside a process).

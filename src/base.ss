@@ -13,6 +13,9 @@
 
 (define (now-ms) (real-time))
 
+;; The monotonic clock in ns, a fixnum: what the profiler times with.
+(define (now-ns) (sdl-get-ticks-ns))
+
 (define (clamp x lo hi) (max lo (min hi x)))
 
 (define (string-split str ch)

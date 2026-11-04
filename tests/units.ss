@@ -5392,6 +5392,531 @@
                  (steps 1)
                  (not focus)))))))
 
+;;; ------------------------------------------------------------------
+;;; the kit's charts
+
+(for-each close-window! (windows))
+(set-style! 'mac)
+(steps 2)
+
+;; A window whose draw is (draw ui), between the kit's begin and end.
+;; => (values win ui)
+(define (chart-test-window draw)
+  (let ([ui (make-ui)])
+    (values (apply open-window "Charts" 'size '(420 . 240) 'pos '(100 . 100)
+                   'draw (lambda (win w h)
+                           (ui-begin! ui)
+                           (draw ui)
+                           (ui-end! ui w h))
+                   (ui-handlers ui))
+            ui)))
+
+;; Is any pixel of x y w h in win's content not its ground's?
+(define (chart-test-inked? win x y w h)
+  (let-values ([(cx cy cw ch) (content-rect win)])
+    (let ([ground (canvas-pixel (+ cx 2) (+ cy 2))])
+      (exists (lambda (i)
+                (exists (lambda (j)
+                          (not (= (canvas-pixel (+ cx x i) (+ cy y j))
+                                  ground)))
+                        (iota (exact (ceiling h)))))
+              (iota (exact (ceiling w)))))))
+
+;; What a drawing part, replaced by a style, is given: draw's flags and
+;; data as the replacement records them, and whether the plain part
+;; inked x y w h. => (values inked? given)
+(define (chart-test-part key draw x y w h)
+  (with-test-styles
+   (lambda ()
+     (let-values ([(win ui) (chart-test-window draw)])
+       (steps 2)
+       (let ([inked? (chart-test-inked? win x y w h)] [given #f])
+         (define-style test-chart "Test" key
+           (lambda args (set! given (list-tail args 4))))
+         (set-style! 'test-chart)
+         (invalidate! win)
+         (steps 2)
+         (let ([still? (chart-test-inked? win x y w h)])
+           (close-window! win)
+           (values (and inked? (not still?)) given)))))))
+
+(check "the bar chart: its plot right of its scale's widest label, its bars \
+        whole pixels 1 to 6 wide, the newest at the plot's right; the bar \
+        under the pointer it reports and marks, a press calls on-press with \
+        its index; its look is the ui-draw-bar-chart part's"
+       (let* ([rules '((10 . "10 ms") (20 . "20 ms"))]
+              [areas (ui-bar-chart-areas 10 10 300 100 5 rules)]
+              [plot (cdr (assq 'plot areas))]
+              [bars (map (lambda (i)
+                           (cons (list (cons 'chart-1 (+ i 1))
+                                       (cons 'chart-2 1))
+                                 (and (= i 2) 1)))
+                         (iota 5))]
+              [hover #f] [pressed #f])
+         (let-values ([(win ui) (chart-test-window
+                                 (lambda (ui)
+                                   (set! hover
+                                     (ui-bar-chart ui 'chart 10 10 300 100 bars
+                                                   20 rules 0
+                                                   (lambda (i)
+                                                     (set! pressed i))))))]
+                      [(bx bw) (ui-bar-chart-bar areas 5 3)]
+                      [(lx lw) (ui-bar-chart-bar areas 5 4)])
+           (steps 2)
+           (let-values ([(cx cy cw ch) (content-rect win)])
+             (let ([x (+ cx bx (/ bw 2))] [y (+ cy 60)])
+               (inject! `(mouse-move ,x ,y))
+               (steps 2)
+               (let ([hovered hover])
+                 (inject! `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left))
+                 (steps 2)
+                 (close-window! win)
+                 (let-values ([(inked? given)
+                               (chart-test-part
+                                'ui-draw-bar-chart
+                                (lambda (ui)
+                                  (ui-bar-chart ui 'chart 10 10 300 100 bars 20
+                                                rules 0 void))
+                                10 10 300 100)])
+                   (printf "  ~s\n" (list plot (assq 'bar areas) hovered
+                                          pressed given))
+                   (and (= (car plot)
+                           (+ 10 12 (widest-text (map cdr rules) 'ui-small)))
+                        (= (cadr (assq 'bar areas)) 6)
+                        (= 1 (cadr (assq 'bar (ui-bar-chart-areas
+                                               10 10 300 100 1000 rules))))
+                        (= (+ lx lw) (+ (car plot) (caddr plot)))
+                        (= bw 6) (= (+ bx bw) lx)
+                        (eqv? hovered 3) (eqv? pressed 3) inked?
+                        (equal? (map caddr (cadr given))
+                                '(marked #f #f #f #f))
+                        (equal? (map cadr (cadr given)) '(#f #f 1 #f #f))
+                        (equal? (cddr given) (list 20 rules))))))))))
+
+(check "the sparkline: values as a line, in chart-share when its row is \
+        selected; its look is the ui-draw-sparkline part's"
+       (let-values ([(inked? given)
+                     (chart-test-part
+                      'ui-draw-sparkline
+                      (lambda (ui)
+                        (ui-draw-sparkline 10 10 200 30 '(selected)
+                                           '(1 3 2 5)))
+                      10 10 200 30)])
+         (and inked? (equal? given '((selected) (1 3 2 5))))))
+
+(check "the line chart: series over one span, each to its own most, in a \
+        well; its look is the ui-draw-line-chart part's"
+       (let* ([series '((chart-1 1 2 3) (chart-2 30 10 20))]
+              [inked+given
+               (call-with-values
+                 (lambda ()
+                   (chart-test-part
+                    'ui-draw-line-chart
+                    (lambda (ui)
+                      (ui-draw-line-chart 10 10 300 80 '() series))
+                    10 10 300 80))
+                 list)])
+         (and (car inked+given)
+              (equal? (cadr inked+given) (list '() series)))))
+
+(check "the legend: a swatch and a label a key, its size its keys' in a \
+        row; its look is the ui-draw-legend part's"
+       (let*-values ([(keys) '((chart-1 . "events") (chart-2 . "timers"))]
+                     [(lw lh) (ui-legend-size keys)]
+                     [(inked? given)
+                      (chart-test-part
+                       'ui-draw-legend
+                       (lambda (ui) (ui-draw-legend 10 10 300 lh '() keys))
+                       10 10 300 lh)])
+         (and inked? (= lh (font-line-height 'ui-small))
+              (= lw (+ (ui-legend-key-width "events") 12
+                       (ui-legend-key-width "timers")))
+              (equal? given (list '() keys)))))
+
+;;; ------------------------------------------------------------------
+;;; the profiler (desktop/profile.ss)
+
+(for-each close-window! (windows))
+(steps 2)
+
+;; Busy for ms of the profiler's clock.
+(define (profile-test-busy ms)
+  (let ([t0 (now-ns)])
+    (let loop ()
+      (when (< (- (now-ns) t0) (* ms 1000000)) (loop)))))
+
+;; The steps recorded by thunk, the newest first.
+(define (profile-test-steps thunk)
+  (let ([before (profile-steps)])
+    (thunk)
+    (let loop ([l (profile-steps)] [acc '()])
+      (if (or (null? l) (memv (car l) before))
+          (reverse acc)
+          (loop (cdr l) (cons (car l) acc))))))
+
+;; A step's uses of x: a window's or a process's subject, or a key.
+(define (profile-test-uses step x)
+  (filter (lambda (u) (equal? (profile-use-subject u) (profile-subject-of x)))
+          (profile-step-uses step)))
+
+(define (profile-test-near? a b) (< (abs (- a b)) 1e-6))
+
+;; A step's phases' ms, all of them.
+(define (profile-test-phases step)
+  (map (lambda (p) (profile-step-phase-ms step p))
+       (vector->list profile-phase-names)))
+
+;; Bytes allocated by thunk, (statistics) aside.
+(define (profile-test-bytes thunk)
+  (let ([b0 (sstats-bytes (statistics))])
+    (thunk)
+    (- (sstats-bytes (statistics)) b0)))
+
+(check "profiling is on at boot: the hooks are the profiler's, the collect \
+        handler its own, and steps are kept"
+       (and (profiling?) (pair? *profile-span*)
+            (eq? (car *profile-span*) profile-begin!)
+            (eq? (collect-request-handler) profile-collect)
+            (pair? (profile-steps))))
+
+(check "off, the hook is #f: no step is kept, the clock is never read, \
+        Chez's own collect handler is back; on again, steps are kept"
+       (let ([reads 0] [clock now-ns] [before (profile-steps)])
+         (profiling! #f)
+         (set! now-ns
+           (lambda () (set! reads (+ reads 1)) (clock)))
+         (steps 5)
+         (set! now-ns clock)
+         (let ([off (and (not (profiling?)) (not *profile-span*)
+                         (equal? before (profile-steps)) (= reads 0)
+                         (eq? (collect-request-handler)
+                              *profile-plain-collect*))])
+           (profiling! #t)
+           (and off (= 3 (length (profile-test-steps (lambda () (steps 3)))))
+                *profile-span*))))
+
+(check "a span allocates nothing, on or off: neither its hook's site nor \
+        the profiler's books (a step's: its one guard)"
+       (let* ([spans (lambda ()
+                       (with-profile-span 'step #f
+                         (with-profile-span 'render #f
+                           (do ([i 0 (+ i 1)]) ((= i 10000))
+                             (with-profile-span (mod i 30) 'draw
+                               (with-profile-span 'profile-test-x #f
+                                 i))))))]
+              [none (profile-test-bytes void)]   ; (statistics)'s own
+              [on (begin (spans) (- (profile-test-bytes spans) none))]
+              [off (begin (profiling! #f) (- (profile-test-bytes spans) none))])
+         (profiling! #t)
+         (printf "  ~a bytes on, ~a off, for 20,000 spans and a step\n" on off)
+         (and (< on 1000) (= off 0))))
+
+(check "spans nest: each keeps its self time, the phases and the uses add \
+        up to the step, idle is the step's own"
+       (let* ([s (car (profile-test-steps
+                       (lambda ()
+                         (with-profile-span 'step #f
+                           (profile-test-busy 1)
+                           (with-profile-span 'render #f
+                             (profile-test-busy 2)
+                             (with-profile-span 'profile-test-inner #f
+                               (profile-test-busy 3)))))))]
+              [use (lambda (k) (profile-use-ms
+                                (car (profile-test-uses s k))))])
+         (and (< 0.5 (profile-step-phase-ms s 'idle) 1.5)
+              (< 1.5 (use 'render) 2.5)
+              (< 2.5 (use 'profile-test-inner) 3.5)
+              (eq? (profile-use-phase (car (profile-test-uses
+                                            s 'profile-test-inner)))
+                   'render)
+              (profile-test-near?
+               (+ (profile-step-phase-ms s 'render)
+                  (profile-step-phase-ms s 'gc))
+               (apply + (map profile-use-ms (profile-step-uses s))))
+              (profile-test-near? (apply + (profile-test-phases s))
+                                  (profile-step-ms s)))))
+
+(let ([life-win (life)])
+  (move-window! life-win 600 300)
+  (check "every step of the world adds up: its phases to its time, its uses \
+          and idle too, no part below 0"
+         (let ([ss (profile-test-steps (lambda () (steps 20)))])
+           (close-window! life-win)
+           (and (= (length ss) 20)
+                (for-all
+                 (lambda (s)
+                   (let ([uses (profile-step-uses s)])
+                     (and (profile-test-near? (apply + (profile-test-phases s))
+                                              (profile-step-ms s))
+                          (profile-test-near?
+                           (+ (profile-step-phase-ms s 'idle)
+                              (apply + (map profile-use-ms uses)))
+                           (profile-step-ms s))
+                          (for-all (lambda (u) (>= (profile-use-ms u) 0))
+                                   uses)
+                          (for-all (lambda (ms) (>= ms 0))
+                                   (profile-test-phases s)))))
+                 ss)))))
+
+(let ([slow (open-window "Slow"
+              'size '(200 . 100)
+              'tick (lambda (win) (invalidate! win))
+              'draw (lambda (win w h) (profile-test-busy 3)))]
+      [life-win (life)])
+  (check "a window whose draw is made slow comes first among Monitor's \
+          consumers, its draw the most of its parts"
+         (let* ([ss (profile-test-steps (lambda () (steps 10)))]
+                [ts (filter (lambda (t)
+                              (monitor-subject? (profile-total-what t)))
+                            (profile-totals ss #t))])
+           (close-window! slow)
+           (close-window! life-win)
+           (and (pair? ts)
+                (equal? (profile-total-what (car ts))
+                        (profile-subject-of slow))
+                (equal? (profile-total-what
+                         (car (profile-total-parts (car ts))))
+                        '(draw . render))
+                (= (profile-total-steps (car ts)) 10)
+                (>= (/ (profile-total-ms (car ts)) 10) 3)))))
+
+(let ([p (spawn "profile-test-busy" (lambda () (let loop () (loop))))])
+  (check "a busy process shows its share: most of the processes' phase, in \
+          one turn a step"
+         (let ([ss (profile-test-steps (lambda () (steps 10)))])
+           (kill! p)
+           (for-all
+            (lambda (s)
+              (let ([u (profile-test-uses s p)])
+                (and (= (length u) 1)
+                     (= (profile-use-calls (car u)) 1)
+                     (> (profile-use-ms (car u))
+                        (* 0.8 (profile-step-phase-ms s 'procs))))))
+            ss))))
+
+(check "a (collect) shows in the memory numbers, and so does the heap; a \
+        collection requested on the main loop is a span of its own, gc"
+       (let* ([timer (profile-test-steps
+                      (lambda () (after 0 (lambda () (collect))) (steps 2)))]
+              [g0 (collections)]
+              [requested
+               (car (profile-test-steps
+                     (lambda ()
+                       (with-profile-span 'step #f
+                         (with-profile-span 'event #f
+                           (let loop ([keep '()])
+                             (when (= (collections) g0)
+                               (loop (cons (make-vector 100)
+                                           (if (> (length keep) 50)
+                                               '()
+                                               keep))))))))))])
+         (and (exists (lambda (s) (>= (profile-step-ref s 'gcs) 1)) timer)
+              (for-all (lambda (s) (> (profile-step-ref s 'heap) 0)) timer)
+              (>= (profile-step-ref requested 'gcs) 1)
+              (> (profile-step-ref requested 'allocated) 0)
+              (pair? (profile-test-uses requested 'gc))
+              (eq? (profile-use-phase (car (profile-test-uses requested 'gc)))
+                   'event)
+              (> (profile-step-phase-ms requested 'gc) 0)
+              (> (profile-step-ref requested 'gc-ms) 0))))
+
+(let* ([w (open-window "Inner"
+            'size '(200 . 100)
+            'tick (lambda (win)
+                    (safely 'profile-test-handler
+                            (lambda () (profile-test-busy 1)))))]
+       [p (spawn "inner"
+                 (lambda ()
+                   (let loop ()
+                     (safely 'profile-test-process (lambda () (yield)))
+                     (loop))))])
+  (check "a span inside an engine (a handler, a process) is not timed: its \
+          time is its handler's or its process's"
+         (let ([ss (profile-test-steps (lambda () (steps 5)))])
+           (close-window! w)
+           (kill! p)
+           (for-all
+            (lambda (s)
+              (and (null? (profile-test-uses s 'profile-test-handler))
+                   (null? (profile-test-uses s 'profile-test-process))
+                   (exists (lambda (u)
+                             (and (eq? (profile-use-part u) 'tick)
+                                  (>= (profile-use-ms u) 1)))
+                           (profile-test-uses s w))
+                   (pair? (profile-test-uses s p))))
+            ss))))
+
+(check "a span on a thread other than the one profiling! saw is untimed, \
+        and so is one deeper than the stack: no step is lost, nothing \
+        overflows"
+       (let* ([thread *profile-thread*]
+              [others (profile-test-steps
+                       (lambda ()
+                         (set! *profile-thread* (+ thread 1))
+                         (steps 3)
+                         (set! *profile-thread* thread)))]
+              [deep (profile-test-steps
+                     (lambda ()
+                       (with-profile-span 'step #f
+                         (let nest ([n 100])
+                           (if (= n 0)
+                               (profile-test-busy 1)
+                               (with-profile-span 'render #f
+                                 (nest (- n 1))))))))])
+         (and (null? others) (= (length deep) 1)
+              (profile-test-near? (apply + (profile-test-phases (car deep)))
+                                  (profile-step-ms (car deep)))
+              (>= (profile-step-phase-ms (car deep) 'render) 1))))
+
+(check "a raise out of a span, caught in its parent, leaves it open: the \
+        ends after it close a span each, the innermost, the step's end the \
+        rest, and the step's phases still add up to it"
+       (let ([s (car (profile-test-steps
+                      (lambda ()
+                        (with-profile-span 'step #f
+                          (with-profile-span 'render #f
+                            (guard (e [#t 'caught])
+                              (with-profile-span 'profile-test-raiser #f
+                                (profile-test-busy 2)
+                                (raise 'oops)))
+                            (with-profile-span 'profile-test-after #f
+                              (profile-test-busy 3)))))))]
+             [ms (lambda (s k)
+                   (apply + (map profile-use-ms (profile-test-uses s k))))])
+         (and (profile-test-near? (apply + (profile-test-phases s))
+                                  (profile-step-ms s))
+              (< 1.5 (ms s 'profile-test-raiser) 2.5)
+              (< 2.5 (ms s 'profile-test-after) 3.5)
+              (< (ms s 'render) 0.5)
+              (eq? (profile-use-phase
+                    (car (profile-test-uses s 'profile-test-after)))
+                   'render))))
+
+(check "a collector that raises turns itself off, says so once, and the \
+        world goes on drawing"
+       (let ([done profile-step-done!] [errors 0] [report report-error!])
+         (set! report-error! (lambda (who c)
+                               (set! errors (+ errors 1))
+                               (report who c)))
+         (set! profile-step-done! (lambda (now ns) (car '())))
+         (steps 3)
+         (set! profile-step-done! done)
+         (set! report-error! report)
+         (let ([off (not (profiling?))] [drawn *frames-drawn*])
+           (invalidate!)
+           (steps 2)
+           (profiling! #t)
+           (set! *toasts* '())
+           (and off (= errors 1) (> *frames-drawn* drawn)))))
+
+(check "the history keeps no closed window and no ended process alive: \
+        each is a subject, its id, and its title or name when first seen"
+       (let* ([w (open-window "Kept?" 'size '(200 . 100)
+                              'tick (lambda (win) (invalidate! win)))]
+              [p (spawn "kept?" (lambda () (let loop () (yield) (loop))))]
+              [w-ptr (weak-cons w #f)] [p-ptr (weak-cons p #f)])
+         (steps 5)
+         (let ([subjects (list (profile-subject-of w) (profile-subject-of p))]
+               [ids (list (window-id w) (proc-id p))])
+           (close-window! w)
+           (kill! p)
+           (set! w #f)
+           (set! p #f)
+           (steps 5)
+           (collect (collect-maximum-generation))
+           (and (bwp-object? (car w-ptr)) (bwp-object? (car p-ptr))
+                (exists (lambda (s)
+                          (member (car subjects)
+                                  (map profile-use-subject
+                                       (profile-step-uses s))))
+                        (profile-steps))
+                (equal? (map car subjects) '(window process))
+                (equal? (map cdr subjects) ids)
+                (equal? (map profile-subject-name subjects)
+                        '("Kept?" "kept?"))))))
+
+(let* ([a (open-window "Twin" 'size '(100 . 60))]
+       [b (open-window "Twin" 'size '(100 . 60))]
+       [c (open-window "Single" 'size '(100 . 60))]
+       [seen (steps 1)]   ; the profiler takes their titles
+       [subjects (map profile-subject-of (list a b c))]
+       [labels (monitor-labels subjects)])
+  (close-window! a)
+  (check "two windows of one title get their ids in Monitor's labels, a \
+          closed one says so, and a title of its own stays plain"
+         (equal? (map cdr labels)
+                 (list (format "Twin (window ~a)" (window-id a))
+                       (format "Twin (window ~a)" (window-id b))
+                       "Single")))
+  (check "and once one of them is closed"
+         (equal? (map cdr (monitor-labels subjects))
+                 (list (format "Twin (window ~a, closed)" (window-id a))
+                       (format "Twin (window ~a)" (window-id b))
+                       "Single")))
+  (for-each close-window! (list b c)))
+
+(check "the history keeps the steps of the last seconds (at most 100 a \
+        second of them) and the seconds of the last minutes asked for \
+        (profile-history!), by the clock"
+       (let ([clock now-ns] [fake (expt 10 15)])
+         (define (run! seconds)   ; 100 ms a step
+           (do ([i 0 (+ i 1)]) ((= i (* 10 seconds)))
+             (set! fake (+ fake (expt 10 8)))
+             (schevana-step! 0)))
+         (define (within? seconds)   ; the steps kept span that, a second more
+           (let ([ss (profile-steps)])
+             (and (pair? ss)
+                  (> (profile-step-end (car (last-pair ss)))
+                     (- (profile-step-end (car ss)) (* 1000 (+ seconds 1))))
+                  (< (profile-step-end (car (last-pair ss)))
+                     (- (profile-step-end (car ss)) (* 1000 (- seconds 1)))))))
+         (set! now-ns (lambda () fake))
+         (profile-clear!)
+         (profile-history! 30 1)
+         (run! 90)
+         (let ([long (and (within? 30) (= (length (profile-seconds)) 60))])
+           (profile-history! 5 2)
+           (let ([now (within? 5)])
+             (run! 150)
+             (let ([later (and (within? 5)
+                               (= (length (profile-seconds)) 120))])
+               (set! now-ns clock)
+               ;; back to back, thousands a second: at most 100 a second
+               ;; of it
+               (profile-history! 2 10)
+               (steps 2000)
+               (let ([most (= (length (profile-steps)) 200)])
+                 (profile-history! 30 10)
+                 (profile-clear!)
+                 (and long now later most)))))))
+
+(check "the charts' colors are colors in every style; Settings' Colors tab \
+        lists none of them, and its colors still go to hue and back"
+       (let ([keys (filter (lambda (k)
+                             (string-prefix? "chart-" (symbol->string k)))
+                           color-keys)]
+             [listed (apply append (map cdr (theme 'color-groups)))])
+         (and (= (length keys) 11)
+              (for-all
+               (lambda (s)
+                 (with-style (style-name s)
+                   (lambda ()
+                     (and (for-all (lambda (k)
+                                     (call-with-values
+                                       (lambda () (color-rgba (theme k)))
+                                       (lambda (r g b a) (<= 0 a 1))))
+                                   keys)
+                          (for-all
+                           (lambda (k)
+                             (let ([c (theme k)])
+                               (or (not (fixnum? c))
+                                   (= c (call-with-values
+                                          (lambda () (color->hsl c))
+                                          color-from-hsl)))))
+                           listed)))))
+               *styles*)
+              (not (exists (lambda (k) (memq k listed)) keys)))))
+
 (check "reload reads the source list from load.ss"
        (and (equal? (read-source-list) *schevana-sources*)
             (member "src/wm.ss" *schevana-sources*)
