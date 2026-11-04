@@ -11,10 +11,12 @@
 ;; (interaction-environment), which a private REPL rebinds.
 (defvar *world-env* (interaction-environment))
 
-(define (now-ms) (real-time))
-
 ;; The monotonic clock in ns, a fixnum: what the profiler times with.
 (define (now-ns) (sdl-get-ticks-ns))
+
+;; The same clock in ms: what apps and timers go by. It reads the clock
+;; itself, so a test can fake either without moving the other.
+(define (now-ms) (quotient (sdl-get-ticks-ns) 1000000))
 
 (define (clamp x lo hi) (max lo (min hi x)))
 

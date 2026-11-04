@@ -188,7 +188,7 @@ The profiler runs whether Monitor is open or not, from boot, until
 Monitor's Profiling or `(profiling! #f)` turns it off: a step of 30 Life
 windows costs about 1% more with it (`tests/bench.ss`), and it
 allocates nothing. Its unit is a step, one `schevana-step!` (the wait
-for host events, then events, timers, processes, ticks, the frame and
+for host events, then events, timers, a tick, processes, the frame and
 its upload), and it is level 1: Schevana's own accounting, with nothing
 in an app's code instrumented.
 
@@ -390,6 +390,21 @@ Decisions worth keeping in mind for the real design:
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
   window property (`window-ref` / `window-set!`).
+- **A pacer gives the ticks.** Every window's, surface's and toast's
+  `'tick` runs exactly once a period, whether it draws or not, while a
+  tick's work and its frame fit in one: bookkeeping or a check on
+  something can count on a steady beat. The period is a refresh of the
+  screen's by default, so apps that move by time still read the clock
+  (`(pacer-tick-ms)`, when this tick began); `(pacer-rate! 60)` makes it
+  60 a second from then on, and `(pacer-rate! 'screen)` brings the
+  screen's back. `(pacer-ticks)` counts them. Past a period of work the world slows down: the next tick comes
+  right after, none skipped. Processes run in the time left before the
+  next tick's frame, at least 1 ms a step. The screen's wait never holds
+  the ticks back: while the host window is hidden, minimized or covered
+  nothing is presented, and while it lacks the focus frames are presented
+  without that wait. With the focus, the wait paces frames, and input is
+  handled and drawn as it comes, between ticks; without it, the ticks
+  pace both: the loop sleeps until the next, and takes input then.
 - **Kernel vs user space via engines.** Each app handler runs in a Chez
   engine with a fuel budget (`safe-call`). An error or an infinite loop
   "crashes" only that window, which then shows the condition and can be

@@ -98,6 +98,7 @@
      (when (= 0 *sdl-window*)
        (errorf 'host-init! "SDL_CreateWindow failed: ~a" (sdl-get-error)))
      (set! *sdl-renderer* (sdl-create-renderer *sdl-window* #f))
+     (set! *host-vsync?* #t)   ; by the hint, till host-present-damage!
      (when (= 0 *sdl-renderer*)
        (errorf 'host-init! "SDL_CreateRenderer failed: ~a" (sdl-get-error)))
      (let*-values ([(uw uh pw ph) (host-read-sizes)]
@@ -286,7 +287,27 @@
         (quotient (* 1000000000 per) hz)
         (quotient 1000000000 60))))
 
+;; Hidden, minimized or covered, the host window shows nothing: no upload
+;; nor present (whose wait for the screen would hold the pacer's ticks
+;; back), and the whole texture again once it shows. Without the focus it
+;; does not wait for the screen either: the desktop may let a window it
+;; hardly shows present seldom, whatever its flags say.
+(defvar *host-vsync?* #t)
 (define (host-present-damage!)
+  (let* ([flags (if (eq? *host* 'sdl) (sdl-get-window-flags *sdl-window*) 0)]
+         [focus? (logtest flags SDL_WINDOW_INPUT_FOCUS)])
+    (unless (or (not (eq? *host* 'sdl)) (eq? focus? *host-vsync?*))
+      (set! *host-vsync?* focus?)
+      (sdl-set-render-vsync *sdl-renderer* (if focus? 1 0)))
+    ;; SDL_WINDOW_OCCLUDED, _HIDDEN and _MINIMIZED
+    (if (logtest flags #x4c)
+        (begin
+          (set! *upload-rows* '())
+          (set! *full-upload?* #t)
+          (set! *present-only?* #f))
+        (host-upload-damage!))))
+
+(define (host-upload-damage!)
   (let ([runs (cond [(eqv? *canvas* 0) '()]
                     [*full-upload?* (list (cons 0 *canvas-ph*))]
                     [else *upload-rows*])])
@@ -407,10 +428,16 @@
     (and (not (= 0 dx dy)) (list 'wheel dx dy))))
 
 ;; Waits up to wait-ms for the first event, then drains the queue.
+;; Without the screen's wait, frames come only with ticks, and so does
+;; input: it sleeps the whole wait, a step a tick and not one an event.
 (define (host-events wait-ms)
   (if (eq? *host* 'sdl)
       (let ([buf *sdl-event*])
-        (let loop ([more? (if (> wait-ms 0)
+        (unless (or *host-vsync?* (<= wait-ms 0))
+          (sleep (make-time 'time-duration
+                            (* 1000000 (remainder wait-ms 1000))
+                            (quotient wait-ms 1000))))
+        (let loop ([more? (if (and *host-vsync?* (> wait-ms 0))
                               (sdl-wait-event-timeout buf wait-ms)
                               (sdl-poll-event buf))]
                    [acc '()])

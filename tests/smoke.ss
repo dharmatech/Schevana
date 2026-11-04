@@ -3071,10 +3071,12 @@
   (let ([p (busy)])
     (steps 2)
     (check "Monitor's Profiling turns it off, and Monitor lists the windows \
-            and processes in tables"
+            and processes in tables (a new one by its next view: twice a \
+            second)"
            (and (not (profiling?)) (not *profile-span*) (null? (bars))
                 (ui-find ui (window-row))
-                (ui-find ui (row 'monitor-procs p (procs)))))
+                (wait-for (lambda ()
+                            (ui-find ui (row 'monitor-procs p (procs)))))))
     (click-ui! m (window-row))
     (check "where a window's row focuses it" (eq? (focused-window) target))
     (focus-window! m)
@@ -3245,10 +3247,10 @@
   (close-window! w))
 
 ;; Steps that nothing asked a frame of draw and upload nothing. The frame
-;; the clock asks for once a second (the top bar's) calls every window's
-;; draw once, clipped away, and uploads the rows it changed (the top
-;; bar's clock); (invalidate!) draws every window once too, and when
-;; nothing on screen changed it uploads nothing.
+;; the clock asks for once a second (the top bar's) draws no window below
+;; the bar (outside its box) and uploads the rows it changed (the top
+;; bar's clock); (invalidate!) draws every window once, and when nothing
+;; on screen changed it uploads nothing.
 (let* ([a (plain-window "One" 100 100)] [b (plain-window "Two" 420 160)]
        [na (count-draws! a)] [nb (count-draws! b)] [row (* 4 *canvas-pw*)])
   (steps 2)
@@ -3259,10 +3261,10 @@
             (loop (+ n 1) (if d (+ forced 1) forced)
                   (and ok (= up (if d (* row *frame-rows*) 0)))))
           (check (format "idle steps draw and upload nothing; a forced frame \
-                          draws each window once and uploads the rows it \
-                          changed (~a steps, ~a forced)" n forced)
-                 (and ok (> n 3) (<= 1 forced 2) (= (- (na) a0) forced)
-                      (= (- (nb) b0) forced))))))
+                          draws no window outside its box and uploads the \
+                          rows it changed (~a steps, ~a forced)" n forced)
+                 (and ok (> n 3) (<= 1 forced 2) (= (- (na) a0) 0)
+                      (= (- (nb) b0) 0))))))
   (with-quiet-status
    (lambda ()
      (invalidate!)
@@ -3371,6 +3373,7 @@
 (define fake-bytes 0)
 (define fake-copies 0)
 (define fake-presents 0)
+(define fake-vsync 1)          ; presents wait for the screen
 (define fake-steps 0)
 ;; steps after which the texture was not the canvas
 (define fake-mismatches 0)
@@ -3466,6 +3469,7 @@
        #t)]
     [(sdl-render-present)
      (lambda (r) (set! fake-presents (+ fake-presents 1)) #t)]
+    [(sdl-set-render-vsync) (lambda (r v) (set! fake-vsync v) #t)]
     [(sdl-get-ticks-ns) (top-level-value name)]   ; the clock: SDL's own
     [else (lambda args
             (set! fake-unfaked (cons name fake-unfaked))
@@ -3476,7 +3480,7 @@
 ;; be the canvas, and it presented if and only if it uploaded or was exposed.
 (define (with-fake-sdl thunk)
   (let ([saved (map top-level-value fake-sdl-names)]
-        [present host-present-damage!])
+        [present host-present-damage!] [vsync? *host-vsync?*])
     (dynamic-wind
       (lambda ()
         (for-each (lambda (n) (set-top-level-value! n (fake-sdl n)))
@@ -3501,7 +3505,8 @@
       thunk
       (lambda ()
         (for-each set-top-level-value! fake-sdl-names saved)
-        (set! host-present-damage! present)))))
+        (set! host-present-damage! present)
+        (set! *host-vsync?* vsync?)))))
 
 ;; SDL reports window events (through the host's real event loop); the
 ;; world handles what the host makes of them.
@@ -3567,7 +3572,30 @@
                                exposed idle)
                        (and (equal? exposed '(1 0)) (equal? idle '(0 0))
                             (= fake-bad-presents 0)
-                            (= fake-copies fake-presents))))))
+                            (= fake-copies fake-presents)))))
+            ;; unfocused so far (no SDL_WINDOW_INPUT_FOCUS)
+            (let ([unfocused fake-vsync])
+              (set! fake-flags SDL_WINDOW_INPUT_FOCUS)
+              (invalidate! w)
+              (steps 1)
+              (let ([focused fake-vsync])
+                (set! fake-flags 0)
+                (invalidate! w)
+                (steps 1)
+                (check (format "the host waits for the screen only while it \
+                                has the focus (~a ~a ~a)"
+                               unfocused focused fake-vsync)
+                       (equal? (list unfocused focused fake-vsync)
+                               '(0 1 0)))
+                ;; an event queued: still the whole wait, then the event
+                (set! fake-queue (list SDL_EVENT_WINDOW_EXPOSED))
+                (let* ([t0 (real-time)]
+                       [evs (fluid-let ([*host* 'sdl]) (host-events 30))]
+                       [slept (- (real-time) t0)])
+                  (check (format "without the focus, input waits for the \
+                                  tick: the wait is slept whole (~a of 30 \
+                                  ms) ~s" slept evs)
+                         (and (>= slept 29) (equal? evs '((expose)))))))))
           (close-window! w)
           (close-window! l)
           (steps 1))

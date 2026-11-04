@@ -77,7 +77,9 @@
        (printf "~a ~a\n" (if ok "ok  " "FAIL") name))]))
 
 ;; A clock that moves only when told, so that Life steps when a check says.
+;; Checks that need time to pass go back to the real one.
 (define fake-ms 1000000)
+(define real-now-ms now-ms)
 (define (fake-clock!) (set! now-ms (lambda () fake-ms)))
 (fake-clock!)
 (random-seed 4242)
@@ -511,7 +513,7 @@
                     (invalidate! e 3 5 21 13)
                     (request-frame! 141 621 11 11)
                     (loop))))])
-      (fluid-let ([now-ms (lambda () (real-time))])
+      (fluid-let ([now-ms real-now-ms])
         (do ([i 0 (+ i 1)]) ((= i 60))
           (if (even? i)
               (begin (set! b-ink (if (even? (quotient i 2)) #x6040a0 #x40a060))
@@ -549,7 +551,7 @@
                    (window-set! d 'window-style 'mac)
                    (set! done #t)
                    (let park () (sleep-ms 100000000) (park))))])
-        (fluid-let ([now-ms (lambda () (real-time))])
+        (fluid-let ([now-ms real-now-ms])
           (do ([i 0 (+ i 1)]) ((or done (= i 100))) (schevana-step! 0))
           (do ([i 0 (+ i 1)]) ((= i 2)) (schevana-step! 0)))
         (set! request-frame! plain)
@@ -777,7 +779,7 @@
                (zero? (random 3)))
       (set! switches (+ switches 1))
       (sleep-ms 1)))
-  (fluid-let ([now-ms (lambda () (real-time))]
+  (fluid-let ([now-ms real-now-ms]
               [report-error! (lambda (who c)
                                (set! errors (+ errors 1)) (report who c))]
               [cairo-surface-destroy (lambda (s) (switch-point!) (destroy s))]

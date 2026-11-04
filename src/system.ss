@@ -9,6 +9,16 @@
 ;; for its scroll bar) waits, so that input's frame comes first
 (defvar *input-step?* #f)
 (defvar *boot-ms* (now-ms))
+;; The pacer: the world's ticks come from it, exactly one a period while
+;; a tick's work and its frame fit in one. Its rate: screen (a tick a
+;; refresh of the screen's) or ticks a second; when the next tick is due
+;; (now-ns); the ticks so far, and when the last began (now-ms); and how
+;; long the last frame took to draw, ns.
+(defvar *pacer-rate* 'screen)
+(defvar *pacer-due* 0)
+(defvar *pacer-ticks* 0)
+(defvar *pacer-tick-ms* 0)
+(defvar *pacer-render* 0)
 
 ;; (after 1000 (lambda () (notify "a second later")))
 (define (after ms thunk)
@@ -72,9 +82,14 @@
     [(eq? (car ev) 'quit) (quit!)]
     [else (set! *held-events* (cons ev *held-events*))]))
 
-;; One turn of the world: events, timers, processes, ticks, and a frame
-;; if something asked for one. The profiler's unit: a step.
-(define (schevana-step! wait-ms)
+;; One turn of the world: events, timers, a tick, processes, and a frame
+;; if something asked for one: input's at once while the screen's wait
+;; paces frames, else at the next tick. The profiler's unit: a step.
+;; Paced (the main loop's), it ticks only when the pacer's tick is due, and its
+;; processes run until the frame must be drawn for the next tick (what
+;; it would have waited for the screen in present); else (a test's) it
+;; always ticks, and its processes run 10 ms.
+(define (schevana-step! wait-ms . paced)
   (with-profile-span 'step #f
     (let* ([hold? (reload-holding?)]
            [evs (append (if hold? '() (reverse *held-events*))
@@ -88,20 +103,84 @@
          (safely 'event
                  (lambda () (if hold? (hold-event! ev) (handle-event! ev)))))
        evs))
-    (unless (reload-holding?) (safely 'timers run-timers!))
-    (safely 'procs (lambda () (run-procs! 10)))
-    (unless (reload-holding?)
-      (safely 'tick wm-tick!)
-      (let ([damage *dirty*])
-        (set! *dirty* #f)
-        (safely 'render (lambda () (render-frame! damage))))
-      (safely 'present host-present-damage!))))
+    (let ([ticked?
+           (and (not (reload-holding?))
+                (begin
+                  (safely 'timers run-timers!)
+                  (let ([now (and (pair? paced) (now-ns))])
+                    (and (or (not now) (>= now (pacer-start)))
+                         (begin (pacer-tick! now) #t)))))])
+      (safely 'procs
+              (lambda () (run-procs! (if (null? paced) 10 (pacer-procs-ms)))))
+      ;; frames are paced by the screen's wait, or without it by the ticks
+      (unless (or (reload-holding?) (not (or ticked? *host-vsync?*)))
+        (let ([damage *dirty*] [t0 (and (pair? paced) (now-ns))])
+          (set! *dirty* #f)
+          (safely 'render (lambda () (render-frame! damage)))
+          (when (and t0 damage) (set! *pacer-render* (- (now-ns) t0))))
+        (safely 'present host-present-damage!)))))
+
+;;; ------------------------------------------------------------------ pacer
+
+;; (pacer-rate! 60): 60 ticks a second from now on; (pacer-rate! 'screen),
+;; the default: a tick a refresh of the screen's. Apps that move by time
+;; still read the clock: the screen's rate is its own.
+(define (pacer-rate! rate)
+  (set! *pacer-rate* rate)
+  (set! *pacer-due* 0))
+(define (pacer-rate) *pacer-rate*)
+(define (pacer-ticks) *pacer-ticks*)
+(define (pacer-tick-ms) *pacer-tick-ms*)
+
+;; A tick's period, ns.
+(define (pacer-period)
+  (if (eq? *pacer-rate* 'screen)
+      (host-frame-ns)
+      (quotient 1000000000 *pacer-rate*)))
+
+;; When the next tick may begin: a little before its time (2 ms), room
+;; for the clock's and the screen's jitter, so that its frame is in time
+;; for the refresh.
+(define (pacer-start) (- *pacer-due* 2000000))
+
+;; A tick: every window's, surface's and toast's (wm-tick!). Paced (now,
+;; the ns it began, else #f), the next is due a period after this one
+;; was, or, when that is past already (this one a period late: its work
+;; too long), a period from now: the world slows down, no tick skipped.
+(define (pacer-tick! now)
+  (when now
+    (let ([next (+ *pacer-due* (pacer-period))])
+      (set! *pacer-due* (if (> next now) next (+ now (pacer-period))))))
+  (set! *pacer-ticks* (+ *pacer-ticks* 1))
+  (set! *pacer-tick-ms* (now-ms))
+  (safely 'tick wm-tick!))
+
+;; How long processes may run: until the next tick may begin, less what
+;; the last frame took to draw, at most 10 ms, and at least 1 ms, so that
+;; they run however full the frames are (that 1 ms is a frame's work too).
+(define (pacer-procs-ms)
+  (max 1 (min 10 (quotient (- (pacer-start) *pacer-render* (now-ns))
+                           1000000))))
+
+;; How long a paced step may wait for host events (input ends the wait at
+;; once): until the next tick may begin, or the first timer's time; not
+;; at all while processes are ready. Whole ms, rounded up: a step would
+;; spin through the last ms before the tick (the 2 ms it may start early
+;; hold that one).
+(define (pacer-wait-ms)
+  (if (procs-ready?)
+      0
+      (let* ([ms (ceiling (/ (- (pacer-start) (now-ns)) 1000000))]
+             [ms (if (pair? *timers*)
+                     (min ms (- (caar *timers*) (now-ms)))
+                     ms)])
+        (max 0 (exact (ceiling ms))))))
 
 (define (schevana-run!)
   (set! *running* #t)
   (let loop ()
     (when *running*
-      (schevana-step! (if (procs-ready?) 0 15))
+      (schevana-step! (pacer-wait-ms) #t)
       (loop)))
   (host-shutdown!))
 

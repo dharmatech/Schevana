@@ -69,6 +69,7 @@
 (define SDL_INIT_VIDEO #x20)
 (define SDL_WINDOW_FULLSCREEN #x1)
 (define SDL_WINDOW_HIDDEN #x8)
+(define SDL_WINDOW_INPUT_FOCUS #x200)
 (define SDL_WINDOW_RESIZABLE #x20)
 (define SDL_WINDOW_HIGH_PIXEL_DENSITY #x2000)
 (define SDL_WINDOWPOS_CENTERED #x2FFF0000)
@@ -124,6 +125,7 @@
 (define-foreign sdl-render-texture "SDL_RenderTexture"
   (uptr uptr uptr uptr) bool)
 (define-foreign sdl-render-present "SDL_RenderPresent" (uptr) bool)
+(define-foreign sdl-set-render-vsync "SDL_SetRenderVSync" (uptr int) bool)
 (define-foreign sdl-get-display-for-window "SDL_GetDisplayForWindow"
   (uptr) unsigned-32)
 (define-foreign sdl-get-current-display-mode "SDL_GetCurrentDisplayMode"

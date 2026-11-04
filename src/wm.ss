@@ -995,8 +995,12 @@
                        (safely (surface-name s)
                                (lambda () (surface-call s surface-draw))))])
            (for-each draw (remp over-windows? *surfaces*))
+           ;; a window wholly outside the box (it cuts none: frame-box)
+           ;; would draw nothing in it, clipped to its extent: not drawn
            (for-each (lambda (w)
-                       (when (visible? w)
+                       (when (and (visible? w)
+                                  (box-overlaps? (list x0 y0 x1 y1)
+                                                 (extent-box w)))
                          (safely 'window (lambda () (draw-window-clipped w)))))
                      (reverse *windows*))
            (for-each draw (filter over-windows? *surfaces*))))
@@ -1030,11 +1034,12 @@
   (and (<= (car a) (car b)) (<= (cadr a) (cadr b))
        (<= (caddr b) (caddr a)) (<= (cadddr b) (cadddr a))))
 
-;; Does box a overlap box b without holding it whole?
-(define (cuts? a b)
+;; Do boxes a and b overlap? Does a overlap b without holding it whole?
+(define (box-overlaps? a b)
   (and (< (car a) (caddr b)) (< (car b) (caddr a))
-       (< (cadr a) (cadddr b)) (< (cadr b) (cadddr a))
-       (not (holds? a b))))
+       (< (cadr a) (cadddr b)) (< (cadr b) (cadddr a))))
+
+(define (cuts? a b) (and (box-overlaps? a b) (not (holds? a b))))
 
 ;; The frame's box: the area asked for (damage: #t, or (x0 y0 x1 y1)) in
 ;; device pixels, grown until it cuts no window and no surface over them
