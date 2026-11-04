@@ -29,19 +29,12 @@
    '("libcairo.so.2" "libcairo.so" "libcairo.2.dylib" "libcairo.dylib"
      "libcairo-2.dll" "cairo.dll")))
 
-;; The thread that loads the core is the main thread. SDL's and Cairo's
-;; bindings are its alone, but those declared any-thread.
-(define main-thread?
-  (if (threaded?)
-      (let ([id (get-thread-id)]) (lambda () (fx= (get-thread-id) id)))
-      (lambda () #t)))
-
 ;; Like foreign-procedure, but `double` arguments accept any real number,
 ;; and `bool` is C's one-byte bool (SDL3's) as #t or #f: Chez's boolean is
-;; an int, whose upper bytes a C bool leaves undefined. how: main (only
-;; the main thread may call it, checked), any (any thread), or
-;; collect-safe (main's, and a collection another thread needs does not
-;; wait for it to return: for calls that block, given foreign memory only).
+;; an int, whose upper bytes a C bool leaves undefined. Only the main
+;; thread calls them: workers run worklets, which cannot name them.
+;; collect-safe: a call that blocks, given foreign memory only, during
+;; which a collection another thread needs does not wait for it.
 (define-syntax define-foreign-as
   (lambda (x)
     (define (is? t name) (eq? (syntax->datum t) name))
@@ -63,19 +56,12 @@
                                                    (ctype ...) cret)
                               #'(foreign-procedure cname (ctype ...) cret))])
                  (lambda (arg ...)
-                   #,@(if (is? #'how 'any)
-                          '()
-                          (list #'(unless (main-thread?)
-                                    (errorf 'name "only the main thread \
-                                                   may call this"))))
                    #,(if (is? #'ret 'bool)
                          #'(not (fx= 0 (f conv ...)))
                          #'(f conv ...)))))))])))
 
 (define-syntax define-foreign
-  (syntax-rules () [(_ . spec) (define-foreign-as main . spec)]))
-(define-syntax define-foreign/any-thread
-  (syntax-rules () [(_ . spec) (define-foreign-as any . spec)]))
+  (syntax-rules () [(_ . spec) (define-foreign-as plain . spec)]))
 (define-syntax define-foreign/collect-safe
   (syntax-rules () [(_ . spec) (define-foreign-as collect-safe . spec)]))
 
@@ -120,7 +106,9 @@
 (define-foreign sdl-init "SDL_Init" (unsigned-32) bool)
 (define-foreign sdl-quit "SDL_Quit" () void)
 (define-foreign sdl-get-error "SDL_GetError" () string)
-(define-foreign/any-thread sdl-get-ticks-ns "SDL_GetTicksNS" () unsigned-64)
+(define-foreign sdl-get-ticks-ns "SDL_GetTicksNS" () unsigned-64)
+(define-foreign sdl-get-num-logical-cpu-cores "SDL_GetNumLogicalCPUCores" ()
+  int)
 (define-foreign sdl-set-hint "SDL_SetHint" (string string) bool)
 (define-foreign sdl-create-window "SDL_CreateWindow"
   (string int int unsigned-64) uptr)

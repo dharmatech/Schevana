@@ -216,3 +216,89 @@
 
 ;; Give up the rest of this slice.
 (define (yield) (when (current-proc) (engine-block)))
+
+;;; ------------------------------------------------------------------ worklets
+;;; What a worker thread runs. A worklet is a procedure compiled in the
+;;; worklet environment, where only this is in reach: Scheme's pure core
+;;; (no I/O, no eval), fixnums, flonums, bitwise operations, bytevectors,
+;;; fxvectors, boxes, raising and catching (but not reading a condition),
+;;; the clock (now-ns), the thread's id and the worklets defined so far.
+;;; SDL, Cairo and the world's state are not: a worklet that names
+;;; anything else, or sets a top-level name, is refused when it is
+;;; defined, so all it touches is what it is handed. Of that, it can open
+;;; only pairs, vectors and boxes.
+;;;
+;;;   (define-worklet (step! grid next lo hi) ...)
+;;;   (worklet (x) (fx* x x))                       one without a name
+
+(define (worklet-base-environment)
+  (let ([e (copy-environment
+            (environment '(rnrs base) '(rnrs control) '(rnrs lists)
+                         '(rnrs arithmetic fixnums)
+                         '(rnrs arithmetic flonums)
+                         '(rnrs arithmetic bitwise) '(rnrs bytevectors)
+                         '(rnrs exceptions)
+                         '(only (chezscheme)
+                                fx= fx< fx> fx<= fx>= fx+ fx- fx* fx1+ fx1-
+                                fxquotient fxremainder fxmodulo fxabs fxmin
+                                fxmax fxzero? fxlogand fxlogor fxlogxor
+                                fxsll fxsrl fxsra
+                                fl= fl< fl> fl<= fl>= fl+ fl- fl* fl/
+                                fixnum->flonum flonum->fixnum
+                                add1 sub1 iota void
+                                box unbox set-box! box-cas!
+                                make-fxvector fxvector fxvector-length
+                                fxvector-ref fxvector-set! get-thread-id))
+            #t)])
+    (define-top-level-value 'now-ns now-ns e)
+    e))
+
+(defvar *worklet-environment* (worklet-base-environment))
+(defvar *worklets* (make-weak-eq-hashtable))   ; worklet: #t
+
+(define (worklet? x) (hashtable-contains? *worklets* x))
+
+;; What form refers to at the top level, as expand gives it: (ref . name)
+;; or (set . name).
+(define (worklet-free-names form)
+  (let walk ([x (expand form *worklet-environment*)] [acc '()])
+    (let ([op (and (pair? x) (pair? (car x)) (eq? (caar x) '$primitive)
+                   (car (last-pair (car x))))])
+      (cond
+        [(not (pair? x)) acc]
+        [(and (memq op '($top-level-value $set-top-level-value!))
+              (pair? (cdr x)) (pair? (cadr x)) (eq? (caadr x) 'quote))
+         (walk (cddr x)
+               (cons (cons (if (eq? op '$top-level-value) 'ref 'set)
+                           (string->symbol (symbol->string (cadadr x))))
+                     acc))]
+        [else (walk (cdr x) (walk (car x) acc))]))))
+
+;; form, a lambda, compiled as the worklet who.
+(define (worklet-compile who form)
+  (for-each (lambda (n)
+              (cond [(eq? (car n) 'set)
+                     (errorf who "a worklet sets no top-level name: ~s"
+                             (cdr n))]
+                    [(not (top-level-bound? (cdr n) *worklet-environment*))
+                     (errorf who "~s is out of a worklet's reach" (cdr n))]))
+            (worklet-free-names form))
+  (let ([p (eval form *worklet-environment*)])
+    (hashtable-set! *worklets* p #t)
+    p))
+
+(define-syntax worklet
+  (syntax-rules ()
+    [(_ formals body ...)
+     (worklet-compile 'worklet '(lambda formals body ...))]))
+
+;; (define-worklet (name . formals) body ...): a worklet, its name the
+;; world's and the other worklets' (its own too, so it may recur).
+(define-syntax define-worklet
+  (syntax-rules ()
+    [(_ (name . formals) body ...)
+     (begin
+       (unless (top-level-bound? 'name *worklet-environment*)
+         (define-top-level-value 'name (void) *worklet-environment*))
+       (define name (worklet-compile 'name '(lambda formals body ...)))
+       (define-top-level-value 'name name *worklet-environment*))]))

@@ -273,6 +273,9 @@
   ;; with vsync on, this waits for the screen: a phase of the profiler's
   (with-profile-span 'vsync-wait #f (sdl-render-present *sdl-renderer*)))
 
+;; How many threads this machine runs at once (logical cores).
+(define (host-cpu-count) (sdl-get-num-logical-cpu-cores))
+
 ;; How long the screen shows a frame, ns: by its display's refresh rate
 ;; (SDL_DisplayMode's numerator and denominator, at 24 and 28), or 60 Hz
 ;; when SDL does not say (headless, say).

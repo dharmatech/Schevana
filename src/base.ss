@@ -1,5 +1,13 @@
 ;;; base.ss — small utilities shared by everything else.
 
+;; The thread that loads the core is the main thread. The world's state is
+;; its alone, and so are SDL and Cairo: a worker runs only worklets
+;; (proc.ss), where neither can be named.
+(define main-thread?
+  (if (threaded?)
+      (let ([id (get-thread-id)]) (lambda () (fx= (get-thread-id) id)))
+      (lambda () #t)))
+
 ;; State variables that must survive (reload!) are declared with defvar,
 ;; like in Emacs: the initial value is only used if the name is unbound.
 (define-syntax defvar

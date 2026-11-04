@@ -3365,8 +3365,7 @@
           (cond
             [(eof-object? x) acc]
             [(and (pair? x)
-                  (memq (car x) '(define-foreign define-foreign/any-thread
-                                  define-foreign/collect-safe))
+                  (memq (car x) '(define-foreign define-foreign/collect-safe))
                   (string-prefix? "SDL_" (caddr x))
                   ;; plain memory: kept
                   (not (member (caddr x) '("SDL_memcmp" "SDL_memcpy"))))
@@ -3483,6 +3482,7 @@
      (lambda (r) (set! fake-presents (+ fake-presents 1)) #t)]
     [(sdl-set-render-vsync) (lambda (r v) (set! fake-vsync v) #t)]
     [(sdl-get-ticks-ns) (top-level-value name)]   ; the clock: SDL's own
+    [(sdl-get-num-logical-cpu-cores) (top-level-value name)]
     [else (lambda args
             (set! fake-unfaked (cons name fake-unfaked))
             (errorf name "the fake SDL has no stand-in for this"))]))

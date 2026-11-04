@@ -327,9 +327,9 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows
-services/    long-lived state behind an API, no surface: profile, the
-             profiler; theme-file, the saved look, written soon after
-             each change
+services/    long-lived state behind an API, no surface: crew, worker
+             threads for data-parallel loops; profile, the profiler;
+             theme-file, the saved look, written soon after each change
 kits/        app: launching one by name, the color a name gets; color:
              hue, saturation and lightness, a color as one fixnum, the
              text color that reads on one; complete: a completion list
@@ -349,7 +349,7 @@ src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!;
-             the profiler's hook
+             the profiler's hook; worklets, what worker threads run
 src/host     SDL3 window ⇄ Scheme event lists, uploads   |  headless mode
 src/gfx      immediate-mode drawing API, colors, stipples and gradients,
              fonts and ink, operators, rotation, device pixels, layers,
@@ -409,6 +409,29 @@ Decisions worth keeping in mind for the real design:
   and state among them, are in `AGENTS.md`. R6RS libraries are one-way black
   boxes, like C libraries: the world imports them, they never call into the
   world.
+- **Worker threads run worklets.** A worklet (`define-worklet`, or
+  `worklet` like `lambda`) is compiled in an environment of its own:
+  Scheme's pure core, fixnums, flonums, bytevectors, fxvectors, boxes, the
+  clock and the other worklets, and nothing of the world. One that names a
+  world procedure, SDL, Cairo, `eval`, a `#%` primitive or a local of the
+  code around it, or sets a top-level name, is refused when it is
+  defined, so a worklet touches only what it is handed, by construction;
+  worklets call each other by name and see each other redefined. Of what
+  it is handed, a worklet opens only pairs, vectors and boxes, and the
+  crew refuses any procedure there that is no worklet.
+- **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
+  (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
+  of the range on worker threads, the caller among them, and returns when
+  all have: Life's step on a 1024×640 grid takes 0.90 ms on a crew of 8
+  against 6.86 ms on one thread. A call writes only its own slice and
+  allocates nothing (that stops every thread). An error in a call is
+  raised in the caller; on main a runaway call is cancelled after 100 ms
+  and the caller raises, as a runaway handler does; in a REPL evaluation
+  the caller waits a millisecond at a time and the desktop runs on.
+  `(crew-size)` workers, by default one less than the machine's threads,
+  at most 8 (`SCHEVANA_WORKERS` sets it, 0 for none). Everything else stays
+  on the main thread; `(post-main! thunk)` hands work back to it from any
+  thread.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a

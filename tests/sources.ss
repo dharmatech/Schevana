@@ -104,7 +104,7 @@
         (case (car form)
           [(begin) (apply append (map defined (cdr form)))]
           [(define defvar define-syntax define-foreign
-            define-foreign/any-thread define-foreign/collect-safe)
+            define-foreign/collect-safe define-worklet)
            (names 'name (list (if (pair? head) (car head) head)))]
           [(define-app)
            (list (cons 'name (car head)) (cons 'app (car head)))]
