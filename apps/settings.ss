@@ -1098,8 +1098,10 @@
   (ui-begin! ui)
   (ui-draw-surface 0 0 w h '(page))
   (settings-sidebar ui st (settings-sidebar-width) h)
+  ;; the pane's margins, or the room its scroll bar keeps if more
   (let* ([sw (settings-sidebar-width)]
-         [x (+ sw 28)] [cw (- w x 28)]
+         [x (+ sw (max 28 (ui-scrollbar-inset 'left)))]
+         [cw (- w x (max 28 (ui-scrollbar-inset 'right)))]
          [scroll (settings-st-pane-scroll st)]
          [y (- 20 scroll)]
          [bottom (ui-call-with-pixel-clip (+ sw 1) 0 (- w sw 1) h

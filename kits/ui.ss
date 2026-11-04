@@ -910,7 +910,8 @@
 
 ;;; ------------------------------------------------------------------ tabs
 
-;; choices: ((label . value) ...). Returns the x after the last tab.
+;; choices: ((label . value) ...). Returns the x after the last tab. The
+;; last tab's flags say so (last): a style that chains its tabs ends there.
 (define (ui-tabs ui id x y h choices current on-select)
   (let loop ([cs choices] [tx x])
     (if (null? cs)
@@ -921,7 +922,9 @@
                            '(#\space return) '() (list (cons 'L label)))
             (ui-draw-tab tx y tw h
                          (apply ui-flags ui tid
-                                (if (equal? value current) '(selected) '()))
+                                (append
+                                 (if (equal? value current) '(selected) '())
+                                 (if (null? (cdr cs)) '(last) '())))
                          label)
             (loop (cdr cs) (+ tx tw)))))))
 
@@ -1506,9 +1509,10 @@
 (theme-default! 'scrollbar-side 'right)
 (theme-default! 'scrollbar-show 'always)
 ;; The room content keeps clear past a bar always shown at its left or
-;; right: #f, none (the bar lies over the content), or a margin past the
-;; bar's width (Genera's).
-(theme-default! 'scrollbar-margin #f)
+;; right: a margin past the bar's width, so that the bar never covers
+;; what it scrolls; #f, none (the bar lies over the content). A bar shown
+;; only under the pointer (scrollbar-show hover) lies over it anyway.
+(theme-default! 'scrollbar-margin 4)
 (define (ui-scrollbar-width) (theme 'scrollbar-width))
 
 ;; What a scroll view's content keeps clear for its bar on side (left or
@@ -1553,10 +1557,13 @@
 
 ;;; ------------------------------------------------------------------ table
 
-;; columns: ((key title width) ...); rows: the app's values, selected the
-;; one eq? to it; a left press calls on-select. cell draws a cell:
-;; (lambda (row key x y w h flags) ...). opts: 'sort ((key . up|down) or
-;; #f), 'on-sort (key), 'on-open (row) on a double click, 'on-menu (row x
+;; columns: ((key title width flag ...) ...), each width a default the
+;; user may drag (ui-table-columns), the flags its heading's and its
+;; cells' (right: aligned at the right, as numbers); rows: the app's
+;; values, selected the one eq? to it; a left press calls on-select. cell
+;; draws a cell: (lambda (row key x y w h flags) ...), flags its row's and
+;; its column's. opts: 'sort ((key . up|down) or #f), 'on-sort (key) on a
+;; press on a heading, 'on-open (row) on a double click, 'on-menu (row x
 ;; y) on a right press, 'tip (row): a row's tooltip, or #f, and 'reveal:
 ;; true scrolls the selected row into view.
 (define (ui-table ui id x y w h columns rows selected on-select cell . opts)
@@ -1566,6 +1573,7 @@
              [sx x] [sw w]
              [x (+ sx (ui-scrollbar-inset 'left))]
              [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [columns (ui-table-columns ui id columns)]
              [hh (ui-table-header-height)] [rh (ui-table-row-height)]
              [sort (plist-ref opts 'sort #f)]
              [tip (plist-ref opts 'tip (lambda (r) #f))]
@@ -1576,15 +1584,7 @@
              [i (and (plist-ref opts 'reveal #f)
                      (list-index (lambda (r) (eq? r selected)) rows))]
              [rows (list->vector rows)] [n (vector-length rows)])
-        (let loop ([cs columns] [cx x])
-          (unless (null? cs)
-            (let* ([key (caar cs)] [cw (caddr (car cs))]
-                   [hid (list id 'header key)])
-              (ui-pressable! ui hid cx y cw hh (lambda () (on-sort key)) '()
-                             '(focus keep) '((L . "Sort")))
-              (ui-draw-table-header cx y cw hh (ui-flags ui hid) (cadar cs)
-                                    (and sort (eq? (car sort) key) (cdr sort)))
-              (loop (cdr cs) (+ cx cw)))))
+        (ui-table-headings! ui id sx sw x y hh columns sort on-sort x)
         (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))
         (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
         (ui-scroll ui body sx (+ y hh) sw view-h
@@ -1609,7 +1609,8 @@
                     (ui-draw-table-row x ry w rh flags)
                     (let cells ([cs columns] [cx x])
                       (unless (null? cs)
-                        (cell row (caar cs) cx ry (caddr (car cs)) rh flags)
+                        (cell row (caar cs) cx ry (caddr (car cs)) rh
+                              (append flags (cdddr (car cs))))
                         (cells (cdr cs) (+ cx (caddr (car cs))))))
                     (when (eq? row selected)
                       (ui-draw-highlight-over x ry w rh '()))))))
@@ -1632,6 +1633,107 @@
 ;; Rows per page of table id at its last draw.
 (define (ui-table-page ui id) (ui-memo ui (list id 'page) 1))
 
+;; The columns of table or tree id as it shows them: columns, the app's,
+;; with the width the user dragged in place of a column's default. The
+;; kit keeps those while the window is open.
+(define (ui-table-columns ui id columns)
+  (map (lambda (c)
+         (let ([w (ui-memo ui (list id 'width (car c)) #f)])
+           (if w (cons* (car c) (cadr c) w (cdddr c)) c)))
+       columns))
+
+;; The narrowest the user drags a column: two lines.
+(define (ui-table-column-min) (exact (round (* 2 (font-line-height 'ui)))))
+
+;; The handles of table or tree id: a few pixels on each line between
+;; two of its headings, the first at x, h high. Dragging one sets the
+;; width of the column left of it, in whole pixels, at least
+;; ui-table-column-min; a double click sets back its default.
+;; When a table's column dividers show (table-dividers): always, faint;
+;; hover, while the pointer is over the headings; handle, only the one
+;; under it. Under the pointer or dragged, one always shows, strongly.
+(theme-default! 'table-dividers 'hover)
+
+(define (ui-table-divider-shown? row-hover? hot?)
+  (or hot?
+      (case (theme 'table-dividers)
+        [(always) #t]
+        [(hover) row-hover?]
+        [else #f])))
+
+(define (ui-table-handles! ui id x y h columns sx sw)
+  (define row-hover?
+    (let ([win (current-window)])
+      (and win
+           (memq (window-hover win) '(content scrollbar))
+           (ui-hover? ui sx y sw h))))
+  (let loop ([cs columns] [cx x])
+    (unless (or (null? cs) (null? (cdr cs)))
+      (let* ([key (caar cs)] [cw (caddr (car cs))] [line (+ cx cw)]
+             [width (list id 'width key)] [grab (list id 'width-grab)])
+        (ui-region! ui (list id 'handle key) (- line 3) y 6 h
+          'focus 'keep 'cursor 'resize-ew
+          'doc '((L . "Resize column") (L2 . "Default width"))
+          'on
+          (lambda (ev)
+            (case (car ev)
+              [(press)
+               (and (eq? (list-ref ev 3) 'left)
+                    (begin
+                      (if (>= (list-ref ev 4) 2)
+                          (hashtable-delete! (ui-state-memo ui) width)
+                          (ui-memo! ui grab (- (cadr ev) line)))
+                      #t))]
+              [(drag)
+               (let ([new (max (ui-table-column-min)
+                               (exact (round (- (cadr ev) (ui-memo ui grab 0)
+                                                cx))))])
+                 (and (< (cadddr ev) 2) (not (= new cw))
+                      (begin (ui-memo! ui width new) #t)))]
+              [else #f])))
+        (let* ([flags (ui-flags ui (list id 'handle key))]
+               [hot? (or (memq 'hover flags) (memq 'pressed flags))])
+          (when (ui-table-divider-shown? row-hover? hot?)
+            (ui-draw-table-divider line y h flags)))
+        (loop (cdr cs) line)))))
+
+;; The headings of table or tree id over columns from x, h high, cut to
+;; its view sx sw, and their handles; a column's flags are its heading's.
+;; With on-sort a left press on a heading calls (on-sort key), and the
+;; one sort names ((key . up|down), or #f) shows its direction. The first
+;; title starts at title-x: a tree's over its roots' cells.
+(define (ui-table-headings! ui id sx sw x y h columns sort on-sort title-x)
+  (ui-table-call-with-clip ui sx y sw h
+    (lambda ()
+      (let loop ([cs columns] [cx x])
+        (unless (null? cs)
+          (let* ([key (caar cs)] [cw (caddr (car cs))]
+                 [hid (list id 'header key)]
+                 [tx (if (eq? cs columns) title-x cx)])
+            (when on-sort
+              (ui-pressable! ui hid cx y cw h (lambda () (on-sort key))
+                             '() '(focus keep) '((L . "Sort"))))
+            (unless (= tx cx)
+              (ui-draw-table-header cx y (- tx cx) h '() "" #f))
+            (ui-draw-table-header tx y (- (+ cx cw) tx) h
+                                  (if on-sort
+                                      (apply ui-flags ui hid (cdddr (car cs)))
+                                      (cdddr (car cs)))
+                                  (cadar cs)
+                                  (and sort (eq? (car sort) key) (cdr sort)))
+            (loop (cdr cs) (+ cx cw)))))
+      (ui-table-handles! ui id x y h columns sx sw))))
+
+;; thunk, its drawing and its regions cut to x y w h: a table's headings,
+;; which a column the user widened carries past its edge, as its rows.
+(define (ui-table-call-with-clip ui x y w h thunk)
+  (let ([clip (ui-state-clip ui)])
+    (ui-state-clip-set! ui (call-with-values
+                             (lambda () (ui-cut x y w h clip))
+                             list))
+    (ui-call-with-pixel-clip x y w h thunk)
+    (ui-state-clip-set! ui clip)))
+
 (theme-default! 'table-header-height
                 (theme-rule (round (+ (font-line-height 'ui-small) 13))))
 (theme-default! 'table-row-height
@@ -1639,16 +1741,24 @@
 (define (ui-table-header-height) (theme 'table-header-height))
 (define (ui-table-row-height) (theme 'table-row-height))
 
-;; dir: up, down or #f (not sorted by it).
+;; dir: up, down or #f (not sorted by it). A heading starts at the left,
+;; whatever its column's cells do (flags right: numbers).
 (define-part (ui-draw-table-header x y w h flags label dir)
-  (let ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)])
+  (let* ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)]
+         [s (fit-text label (max 0 (- w 16 g)) 'ui-small)]
+         [color (if (or dir (memq 'hover flags)) 'text 'text-faint)]
+         [end (draw-text (+ x 10) (+ y (/ (- h sh) 2)) s color 'ui-small)])
     (fill-rect x (- (+ y h) 1) w 1 'window-border)
-    (let ([end (draw-text (+ x 10) (+ y (/ (- h sh) 2))
-                          (fit-text label (max 0 (- w 16 g)) 'ui-small)
-                          (if (or dir (memq 'hover flags)) 'text 'text-faint)
-                          'ui-small)])
-      (when dir
-        (ui-draw-glyph (+ end 4) (+ y (/ (- h g) 2)) g g '(hover) dir)))))
+    (when dir
+      (ui-draw-glyph (+ end 4) (+ y (/ (- h g) 2)) g g '(hover) dir))))
+
+;; The line between two headings at x, where a drag resizes the column on
+;; its left: faint where the style shows it at rest (table-dividers),
+;; stronger under the pointer or while dragged (flags hover, pressed).
+(define-part (ui-draw-table-divider x y h flags)
+  (if (or (memq 'hover flags) (memq 'pressed flags))
+      (px-fill (- x 1) y 2 h 'accent)
+      (px-fill x (+ y 5) 1 (- h 10) 'window-border)))
 
 (define-part (ui-draw-table-row x y w h flags)
   (cond [(memq 'selected flags) (fill-rect x y w h 'selection)]
@@ -1761,20 +1871,22 @@
            #t))))
 
 ;; roots: the top nodes; children: (lambda (node) ...), a list. columns:
-;; ((key title width) ...), as a table's, under a header; the first holds
-;; the tree. selected: the node equal? to it is selected. A left press
-;; calls on-select, or on a twisty expands or collapses. cell draws a
-;; cell: (lambda (node key x y w h flags) ...), the first column's after
-;; the indentation and twisty. opts: 'expanded (nodes start expanded;
-;; else collapsed), 'on-open (node) on a double click, 'on-menu (node x y)
-;; on a right press, 'on-hide (node) when a collapse hides the selected
-;; row: node, the collapsed one, is to be selected, as Left would (by
-;; default on-select), 'tip (node w): its tooltip, or #f, w its first
-;; cell's width, 'reveal: true scrolls the selected row into view, 'dim
-;; (node): true dims its row (the flag dim), and 'generation: a value that
-;; changes (eqv?) whenever roots or children would give other nodes, so
-;; the rows are kept until it does or a node is expanded or collapsed
-;; (without it, they are made at every draw).
+;; ((key title width flag ...) ...), as a table's, under a header; the
+;; first holds the tree. selected: the node equal? to it is selected. A
+;; left press calls on-select, or on a twisty expands or collapses. cell
+;; draws a cell: (lambda (node key x y w h flags) ...), as a table's, the
+;; first column's after the indentation and twisty. opts: 'expanded
+;; (nodes start expanded; else collapsed), 'on-open (node) on a double
+;; click, 'on-menu (node x y) on a right press, 'on-hide (node) when a
+;; collapse hides the selected row: node, the collapsed one, is to be
+;; selected, as Left would (by default on-select), 'tip (node w): its
+;; tooltip, or #f, w its first cell's width, 'reveal: true scrolls the
+;; selected row into view, 'dim (node): true dims its row (the flag dim),
+;; 'sort and 'on-sort as a table's (without 'on-sort the headings take no
+;; presses; roots and children come in the order sort names), and
+;; 'generation: a value that changes (eqv?) whenever roots or children
+;; would give other nodes, so the rows are kept until it does or a node
+;; is expanded or collapsed (without it, they are made at every draw).
 (define (ui-tree ui id x y w h columns roots children selected on-select cell
                  . opts)
   (with-place 'list
@@ -1783,11 +1895,14 @@
              [sx x] [sw w]
              [x (+ sx (ui-scrollbar-inset 'left))]
              [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [columns (ui-table-columns ui id columns)]
              [hh (ui-table-header-height)] [rh (ui-tree-row-height)]
              [tip (plist-ref opts 'tip (lambda (node w) #f))]
              [on-open (plist-ref opts 'on-open (lambda (node) #f))]
              [on-menu (plist-ref opts 'on-menu (lambda (node x y) #f))]
              [on-hide (plist-ref opts 'on-hide on-select)]
+             [sort (plist-ref opts 'sort #f)]
+             [on-sort (plist-ref opts 'on-sort #f)]
              [dim? (plist-ref opts 'dim (lambda (node) #f))]
              [start (plist-ref opts 'expanded #f)]
              [generation (plist-ref opts 'generation #f)]
@@ -1805,12 +1920,7 @@
         (ui-memo! ui (list id 'rows) rows)
         (ui-memo! ui (list id 'generation) generation)
         ;; the first title over a root's cell
-        (ui-draw-table-header x y (- (car c0) x) hh '() "" #f)
-        (let loop ([cs columns] [cx (car c0)] [cw (- w0 (- (car c0) x))])
-          (unless (null? cs)
-            (ui-draw-table-header cx y cw hh '() (cadar cs) #f)
-            (unless (null? (cdr cs))
-              (loop (cdr cs) (+ cx cw) (caddr (cadr cs))))))
+        (ui-table-headings! ui id sx sw x y hh columns sort on-sort (car c0))
         (when (plist-ref opts 'reveal #f)
           (let ([i (ui-tree-index rows selected)])
             (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))))
@@ -1860,10 +1970,12 @@
                                            '(expanded)
                                            '())))])
                     (ui-draw-tree-row x ry w rh flags w0 (ui-tree-row-depth r))
-                    (cell node (caar columns) (car c) ry (caddr c) rh flags)
+                    (cell node (caar columns) (car c) ry (caddr c) rh
+                          (append flags (cdddr (car columns))))
                     (let cells ([cs (cdr columns)] [cx (+ x w0)])
                       (unless (null? cs)
-                        (cell node (caar cs) cx ry (caddr (car cs)) rh flags)
+                        (cell node (caar cs) cx ry (caddr (car cs)) rh
+                              (append flags (cdddr (car cs))))
                         (cells (cdr cs) (+ cx (caddr (car cs))))))
                     (when (memq 'selected flags)
                       (ui-draw-highlight-over x ry w rh '())))))
@@ -1936,6 +2048,9 @@
 ;; draft is the field's text; a comma or Return adds it, Backspace in an
 ;; empty field removes the last chip. on-add gets a list: the draft, or a
 ;; paste's comma-separated parts all at once. Returns the box's bottom.
+;; The box's flags say it holds chips, the last chip's that it is last,
+;; and every other one's where the next starts, (next x y): a style that
+;; draws the chips as a list knows where it ends and where it wraps.
 (define (ui-chip-input ui id x y w chips draft on-draft on-add on-remove
                        . opts)
   (with-place 'field
@@ -1943,8 +2058,10 @@
       (let* ([areas (ui-chip-input-areas x y w chips)]
              [field (cdr (assq 'field areas))]
              [bottom (+ (cadr field) (cadddr field))]
-             [fid (list id 'field)])
-        (ui-draw-field x y w (- bottom y) (ui-flags ui fid))
+             [fid (list id 'field)] [n (length chips)]
+             [chip-areas (map cdr (filter (lambda (a) (eq? (car a) 'chip))
+                                          areas))])
+        (ui-draw-field x y w (- bottom y) (ui-flags ui fid 'chips))
         (for-each
          (lambda (chip a i)
            (let ([rid (list id 'remove i)]
@@ -1952,10 +2069,11 @@
              (ui-pressable! ui rid (car r) (cadr r) (caddr r) (cadddr r)
                             (lambda () (on-remove i)) '()
                             '(focus keep tip "Remove") '((L . "Remove")))
-             (apply ui-draw-chip (append a (list (apply ui-flags ui rid
-                                                        '(removable))
-                                                 chip)))))
-         chips (map cdr (filter (lambda (a) (eq? (car a) 'chip)) areas))
+             (apply ui-draw-chip
+                    (append a (list (apply ui-flags ui rid 'removable
+                                           (ui-chain-flags chip-areas i))
+                                    chip)))))
+         chips chip-areas
          (iota (length chips)))
         (apply ui-text-field ui fid
                (append field
@@ -1978,6 +2096,14 @@
                                   (on-remove (- (length chips) 1)) #t]
                                  [else #f])))))
         bottom))))
+
+;; A chain's flags for its i-th element of areas ((x y w h) ...): last,
+;; or where the next one starts, (next x y).
+(define (ui-chain-flags areas i)
+  (if (= i (- (length areas) 1))
+      '(last)
+      (let ([b (list-ref areas (+ i 1))])
+        (list (list 'next (car b) (cadr b))))))
 
 ;; Where a chip input at (x, y), w wide, puts its chips and its field:
 ;; ((chip x y w h) ... (field x y w h)), flowed in rows of a control's
@@ -2500,8 +2626,10 @@
 
 ;; A modal dialog over the window, drawn at ui-end!. buttons: ((label
 ;; thunk flag ...) ...), right-aligned; the last is the default (Return).
-;; Escape and a press outside call on-dismiss. A field under it lets go of
-;; the keyboard.
+;; Escape and a press outside call on-dismiss, and so does a press on a
+;; dismiss area, where a style's areas have one (Cons's nil). The
+;; dialog's flags carry its buttons' labels, (labels . list), and the
+;; dismiss area's state, for a style whose dialog draws around them.
 (define (ui-dialog ui id title message buttons on-dismiss)
   (ui-later! ui
     (lambda (w h)
@@ -2511,7 +2639,9 @@
                         [(dw dh) (ui-dialog-size title message labels)]
                         [(dx dy) (values (max 0 (round (/ (- w dw) 2)))
                                          (max 0 (round (/ (- h dh) 2))))]
-                        [(f) (ui-state-focus ui)])
+                        [(f) (ui-state-focus ui)]
+                        [(areas) (ui-dialog-areas dx dy dw dh labels)]
+                        [(dismiss) (assq 'dismiss areas)])
             (unless (or (not f) (and (pair? f) (equal? (car f) id)))
               (ui-focus! ui #f)
               (invalidate! (current-window)))
@@ -2521,7 +2651,15 @@
                     (lambda (key mods)
                       (and (eq? key 'return) (null? mods)
                            (begin ((cadr (car (last-pair buttons)))) #t)))))
-            (ui-draw-dialog dx dy dw dh '() title message)
+            (when dismiss
+              (apply ui-pressable! ui (list id 'dismiss)
+                     (append (cdr dismiss)
+                             (list on-dismiss '() '(focus keep)
+                                   '((L . "Cancel"))))))
+            (ui-draw-dialog dx dy dw dh
+                            (cons (cons 'labels labels)
+                                  (ui-flags ui (list id 'dismiss)))
+                            title message)
             (for-each (lambda (b a i)
                         (apply ui-button ui (list id i)
                                (append a (list (car b) (cadr b))
@@ -2530,7 +2668,7 @@
                                                    (cddr b))))))
                       buttons
                       (map cdr (filter (lambda (a) (eq? (car a) 'button))
-                                       (ui-dialog-areas dx dy dw dh labels)))
+                                       areas))
                       (iota (length buttons)))))))))
 
 ;; Each button is at least 88 wide.

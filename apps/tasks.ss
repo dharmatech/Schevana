@@ -1123,17 +1123,23 @@
 (define (tasks-column-min-width)
   (max 160 (round (* 11 (font-line-height 'ui)))))
 (define (tasks-column-width) (max 200 (round (* 27/2 (font-line-height 'ui)))))
-(define (tasks-column-header-height) (round (+ (font-line-height 'ui) 14)))
+;; A column's heading; a style's part, as the column's insets are.
+(define-part (tasks-column-header-height)
+  (round (+ (font-line-height 'ui) 14)))
 ;; How far the details, or the keys when nothing is selected, are from
-;; the panel's edges.
-(define (tasks-details-pad) 16)
+;; the panel's edges (and clear of a scroll bar a style keeps room for).
+(define-part (tasks-details-pad) 16)
+;; How far a card's marks, title, tags and dates are from its edges.
+(define-part (tasks-card-pad) 10)
 ;; Inside a column: its cards' margin at either side, the room above the
 ;; first card and between two, and the + button's from the header's end.
-(define (tasks-column-insets) (values 10 8 8 6))
+;; A style's part, as the cards' insets are: one that draws something
+;; between or beside the cards (Cons's pointers) makes room for it.
+(define-part (tasks-column-insets) (values 10 8 8 6))
 
 ;; A column's cards' left and right insets: its side, or the room a
 ;; style's scroll bar keeps beside them (Genera's), if more.
-(define (tasks-card-insets)
+(define-part (tasks-card-insets)
   (let-values ([(side first between edge) (tasks-column-insets)])
     (values (max side (ui-scrollbar-inset 'left))
             (max side (ui-scrollbar-inset 'right)))))
@@ -1187,12 +1193,12 @@
 ;; long word breaks): at most 3, the last ending in "…" when there are
 ;; more. => (values lines cut?)
 (define (tasks-card-title w t)
-  (ui-wrap-lines (tasks-shown-title t) (- w 20) 'ui 3))
+  (ui-wrap-lines (tasks-shown-title t) (- w (* 2 (tasks-card-pad))) 'ui 3))
 
 ;; The tag chips that fit on a card w wide, the first always (cut to the
 ;; room), and how many more a "+k" after them counts. => (values widths k)
 (define (tasks-card-tags w t)
-  (let ([room (- w 20)]
+  (let ([room (- w (* 2 (tasks-card-pad)))]
         [more (lambda (k)   ; "+k" and its gap
                 (if (zero? k)
                     0
@@ -1211,16 +1217,16 @@
 (define (tasks-card-size w t)
   (let-values ([(lines cut?) (tasks-card-title w t)]
                [(cw ch) (ui-chip-size "" #f)])
-    (values w (round (+ 10 (tasks-avatar-size) 6
+    (values w (round (+ (tasks-card-pad) (tasks-avatar-size) 6
                         (* (length lines) (font-line-height 'ui))
                         (if (pair? (task-tags t)) (+ 6 ch) 0)
                         (if (or (task-due t) (pair? (task-checklist t)))
                             (+ 6 (font-line-height 'ui-small) 3)
                             0)
-                        10)))))
+                        (tasks-card-pad))))))
 
 ;; How far a List cell's text is from either side of the cell.
-(define (tasks-cell-inset) 10)
+(define-part (tasks-cell-inset) 10)
 
 ;; Is t's title wider than room? Its row's tooltip shows it.
 (define (tasks-title-cut? t room)
@@ -1247,21 +1253,25 @@
 ;; flex would be narrower than 13 lines.
 (define (tasks-fit-columns w keys drops flex at)
   (let* ([lh (font-line-height 'ui)] [m (tasks-mark-size)]
+         ;; a cell's text inset at either side (20 at the built-in's)
+         [in2 (* 2 (tasks-cell-inset))]
          [names (filter-map task-assignee *tasks*)]
-         [all `((id "ID" ,(+ 20 (tasks-id-width)))
-                (status "Status" ,(+ 28 m (widest-text (map cdr tasks-statuses)
-                                                       'ui)))
+         [all `((id "ID" ,(+ in2 (tasks-id-width)))
+                (status "Status"
+                        ,(+ in2 8 m (widest-text (map cdr tasks-statuses)
+                                                 'ui)))
                 (priority "Priority"
-                          ,(+ 28 m (widest-text (map cdr tasks-priorities)
-                                                'ui)))
-                (kind "Kind" ,(+ 28 m (widest-text (map cdr tasks-kinds) 'ui)))
+                          ,(+ in2 8 m (widest-text (map cdr tasks-priorities)
+                                                   'ui)))
+                (kind "Kind"
+                      ,(+ in2 8 m (widest-text (map cdr tasks-kinds) 'ui)))
                 (assignee "Assignee"
                           ,(min (* 9 lh)
-                                (+ 44 (widest-text (cons "Assignee" names)
-                                                   'ui))))
-                (due "Due" ,(+ 20 (text-width "Nov 15, 2026" 'ui)))
+                                (+ in2 24 (widest-text (cons "Assignee" names)
+                                                       'ui))))
+                (due "Due" ,(+ in2 (text-width "Nov 15, 2026" 'ui)))
                 (updated "Updated"
-                         ,(+ 20 (text-width "Oct 31, 14:02" 'ui-small))))])
+                         ,(+ in2 (text-width "Oct 31, 14:02" 'ui-small))))])
     (let loop ([cols (map (lambda (k) (assq k all)) keys)] [drops drops])
       (let ([fixed (apply + (map caddr cols))])
         (if (or (null? drops) (<= (+ fixed (* 13 lh)) w))
@@ -1372,18 +1382,18 @@
 (define (tasks-draw-card x y w h flags t today)
   (let* ([on? (lambda (f) (memq f flags))]
          [lh (font-line-height 'ui)] [sh (font-line-height 'ui-small)]
-         [a (tasks-avatar-size)] [m (tasks-mark-size)]
-         [y1 (+ y 10)] [right (- (+ x w) 10)])
+         [a (tasks-avatar-size)] [m (tasks-mark-size)] [p (tasks-card-pad)]
+         [y1 (+ y p)] [right (- (+ x w) p)])
     ;; bg-3 would hide the progress track; a square card's on whole device
     ;; pixels, so its edge stays crisp over what it is dragged across
     (if (<= (theme 'corner-radius) 0)
         (px-fill x y w h 'bg-2)
         (fill-round-rect x y w h 8 'bg-2))
     (ui-draw-card x y w h flags)
-    (tasks-draw-mark (+ x 10) (+ y1 (/ (- a m) 2)) m 'priority
+    (tasks-draw-mark (+ x p) (+ y1 (/ (- a m) 2)) m 'priority
                      (task-priority t))
-    (tasks-draw-mark (+ x 16 m) (+ y1 (/ (- a m) 2)) m 'kind (task-kind t))
-    (let ([end (draw-text (+ x 24 m m) (+ y1 (/ (- a sh) 2)) (task-label t)
+    (tasks-draw-mark (+ x p 6 m) (+ y1 (/ (- a m) 2)) m 'kind (task-kind t))
+    (let ([end (draw-text (+ x p 14 m m) (+ y1 (/ (- a sh) 2)) (task-label t)
                           'text-faint 'ui-small)])
       (when (on? 'blocked)
         (tasks-draw-mark (+ end 6) (+ y1 (/ (- a m) 2)) m 'blocked #t)))
@@ -1394,21 +1404,29 @@
     (let*-values ([(lines cut?) (tasks-card-title w t)]
                   [(ty) (+ y1 a 6)])
       (for-each (lambda (line i)
-                  (tasks-draw-title (+ x 10) (+ ty (* i lh)) line t))
+                  (tasks-draw-title (+ x p) (+ ty (* i lh)) line t))
                 lines (iota (length lines)))
       (let* ([cy (+ ty (* lh (length lines)) 6)]
              [fy (if (pair? (task-tags t))
                      (let*-values ([(ws k) (tasks-card-tags w t)]
                                    [(c0 ch) (ui-chip-size "" #f)]
+                                   ;; the last chip shown says so when
+                                   ;; no "+k" follows it
                                    [(end)
-                                    (fold-left (lambda (cx g cw)
-                                                 (ui-draw-chip cx cy cw ch
-                                                               '() g)
+                                    (fold-left (lambda (cx g cw i)
+                                                 (ui-draw-chip
+                                                  cx cy cw ch
+                                                  (if (and (zero? k)
+                                                           (= i (- (length ws)
+                                                                   1)))
+                                                      '(last)
+                                                      '())
+                                                  g)
                                                  (+ cx cw 4))
-                                               (+ x 10)
+                                               (+ x p)
                                                (list-head (task-tags t)
                                                           (length ws))
-                                               ws)])
+                                               ws (iota (length ws)))])
                        (when (> k 0)
                          (draw-text end (+ cy (/ (- ch sh) 2))
                                     (format "+~a" k) 'text-faint 'ui-small))
@@ -1421,8 +1439,8 @@
              [lx (- right bar-w 6 (text-width label 'ui-small))]
              [check-x (- lx sh 2)])   ; the checklist's left, when it shows
         (when (task-due t)
-          (tasks-draw-due (+ x 10) fy
-                          (- (if (> n 0) (- check-x 6) right) x 10)
+          (tasks-draw-due (+ x p) fy
+                          (- (if (> n 0) (- check-x 6) right) x p)
                           t today 'ui-small))
         (when (> n 0)
           (ui-draw-glyph check-x fy sh sh '(quiet) 'check)
@@ -1432,7 +1450,7 @@
 
 ;; A column's well and header: the status dot, its name and the count.
 ;; flags: empty (says so in its middle).
-(define (tasks-draw-column x y w h flags status label count)
+(define-part (tasks-draw-column x y w h flags status label count)
   (let ([hh (tasks-column-header-height)] [lh (font-line-height 'ui)]
         [sh (font-line-height 'ui-small)] [m (tasks-mark-size)])
     (ui-draw-surface x y w h '(well))
@@ -1450,6 +1468,11 @@
 (define-part (tasks-draw-slot x y w h)
   (fill-round-rect x y w h 8 (alpha 'accent 0.15))
   (stroke-round-rect x y w h 8 'accent))
+
+;; After a card at x y w h is drawn, with its flags: what links it to
+;; the next card, gap below it (Cons's pointer), or to nothing when it
+;; is the last; nothing by default.
+(define-part (tasks-draw-link x y w h flags gap last?) (void))
 
 ;; A cell of the List or the Tree. flags: the kit's (hover, selected, dim:
 ;; the search and filters leave it out), blocked (a mark before the
@@ -1472,14 +1495,23 @@
               [end (tasks-draw-title
                     tx ty (fit-text (tasks-shown-title t) (- (+ px cw) tx) 'ui)
                     t)])
-         (let loop ([gs (list-head (task-tags t)
-                                   (min 2 (length (task-tags t))))]
-                    [cx (+ end 8)])
-           (when (pair? gs)
-             (let-values ([(gw gh) (ui-chip-size (car gs) #f)])
-               (when (<= (+ cx gw) (+ px cw))
-                 (ui-draw-chip cx (+ y (/ (- h gh) 2)) gw gh '() (car gs))
-                 (loop (cdr gs) (+ cx gw 4)))))))]
+         ;; those that fit, (tag x w h), the last of them saying so
+         (let* ([fit (let loop ([gs (list-head (task-tags t)
+                                               (min 2 (length (task-tags t))))]
+                                [cx (+ end 8)] [acc '()])
+                       (if (null? gs)
+                           (reverse acc)
+                           (let-values ([(gw gh) (ui-chip-size (car gs) #f)])
+                             (if (<= (+ cx gw) (+ px cw))
+                                 (loop (cdr gs) (+ cx gw 4)
+                                       (cons (list (car gs) cx gw gh) acc))
+                                 (reverse acc)))))]
+                [n (length fit)])
+           (for-each (lambda (c i)
+                       (ui-draw-chip (cadr c) (+ y (/ (- h (cadddr c)) 2))
+                                     (caddr c) (cadddr c)
+                                     (if (= i (- n 1)) '(last) '()) (car c)))
+                     fit (iota n))))]
       [(status)
        (let ([dw (tasks-draw-mark px my m 'status (task-status t))])
          (text (if (> dw 0) (+ px m 8) px)
@@ -1778,14 +1810,15 @@
                     ;; only the cards in view: a long column stays cheap
                     (when (and (< cy (+ y h)) (> (+ cy (car hs)) (+ y hh)))
                       (tasks-card v (car ts) (+ x left) cy card-w (car hs)
-                                  today))
+                                  today between (null? (cdr ts))))
                     (loop (cdr ts) (cdr hs) (+ i 1)
                           (+ cy (car hs) between)))))))))))
 
 ;; A card: pressed it selects (a double click edits the title) and may be
 ;; dragged to another column or place; right-pressed, the menu. Another
 ;; button pressed during a drag ends it, the card back where it was.
-(define (tasks-card v t x y w h today)
+;; gap and last?: what follows it in its column, for its link.
+(define (tasks-card v t x y w h today gap last?)
   (let* ([ui (tasks-view-ui v)] [id (list 'card (task-id t))])
     (let-values ([(lines cut?) (tasks-card-title w t)])
       (ui-region! ui id x y w h 'tip (tasks-tip t cut?)
@@ -1834,19 +1867,20 @@
                       (when (tasks-narrow? v) (tasks-view-page?-set! v #t))
                       #t]))]
                 [else #f]))))
-    (tasks-draw-card x y w h
-                     (apply ui-flags ui id
-                            (append (if (eq? t (tasks-view-selected v))
-                                        '(selected)
-                                        '())
-                                    (if (tasks-blocked? t) '(blocked) '())))
-                     t today)))
+    (let ([flags (apply ui-flags ui id
+                        (append (if (eq? t (tasks-view-selected v))
+                                    '(selected)
+                                    '())
+                                (if (tasks-blocked? t) '(blocked) '())))])
+      (tasks-draw-card x y w h flags t today)
+      (tasks-draw-link x y w h flags gap last?))))
 
 ;; The List: a table of the visible tasks.
 (define (tasks-table v visible today x y w h)
   (let* ([ui (tasks-view-ui v)] [pad (ui-pad)]
          [columns (tasks-list-columns (- w pad pad))]
-         [title-w (caddr (assq 'title columns))])
+         [title-w (caddr (assq 'title (ui-table-columns ui 'table
+                                                         columns)))])
     (ui-draw-surface (+ x pad) (+ y pad) (- w pad pad) (- h pad pad) '(well))
     (ui-table ui 'table (+ x pad) (+ y pad 4) (- w pad pad) (- h pad pad 8)
               columns (tasks-rows v visible)
@@ -1941,10 +1975,13 @@
         [p (tasks-details-pad)])
     (when wide? (ui-draw-surface x y w h '(side)))
     (if t
-        (ui-scroll ui 'details x y w h
-          (lambda (top)
-            (+ p (tasks-details-body v t today wide? (+ x p) (+ top p)
-                                     (- w p p)))))
+        ;; its pad either side, or the room the scroll bar keeps if more
+        (let ([l (max p (ui-scrollbar-inset 'left))]
+              [r (max p (ui-scrollbar-inset 'right))])
+          (ui-scroll ui 'details x y w h
+            (lambda (top)
+              (+ p (tasks-details-body v t today wide? (+ x l) (+ top p)
+                                       (- w l r))))))
         (tasks-draw-cheat-sheet (+ x p) (+ y p) (- w p p) (- h p p) '()))))
 
 ;; A list without its i-th element.
@@ -2024,6 +2061,10 @@
                                        (tasks-without (task-tags t) i)))
                           'placeholder "Add a tag…")))))
 
+;; A chip's top in its row of the details, its place p (x . y) and size
+;; s (w . h) in a row ch high.
+(define (tasks-chip-y p s ch) (+ (cdr p) (floor (/ (- ch (cdr s)) 2))))
+
 ;; A row of the details: label beside chips for the tasks ts, which a
 ;; click selects; with on-remove, a chip's × calls (on-remove task); with
 ;; add, a button after them calls it (an empty row says none). key names
@@ -2045,8 +2086,8 @@
                                   (if add (list (cons bw bh)) '())))])
     (ui-draw-label x y lw ch '(dim) label)
     (for-each
-     (lambda (t l s p)
-       (let* ([cx (car p)] [cy (+ (cdr p) (floor (/ (- ch (cdr s)) 2)))]
+     (lambda (t l s p i)
+       (let* ([cx (car p)] [cy (tasks-chip-y p s ch)]
               [id (list key (task-id t))] [rid (list key 'remove (task-id t))])
          (ui-region! ui id cx cy (car s) (cdr s) 'cursor 'hand 'focus 'keep
                      'tip (tasks-quoted (tasks-shown-title t))
@@ -2060,8 +2101,16 @@
                             (lambda () (on-remove t)) '()
                             '(focus keep tip "Remove") '((L . "Remove")))))
          (ui-draw-chip cx cy (car s) (cdr s)
-                       (if on-remove (ui-flags ui rid 'removable) '()) l)))
-     ts labels sizes (list-head at (length ts)))
+                       (append (if on-remove (ui-flags ui rid 'removable) '())
+                               ;; last, or where the next one starts
+                               (ui-chain-flags
+                                (map (lambda (p s)
+                                       (list (car p) (tasks-chip-y p s ch)
+                                             (car s) (cdr s)))
+                                     (list-head at (length ts)) sizes)
+                                i))
+                       l)))
+     ts labels sizes (list-head at (length ts)) (iota (length ts)))
     (cond
       [add (let ([p (list-ref at (length ts))])
              (ui-button ui (list key 'add) (car p) (cdr p) bw bh "Add" add

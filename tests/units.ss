@@ -4039,6 +4039,206 @@
                                   (R . "Window menu")))
                 (equal? desktop '((L . "Unfocus") (R . "Apps")))))))
 
+;; Two tables and a tree with the same columns, each 50 high, from the
+;; top; cells: (id key x w) of each first row's cells, as drawn.
+(check "a column's handle: the pointer resize-ew and \"L: Resize column, \
+        L2: Default width\" over it; a drag sets the width, the cells \
+        follow, the minimum holds; a double click sets back the default; \
+        the widths are per table or tree"
+       (let* ([columns '((a "A" 100) (b "B" 100) (c "C" 100))]
+              [cells '()] [ui #f]
+              [cell (lambda (id)
+                      (lambda (row key x y w h flags)
+                        (when (eqv? row 1)
+                          (set! cells (cons (list id key x w) cells)))))]
+              [w (kit-window "Columns"
+                             (lambda (u w h)
+                               (set! ui u)
+                               (set! cells '())
+                               (ui-table u 't 0 0 w 50 columns '(1 2) #f void
+                                         (cell 't))
+                               (ui-table u 'u 0 50 w 50 columns '(1 2) #f
+                                         void (cell 'u))
+                               (ui-tree u 'r 0 100 w 50 columns '(1)
+                                        (lambda (n) '()) #f void (cell 'r))))])
+         (steps 2)
+         (let*-values ([(cx cy cw ch) (content-rect w)]
+                       [(hy) (+ cy (quotient (ui-table-header-height) 2))]
+                       [(over) (doc-at (+ cx 101) hy)]
+                       [(shape) (window-ref w 'cursor 'arrow)])
+           (define (widths id)
+             (map caddr (ui-table-columns ui id columns)))
+           (define (drag! x0 x1 y)
+             (inject! `(mouse-move ,x0 ,y) `(mouse-down ,x0 ,y left 1)
+                      `(mouse-move ,x1 ,y) `(mouse-up ,x1 ,y left))
+             (steps 2))
+           (drag! (+ cx 101) (+ cx 141) hy)
+           (let ([dragged (widths 't)] [drawn (reverse cells)]
+                 [ry (+ cy 100 (quotient (ui-table-header-height) 2))])
+             (drag! (+ cx 141) (+ cx 10) hy)
+             (let ([narrow (widths 't)])
+               (inject! `(mouse-down ,(+ cx (car narrow)) ,hy left 2)
+                        `(mouse-up ,(+ cx (car narrow)) ,hy left))
+               (steps 2)
+               (let ([reset (widths 't)])
+                 (drag! (+ cx 199) (+ cx 179) ry)
+                 (let ([tree (list (widths 't) (widths 'u) (widths 'r))])
+                   (close-window! w)
+                   (steps 1)
+                   (and (eq? shape 'resize-ew)
+                        (equal? over '((L . "Resize column")
+                                       (L2 . "Default width")))
+                        (equal? dragged '(140 100 100))
+                        (equal? (filter (lambda (c) (eq? (car c) 't)) drawn)
+                                '((t a 0 140) (t b 140 100) (t c 240 100)))
+                        (equal? (filter (lambda (c) (eq? (car c) 'u)) drawn)
+                                '((u a 0 100) (u b 100 100) (u c 200 100)))
+                        (equal? narrow (list (ui-table-column-min) 100 100))
+                        (equal? reset '(100 100 100))
+                        (equal? tree '((100 100 100) (100 100 100)
+                                       (100 80 100)))))))))))
+
+;; The columns a heading inks, (first . last), drawn 200 wide in style
+;; with flags and dir; its bottom line left out.
+;; The line between two headings is there at rest, under the pointer
+;; in the accent, wider: found before the pointer changes.
+(check "a divider marks each column's handle at rest, and is the accent \
+        under the pointer"
+       (let ([draw (lambda (flags)
+                     (let* ([img (image 20 30 1
+                                        (lambda ()
+                                          (fill-rect 0 0 20 30 'bg-1)
+                                          (ui-draw-table-divider 10 0 30
+                                                                 flags)))]
+                            [bg (pixel-at img 2 15)]
+                            [mid (pixel-at img 10 15)]
+                            [left (pixel-at img 9 15)])
+                       (cairo-surface-destroy img)
+                       (list (not (= mid bg)) (not (= left bg)) mid)))])
+         (let ([rest (draw '())] [hot (draw '(hover))])
+           (and (car rest) (not (cadr rest))
+                (car hot) (cadr hot)
+                (= (caddr hot) (color->pixel 'accent))))))
+
+(check "where dividers show by the style's table-dividers: always at \
+        rest, hover over the headings, handle only under the pointer"
+       (with-test-styles
+        (lambda ()
+          (let ([shown (lambda (mode)
+                         (define-style test-dividers "Test"
+                           'table-dividers mode)
+                         (set-style! 'test-dividers)
+                         (map (lambda (args)
+                                (apply ui-table-divider-shown? args))
+                              '((#f #f) (#t #f) (#f #t))))])
+            (and (equal? (shown 'always) '(#t #t #t))
+                 (equal? (shown 'hover) '(#f #t #t))
+                 (equal? (shown 'handle) '(#f #f #t))
+                 (with-style 'mac
+                   (lambda () (eq? (theme 'table-dividers) 'always))))))))
+
+(check "Genera's removable tag under the mouse boxes its × alone, not \
+        the tag: what a click removes"
+       (with-style 'genera
+         (lambda ()
+           (let* ([draw (lambda (flags)
+                          (image 120 30 1
+                                 (lambda ()
+                                   (fill-rect 0 0 120 30 'bg-1)
+                                   (ui-draw-chip 10 5 100 20 flags "tag"))))]
+                  [rest (draw '(removable))] [hot (draw '(removable hover))]
+                  [a (cdr (assq 'remove (ui-chip-areas 10 5 100 20)))]
+                  ;; the columns where hovering changed a pixel
+                  [changed (filter (lambda (x)
+                                     (exists (lambda (y)
+                                               (not (= (pixel-at rest x y)
+                                                       (pixel-at hot x y))))
+                                             (iota 30)))
+                                   (iota 120))])
+             (let ([r (and (pair? changed)
+                           (>= (apply min changed) (- (car a) 3)))])
+               (cairo-surface-destroy rest)
+               (cairo-surface-destroy hot)
+               r)))))
+
+(define (heading-ink style flags dir)
+  (with-style style
+    (lambda ()
+      (let* ([img (image 200 30 1
+                         (lambda ()
+                           (fill-rect 0 0 200 30 'bg-1)
+                           (ui-draw-table-header 0 0 200 30 flags "ms/s"
+                                                 dir)))]
+             [bg (pixel-at img 199 2)]
+             [xs (filter (lambda (x)
+                           (exists (lambda (y) (not (= (pixel-at img x y) bg)))
+                                   (iota 27)))
+                         (iota 200))])
+        (cairo-surface-destroy img)
+        (cons (apply min xs) (apply max xs))))))
+
+(check "a heading starts 10 pixels from its left, its sort arrow after \
+        it, whether its column's cells are right-aligned (right) or not: \
+        the kit's, Genera's and Cons's"
+       (for-all
+        (lambda (style)
+          (let ([left (heading-ink style '() #f)]
+                [left-sorted (heading-ink style '() 'down)]
+                [right (heading-ink style '(right) #f)]
+                [right-sorted (heading-ink style '(right) 'down)])
+            (and (<= 9 (car left) 12) (< (cdr left) 100)
+                 (= (car left-sorted) (car left))
+                 (> (cdr left-sorted) (cdr left))
+                 (equal? right left)
+                 (equal? right-sorted left-sorted))))
+        '(mac genera cons)))
+
+(check "a tree's headings: with 'on-sort a press on one calls it with its \
+        key, the one 'sort names shows its direction; a column's flags are \
+        its heading's and its cells'; without 'on-sort no heading takes a \
+        press"
+       (with-test-styles
+        (lambda ()
+          (let ([heads '()] [cells '()] [pressed #f] [ui #f]
+                [columns '((a "A" 100) (b "B" 100 right))])
+            (define-style test-heads "Test"
+              'ui-draw-table-header
+              (lambda (x y w h flags label dir)
+                (set! heads (cons (list label flags dir) heads))))
+            (set-style! 'test-heads)
+            (let ([w (kit-window "Heads"
+                       (lambda (u w h)
+                         (set! ui u)
+                         (set! heads '())
+                         (set! cells '())
+                         ;; drawn first: its headings are found after s's
+                         (ui-tree u 'q 0 90 w 80 columns '(1) (lambda (n) '())
+                                  #f void (lambda cell #f))
+                         (ui-tree u 's 0 0 w 80 columns '(1) (lambda (n) '())
+                                  #f void
+                                  (lambda (n key x y w h flags)
+                                    (set! cells (cons (cons key flags) cells)))
+                                  'sort '(b . down)
+                                  'on-sort (lambda (k) (set! pressed k)))))])
+              (steps 2)
+              (let-values ([(cx cy cw ch) (content-rect w)])
+                (let* ([b-head (assoc "B" heads)]
+                       [a-cell (cdr (assq 'a cells))]
+                       [b-cell (cdr (assq 'b cells))]
+                       [y (+ cy (quotient (ui-table-header-height) 2))])
+                  (inject! `(mouse-move ,(+ cx 150) ,y)
+                           `(mouse-down ,(+ cx 150) ,y left 1)
+                           `(mouse-up ,(+ cx 150) ,y left))
+                  (steps 2)
+                  (close-window! w)
+                  (steps 1)
+                  (and (eq? pressed 'b)
+                       (memq 'right (cadr b-head)) (eq? (caddr b-head) 'down)
+                       (not (caddr (assoc "A" heads)))
+                       (memq 'right b-cell) (not (memq 'right a-cell))
+                       (ui-find ui '(s header a))
+                       (not (ui-find ui '(q header a)))))))))))
+
 ;; A style whose shade button words itself.
 (define (test-words-regions win)
   (list (list 'shade 30 4 20 20 '((L . "Roll up") (R . "Nothing")))))
@@ -5372,6 +5572,259 @@
                             rows)))))
            '(1.25 1.5 1.75)))
         '(genera cadr)))
+
+;;; Cons, the idea through everything: the parts and flags it reaches
+;;; the widgets by, and its look at a few pixels.
+
+(check "Tasks' column and card insets, its column and the link after each \
+        card are parts: a style's own insets move the cards, its link is \
+        called after each card with the gap and whether it is the last, \
+        and its column draws the empty one"
+       (with-test-styles
+        (lambda ()
+          (let ([links '()] [columns '()])
+            (define-style test-chain "Test"
+              'tasks-column-insets (lambda () (values 10 8 21 6))
+              'tasks-card-insets (lambda () (values 12 30))
+              'tasks-draw-link
+              (lambda (x y w h flags gap last?)
+                (set! links (cons (list w gap last?) links)))
+              'tasks-draw-column
+              (lambda (x y w h flags status label count)
+                (set! columns (cons (list status (and (memq 'empty flags) #t))
+                                    columns))
+                (tasks-draw-column* x y w h flags status label count)))
+            (set-style! 'test-chain)
+            (tasks-reset!)
+            (let* ([win (tasks)] [ui (window-ref win 'ui)])
+              (focus-window! win)
+              (steps 3)
+              (let* ([col (ui-region-frame (ui-find ui '(column todo)))]
+                     [img (image 200 100 1
+                                 (lambda ()
+                                   (tasks-draw-column 0 0 200 100 '(empty)
+                                                      'todo "To do" 0)))]
+                     [r (list (pair? (filter caddr links))
+                              (for-all (lambda (l)
+                                         (and (= (cadr l) 21)
+                                              (= (car l) (- (caddr col) 42))))
+                                       links)
+                              (assq 'todo columns)
+                              (assq 'done columns))])
+                (cairo-surface-destroy img)
+                (close-window! win)
+                (steps 1)
+                (equal? r (list #t #t '(todo #t) '(done #f)))))))))
+
+(check "the kit flags the last tab and the last chip, a chip input's box \
+        (chips), and makes a dialog's dismiss area, where a style's areas \
+        have one, pressable: its dialog gets the labels and that area's \
+        state"
+       (with-test-styles
+        (lambda ()
+          (let ([tabs '()] [chips '()] [boxes '()] [dialog '()] [dismissed 0]
+                [ui (make-ui)])
+            (define-style test-last "Test"
+              'ui-draw-tab
+              (lambda (x y w h flags label)
+                (set! tabs (cons (cons label (and (memq 'last flags) #t))
+                                 tabs)))
+              'ui-draw-chip
+              (lambda (x y w h flags label)
+                (set! chips (cons (cons label (and (memq 'last flags) #t))
+                                  chips)))
+              'ui-draw-field
+              (lambda (x y w h flags)
+                (set! boxes (cons (and (memq 'chips flags) #t) boxes)))
+              'ui-dialog-areas
+              (lambda (x y w h labels)
+                (cons (list 'dismiss x y 20 20)
+                      (ui-dialog-areas* x y w h labels)))
+              'ui-draw-dialog
+              (lambda (x y w h flags title message) (set! dialog flags)))
+            (set-style! 'test-last)
+            (let ([w (apply open-window "Last" 'size '(400 . 300)
+                            'pos '(100 . 100) 'ui ui
+                            'draw (lambda (win cw ch)
+                                    (ui-begin! ui)
+                                    (ui-tabs ui 'v 10 10 28
+                                             '(("A" . a) ("B" . b) ("C" . c))
+                                             'a void)
+                                    (ui-chip-input ui 'tags 10 50 300
+                                                   '("x" "y") "" void void
+                                                   void)
+                                    (ui-dialog ui 'd "Title" "Message"
+                                               (list (list "OK" void))
+                                               (lambda ()
+                                                 (set! dismissed
+                                                   (+ dismissed 1))))
+                                    (ui-end! ui cw ch))
+                            (ui-handlers ui))])
+              (focus-window! w)
+              (steps 2)
+              (let*-values ([(cx cy cw ch) (content-rect w)]
+                            [(r) (ui-find ui '(d dismiss))]
+                            [(x y) (values (+ cx (ui-region-x r) 5)
+                                           (+ cy (ui-region-y r) 5))])
+                (inject! `(mouse-move ,x ,y))
+                (steps 2)
+                (let ([hovered (and (memq 'hover dialog) #t)])
+                  (inject! `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left))
+                  (steps 2)
+                  (let ([r (list (list-head (reverse tabs) 3)
+                                 (list-head (reverse chips) 2)
+                                 (car boxes) (assq 'labels dialog) hovered
+                                 dismissed)])
+                    (close-window! w)
+                    (steps 1)
+                    (equal? r '((("A" . #f) ("B" . #f) ("C" . #t))
+                                (("x" . #f) ("y" . #t))
+                                #t (labels "OK") #t 1))))))))))
+
+(check "Cons draws a boolean as a cell holding #t or #f, filled with its \
+        ink under the mouse; a chain's last cell holds nil, the slash \
+        across its cdr; a menu's chosen entry fills with ink"
+       (let ([pixels
+              (lambda (pw ph thunk . ps)
+                (with-style 'cons
+                  (lambda ()
+                    (let* ([img (image pw ph 1 thunk)]
+                           [r (map (lambda (p)
+                                     (apply pixel-at img
+                                            (map (lambda (v)
+                                                   (exact (floor v)))
+                                                 p)))
+                                   ps)])
+                      (cairo-surface-destroy img)
+                      r))))]
+             [box (lambda (flags)
+                    (lambda ()
+                      (fill-rect 0 0 120 40 'window-bg)
+                      (ui-draw-checkbox 10 5 100 30 flags "On")))]
+             [bg (with-style 'cons (lambda () (color->pixel 'window-bg)))]
+             [ink (with-style 'cons (lambda () (color->pixel 'cons-ink)))])
+         (let*-values ([(b) (with-style 'cons ui-checkbox-box)]
+                       [(by) (+ 5 (floor (/ (- 30 b) 2)))]
+                       [(tw0 th) (with-style 'cons
+                                   (lambda () (ui-tabs-size '("Tree"))))]
+                       [(tw) (exact (ceiling tw0))]
+                       [(cx) (- tw (* 2 (cons-arrow)))]
+                       [(tab) (lambda (flags)
+                                (lambda ()
+                                  (fill-rect 0 0 tw 28 'window-bg)
+                                  (ui-draw-tab 0 0 tw 28 flags "Tree")))])
+           (dynamic-wind
+             (lambda ()
+               (set-style! 'cons)
+               (open-menu! 200 200 (list (cons "One" void) (cons "Two" void)))
+               (steps 2))
+             (lambda ()
+               (let* ([as (placed-menu-areas *menu*)] [pad (theme 'menu-pad)]
+                      [entry (lambda (i)
+                               (let ([a (cdr (assv i as))])
+                                 (canvas-pixel (+ (car a) pad 2)
+                                               (+ (cadr a) 2))))]
+                      [r (list (pixels 120 40 (box '(checked))
+                                       (list 10 by) (list 11 (+ by 1)))
+                               (pixels 120 40 (box '(checked hover))
+                                       (list 11 (+ by 1)))
+                               (map (lambda (p) (= p bg))
+                                    (append (pixels tw 28 (tab '(last))
+                                                    (list (+ cx 3) 17))
+                                            (pixels tw 28 (tab '())
+                                                    (list (+ cx 3) 17))))
+                               (entry 0) (entry 1))])
+                 (equal? r (list (list ink bg) (list ink) '(#f #t) ink bg))))
+             (lambda ()
+               (when (menu-open?) (close-menu!))
+               (steps 1)
+               (set-style! 'mac))))))
+
+;; A chain's flags: each element but the last says where the next starts.
+(check "the kit's chain flags say last, or where the next element starts"
+       (and (equal? (ui-chain-flags '((0 0 10 10) (5 20 10 10)) 0)
+                    '((next 5 20)))
+            (equal? (ui-chain-flags '((0 0 10 10) (5 20 10 10)) 1) '(last))))
+
+(check "Cons keeps a removable chip a pair, its × in the car with no line \
+        before it, and under the mouse fills a square behind the × alone, \
+        the car's inside otherwise as it was"
+       (with-style 'cons
+         (lambda ()
+           (let*-values ([(w h) (ui-chip-size "tag" #t)]
+                         [(w) (exact (ceiling w))] [(h) (exact (ceiling h))]
+                         [(cw cut?) (cons-chip-car-width w h #t)]
+                         [(bx by bs) (cons-chip-x-box 0 0 cw h)])
+             (let* ([bx (exact (floor bx))] [by (exact (floor by))]
+                    [at (lambda (flags)
+                          (let* ([img (image (+ w 4) (+ h 4) 1
+                                             (lambda ()
+                                               (fill-rect 0 0 (+ w 4) (+ h 4)
+                                                          'window-bg)
+                                               (ui-draw-chip 0 0 w h flags
+                                                             "tag")))]
+                                 [ps (list (pixel-at img 2 2)
+                                           (pixel-at img (+ bx 1) (+ by 1))
+                                           (pixel-at img (- bx 1)
+                                                     (quotient h 2)))])
+                            (cairo-surface-destroy img)
+                            ps))]
+                    [bg (color->pixel 'window-bg)]
+                    [rest (at '(removable last))]
+                    [hot (at '(removable hover last))])
+               (and (= (car rest) (car hot) bg)
+                    (= (cadr rest) bg)
+                    (= (cadr hot) (color->pixel 'button-close))
+                    ;; no divider just before the ×, at rest or hovered
+                    (= (caddr rest) (caddr hot) bg)))))))
+
+(check "Cons's spacing on Tasks' board: the + g inside its column's corner, \
+        the scroll bar's thumb g from the cards' cdr cells and from the \
+        well's edge, its top level with the first card's"
+       (begin
+         (set-style! 'cons)
+         (tasks-reset!)
+         (let* ([win (tasks)] [ui (window-ref win 'ui)])
+           (focus-window! win)
+           (steps 3)
+           (let* ([g (with-style 'cons cons-space)]
+                  [c (with-style 'cons cons-cell)]
+                  [f (lambda (id) (ui-region-frame (ui-find ui id)))]
+                  [col (f '(column todo))]
+                  [add (f '(add todo))]
+                  [bar (f '((column todo) bar))]
+                  [card (f '(card 16))]
+                  [right (+ (car col) (caddr col))]
+                  [thumb (cdr (assq 'thumb
+                                    (with-style 'cons
+                                      (lambda ()
+                                        (apply ui-scrollbar-areas
+                                               (append bar '(0 1/2)))))))]
+                  [r (list (- right (+ (car add) (caddr add)))
+                           (- (cadr add) (- (cadr col)
+                                            (with-style 'cons
+                                              tasks-column-header-height)))
+                           (- (car thumb) (+ (car card) (caddr card) c))
+                           (- right (+ (car thumb) (caddr thumb)))
+                           (- (cadr thumb) (cadr card)))])
+             (close-window! win)
+             (steps 1)
+             (set-style! 'mac)
+             (for-all = r (list g g g g 0))))))
+
+(check "Cons's dialog is a chain: its dismiss area is the last button's \
+        cdr, a cell beside it, and below the message only the pad"
+       (with-style 'cons
+         (lambda ()
+           (let* ([as (ui-dialog-areas 0 0 400 200 '("Cancel" "Delete"))]
+                  [d (cdr (assq 'dismiss as))]
+                  [bs (map cdr (filter (lambda (a) (eq? (car a) 'button)) as))]
+                  [b (car (last-pair bs))]
+                  [m (cdr (assq 'message as))])
+             (and (= (car d) (+ (car b) (caddr b)))
+                  (= (cadr d) (cadr b))
+                  (= (caddr d) (cons-cell))
+                  (= (+ (cadr m) (cadddr m)) (- 200 (* 2 (cons-space)))))))))
 
 (check "a mouse press on a style card takes the keyboard from where it was"
        (let ([s (settings)])

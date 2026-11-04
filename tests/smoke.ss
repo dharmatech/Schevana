@@ -1519,6 +1519,48 @@
 (check "again: low first" (eq? (task-priority (car (rows))) 'low))
 (click-ui! tw '(table header priority))
 (check "again: board order" (not (tasks-view-sort tv)))
+;; A real drag on the line between Status and Priority widens Status; the
+;; cells follow; a double click there sets back its width.
+(let ([draw-cell tasks-draw-cell] [drawn '()])
+  (define (status-w)
+    (let ([r (ui-find tui '(table header status))]) (ui-region-w r)))
+  (define (cells-x)   ; the first row's cells, by key, as drawn
+    (set! drawn '())
+    (invalidate! tw)
+    (steps 1)
+    (reverse drawn))
+  (set! tasks-draw-cell
+        (lambda (x y w h flags t key today)
+          (when (eq? t (car (rows))) (set! drawn (cons (cons key x) drawn)))
+          (draw-cell x y w h flags t key today)))
+  (let*-values ([(before) (cells-x)] [(w0) (status-w)]
+                [(x y) (region-center '(table handle status))]
+                [(cx cy cw ch) (content-rect tw)]
+                [(x y) (values (+ cx (round x)) (+ cy (round y)))])
+    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+             `(mouse-move ,(+ x 40) ,y) `(mouse-up ,(+ x 40) ,y left))
+    (steps 2)
+    (let* ([after (cells-x)] [w1 (status-w)]
+           [moved (lambda (key) (- (cdr (assq key after))
+                                   (cdr (assq key before))))])
+      (inject! `(mouse-move ,(+ x 40) ,y) `(mouse-down ,(+ x 40) ,y left 1)
+               `(mouse-up ,(+ x 40) ,y left)
+               `(mouse-down ,(+ x 40) ,y left 2) `(mouse-up ,(+ x 40) ,y left))
+      (steps 2)
+      (set! tasks-draw-cell draw-cell)
+      (check "a drag on the line after Status widens it by as much; the \
+              cells after it follow, those before it stay; a double click \
+              there sets back its width"
+             (and (= w1 (+ w0 40))
+                  (equal? (map car before) (map car after))
+                  (let loop ([ks (map car before)] [by 0])
+                    (or (null? ks)
+                        (and (= by (moved (car ks)))
+                             (loop (cdr ks)
+                                   (if (eq? (car ks) 'status) 40 by)))))
+                  (> (length (memq 'status (map car before))) 1)
+                  (= w0 (status-w))
+                  (not (tasks-view-sort tv)))))))
 (press! 'down) (press! 'down)
 (steps 1)
 (check "Down twice selects the second row" (eq? (selected) (cadr (rows))))
@@ -2975,6 +3017,29 @@
          (and (not (window-error m)) (>= (length (bars)) 20)
               (ui-find ui (list 'monitor-kill (proc-id p)))
               (ui-find ui (list 'monitor-focus (window-id target)))))
+  ;; the Consumers sorted by a heading: by name, again the other way, and
+  ;; back to ms/s, the most first
+  (let ([order (lambda (nodes)   ; the same nodes, in a fixed order
+                 (list-sort string<? (map (lambda (n) (format "~s" n))
+                                          nodes)))]
+        [roots (lambda ()
+                 (map ui-tree-row-node
+                      (filter (lambda (r) (= 0 (ui-tree-row-depth r)))
+                              (vector->list
+                               (ui-memo ui '(consumers rows) '#())))))])
+    (let ([by-rate (roots)])
+      (click-ui! m '(consumers header name))
+      (let ([by-name (roots)])
+        (click-ui! m '(consumers header name))
+        (let ([by-name-down (roots)])
+          (click-ui! m '(consumers header rate))
+          (check "a Consumers heading sorts its rows by it, again the other \
+                  way; the same rows each time"
+                 (and (> (length by-rate) 2)
+                      (not (equal? by-name by-name-down))
+                      (equal? (reverse by-name) by-name-down)
+                      (equal? (order by-rate) (order by-name))
+                      (equal? (order by-rate) (order (roots)))))))))
   (click-ui! m (list 'monitor-focus (window-id target)))
   (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
   (focus-window! m)

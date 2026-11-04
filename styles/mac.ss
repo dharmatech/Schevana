@@ -62,6 +62,8 @@
     (draw-resize-grip (+ x w) (+ y h))))
 
 (define-style mac "Mac"
+  ;; a list's column lines show, faint, as the Finder's do
+  'table-dividers 'always
   'frame-radius 'mac-radius
   'frame-regions 'mac-regions
   'frame-under 'mac-draw-under

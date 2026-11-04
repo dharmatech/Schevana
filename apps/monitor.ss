@@ -224,6 +224,7 @@
         [pinned #f]        ; the step clicked
         [selected #f]      ; the row selected: a subject, or (subject part
                            ; phase)
+        [order '(rate . down)]   ; the Consumers' sort: (key . up|down)
         [memos (make-hashtable equal-hash equal?)]   ; the view's figures
         [memo-view #f])
     (define (move-on!)
@@ -422,8 +423,9 @@
              [num (max (* 8 cw) (+ 28 (text-width "calls/s" 'ui-small)))]
              [spark (* 13 cw)]
              [columns `((name "Consumer" ,(max 120 (- w (* 4 num) spark)))
-                        (rate "ms/s" ,num) (avg "avg" ,num) (max "max" ,num)
-                        (calls "calls/s" ,num) (spark "last minute" ,spark))])
+                        (rate "ms/s" ,num right) (avg "avg" ,num right)
+                        (max "max" ,num right) (calls "calls/s" ,num right)
+                        (spark "last minute" ,spark))])
         (define (total-of node)
           (let ([t (find (lambda (t)
                            (equal? (profile-total-what t)
@@ -435,17 +437,46 @@
                                        (cons (cadr node) (caddr node))))
                              (profile-total-parts t))
                        t))))
+        ;; node's ms in each second of the last minute, the oldest first
+        (define (minute-of node)
+          (remember (list 'spark node)
+                    (lambda ()
+                      (map (lambda (s) (profile-second-node-ms s node))
+                           minute))))
+        ;; what node sorts by in the column key: its label, or a number (0
+        ;; for none; the last minute's sum)
+        (define (sort-value node key)
+          (let ([t (total-of node)])
+            (case key
+              [(name) (if (monitor-part? node)
+                          (apply monitor-part-label node)
+                          (label-of node seconds))]
+              [(rate) (if t (/ (profile-total-ms t) span) 0)]
+              [(avg) (if (and t (> (profile-total-steps t) 0))
+                         (/ (profile-total-ms t) (profile-total-steps t))
+                         0)]
+              [(max) (if t (profile-total-longest t) 0)]
+              [(calls) (if t (/ (profile-total-calls t) span) 0)]
+              [else (apply + (minute-of node))])))
+        ;; siblings in the order order names, ties as they come
+        (define (sorted nodes)
+          (let ([key (car order)] [down? (eq? (cdr order) 'down)]
+                [less? (if (eq? (car order) 'name) string-ci<? <)])
+            (list-sort (lambda (a b)
+                         (let ([va (sort-value a key)] [vb (sort-value b key)])
+                           (if down? (less? vb va) (less? va vb))))
+                       nodes)))
         ;; a subject's parts, (subject part phase), when it has more than one
         (define (children node)
           (let ([t (and (not (monitor-part? node)) (total-of node))])
             (if (and t (> (length (profile-total-parts t)) 1))
-                (map (lambda (p)
-                       (let ([what (profile-total-what p)])
-                         (list node (car what) (cdr what))))
-                     (profile-total-parts t))
+                (sorted (map (lambda (p)
+                               (let ([what (profile-total-what p)])
+                                 (list node (car what) (cdr what))))
+                             (profile-total-parts t)))
                 '())))
         (define (cell node key cx cy cw ch flags)
-          (let ([t (total-of node)] [in 8])
+          (let ([t (total-of node)] [in 10])
             (define (number v)
               (ui-draw-label cx cy (- cw in) ch '(right) v))
             (case key
@@ -458,8 +489,10 @@
                       [id (and live (cdr s))]
                       [kill? (and live (not (monitor-part? node)) (proc? live))]
                       [bw (if kill? (+ 16 (text-width "Kill" 'ui)) 0)]
-                      [room (- cw bw 4)])
-                 (ui-draw-label cx cy room ch
+                      ;; after the twisty, where the heading's label starts
+                      [nx (+ cx in)]
+                      [room (- cw in bw 4)])
+                 (ui-draw-label nx cy room ch
                                 (if (and (pair? s) (not live))
                                     '(dim)
                                     '())
@@ -467,7 +500,7 @@
                  ;; the live window or process, looked up by its id
                  (when (and live (not (monitor-part? node)) (window? live))
                    (ui-pressable! ui (list 'monitor-focus id)
-                                  cx cy (min room (text-width label 'ui)) ch
+                                  nx cy (min room (text-width label 'ui)) ch
                                   (lambda ()
                                     (let ([w (find-window id)])
                                       (when w (focus-window! w))))
@@ -496,15 +529,21 @@
                                    "–"))]
               [(spark)
                (ui-draw-sparkline (+ cx 4) (+ cy 4) (- cw 12) (- ch 8) flags
-                                  (remember
-                                   (list 'spark node)
-                                   (lambda ()
-                                     (map (lambda (s)
-                                            (profile-second-node-ms s node))
-                                          minute))))])))
-        (ui-tree ui 'consumers x y w h columns roots children selected
+                                  (minute-of node))])))
+        (ui-tree ui 'consumers x y w h columns (sorted roots) children selected
                  (lambda (node) (set! selected node))
-                 cell)))
+                 cell
+                 'sort order
+                 ;; by a number, the most first; again, the other way
+                 'on-sort (lambda (key)
+                            (set! order
+                                  (cond [(not (eq? key (car order)))
+                                         (cons key (if (eq? key 'name)
+                                                       'up
+                                                       'down))]
+                                        [(eq? (cdr order) 'up)
+                                         (cons key 'down)]
+                                        [else (cons key 'up)]))))))
     (define (draw-memory x y w h seconds)
       (let*-values
           ([(mb) (lambda (b) (/ b 1048576.0))]

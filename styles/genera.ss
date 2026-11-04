@@ -323,7 +323,7 @@
           (ui-control-height)))
 
 ;; A tag as a Zmail keyword, in braces (E&M p.2434); one that can go, a
-;; × after it, and the box under the mouse.
+;; × after it, the mouse's box around the × alone: what a click removes.
 (define (genera-chip x y w h flags label)
   (let* ([removable? (memq 'removable flags)] [g (ui-small-glyph-size)]
          [room (- w (text-width "{}" 'ui) (if removable? (+ g 4) 0))])
@@ -333,8 +333,8 @@
       (let ([a (cdr (assq 'remove (ui-chip-areas x y w h)))])
         (ui-draw-glyph (+ (car a) (/ (- (caddr a) g) 2))
                        (+ (cadr a) (/ (- (cadddr a) g) 2)) g g
-                       '((ink . text)) 'cross)))
-    (when (memq 'hover flags) (genera-hover x y w h))))
+                       '((ink . text)) 'cross)
+        (when (memq 'hover flags) (apply genera-hover a))))))
 
 (define (genera-chip-size label removable?)
   (values (+ (text-width (string-append "{" label "}") 'ui)
@@ -396,14 +396,15 @@
 ;; sort as the character set's arrow after it.
 (define (genera-table-header x y w h flags label dir)
   (let* ([f (theme 'genera-heading-font)]
-         [arrow (case dir [(up) " ↑"] [(down) " ↓"] [else ""])]
-         [s (string-append (fit-text label (max 0 (- w 14 (text-width arrow f)))
-                                     f)
-                           arrow)]
+         [mark (case dir [(up) "↑"] [(down) "↓"] [else #f])]
+         [arrow (if mark (string-append " " mark) "")]
+         [label (fit-text label (max 0 (- w 14 (text-width arrow f))) f)]
+         [s (string-append label arrow)]
          [ty (genera-text-y y h f)]
-         [end (draw-text (+ x 10) ty s 'text f)])
+         [tx (+ x 10)]
+         [end (draw-text tx ty s 'text f)])
     (when (and (theme 'genera-heading-underline) (> (string-length s) 0))
-      (px-fill (+ x 10) (+ ty (font-ascent f) 1) (- end x 10) 1 'text))
+      (px-fill tx (+ ty (font-ascent f) 1) (- end tx) 1 'text))
     (when (memq 'hover flags) (genera-hover x y w h))))
 
 ;; A row: the mouse's box; chosen, inverse video: its 2-pixel box here,
