@@ -33,7 +33,7 @@
   (request-frame!))
 
 (define (cascade-windows!)
-  (set! *cascade* 0)
+  (cascade-reset!)
   (for-each (lambda (win)
               (when (eq? (window-state win) 'maximized) (restore-window! win))
               (place-window! win #f))

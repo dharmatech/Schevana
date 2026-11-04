@@ -233,7 +233,7 @@
 
 ;; The folders after the core, in load order.
 (define source-folders
-  '("kits" "desktop" "styles" "palettes" "wallpapers" "apps"))
+  '("kits" "services" "desktop" "styles" "palettes" "wallpapers" "apps"))
 
 ;; main.ss turns this on: a real session loads the user's folders too, at
 ;; boot and at every (reload!). The tests never do.

@@ -1,5 +1,5 @@
 ;;; apps/monitor.ss — the world, live: its windows and processes, and
-;;; where its time and memory go, from the profiler (desktop/profile.ss).
+;;; where its time and memory go, from the profiler (services/profile.ss).
 ;;; Two tabs: Overview, the first, and Ticks.
 ;;;
 ;;; Overview, twice a second: the World's facts in a grid, the windows (a
@@ -254,7 +254,7 @@
                            (if st (style-title st) "–")))
            (cons "Apps" (format "~a" (length (apps))))
            (cons "Timers" (format "~a waiting" (length *timers*)))
-           (cons "Profiling" (if (profiling?) "on" "off")))
+           (cons "Profiling" (if (profile-on?) "on" "off")))
      (if (> (cdr err) 0)
          (list (cons "Last error"
                      (format "~a ago: ~a"
@@ -440,9 +440,9 @@
              (list kw kh
                    (lambda (x y w h)
                      (ui-checkbox ui 'profiling x y w h "Profiling"
-                                  (profiling?)
-                                  (lambda (on?) (profiling! on?))
-                                  'tip "Profile the world: (profiling! #t)")))
+                                  (profile-on?)
+                                  (lambda (on?) (profile-on! on?))
+                                  'tip "Profile the world: (profile-on! #t)")))
              (list pw ph
                    (lambda (x y w h)
                      (ui-button ui 'pause x y w h
@@ -786,7 +786,7 @@
         (cond
           [(eq? tab 'overview)
            (monitor-draw-overview ui pad (+ y 12) (- w pad pad))]
-          [(profiling?)
+          [(profile-on?)
            (let* ([h* (history)] [seconds (cdr h*)]
                   [x pad] [cw (- w pad pad)]
                   [lh (font-line-height 'ui-small)]
@@ -821,7 +821,7 @@
           [else
            (ui-draw-label pad (+ y 8) (- w pad pad) 0 '(hint wrap)
                           "Profiling is off: check Profiling, or type \
-                           (profiling! #t) in a REPL, to see where the \
+                           (profile-on! #t) in a REPL, to see where the \
                            world's time and memory go.")]))
       (ui-end! ui w h))
     (apply open-window "Monitor"
@@ -838,6 +838,6 @@
                             (when (> (- (now-ms) last) 500)
                               (move-on!)
                               (invalidate! win))
-                            (when (and (eq? tab 'ticks) (profiling?)
+                            (when (and (eq? tab 'ticks) (profile-on?)
                                        (ticks-moved?))
                               (invalidate! win)))))))))

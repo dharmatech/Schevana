@@ -29,7 +29,7 @@
 ;; Install or remove the desktop entry and icon, then stop.
 (cond
   [(member "--install-desktop" (command-line-arguments))
-   (load-saved-theme!)
+   (theme-file-load!)
    (for-each (lambda (f) (printf "wrote ~a~%" f)) (install-desktop-entry!))
    (exit 0)]
   [(member "--uninstall-desktop" (command-line-arguments))
@@ -42,7 +42,7 @@
            [evals '()])
   (cond
     [(null? args)
-     (load-saved-theme!)   ; first, so the window opens at the saved scale
+     (theme-file-load!)   ; first, so the window opens at the saved scale
      (schevana-boot! mode (car size) (cdr size) start-fullscreen?)
      (update-host-icon!)
      (load-user-init!)

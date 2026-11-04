@@ -305,6 +305,9 @@
 ;; desktop. (parameterize ([new-window-position '(400 . 300)]) (clock))
 (defvar new-window-position (make-parameter #f))
 
+;; The next window that cascades opens at the cascade's first place.
+(define (cascade-reset!) (set! *cascade* 0))
+
 (define (place-window! win pos)
   (let-values ([(dx dy dw dh) (desktop-rect)])
     (window-w-set! win (min (window-w win) dw))

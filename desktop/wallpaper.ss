@@ -105,18 +105,13 @@
   (when (eq? kind 'down)
     (case button
       [(right) (open-launcher! x y (cons x y))]   ; apps open where clicked
-      [(left) (let ([old *focus*])
-                (set! *focus* #f)
-                (when old (window-call old 'blur))
-                (request-frame!))])))
+      [(left) (focus-window! #f)])))
 
 ;; Before a frame: a stale picture makes it the whole screen. A new theme
-;; repaints the app icon too (icon.ss), once things settle.
+;; repaints the app icon too (icon-follow-theme!).
 (define (desktop-tick)
   (when (and *dirty* (wallpaper-stale?)) (request-frame!))
-  (unless (eqv? *icon-version* *theme-version*)
-    (set! *icon-version* *theme-version*)
-    (update-host-icon-soon!)))
+  (icon-follow-theme!))
 
 (define-surface desktop -10
   'draw 'draw-desktop 'at (lambda (x y) 'desktop) 'mouse 'desktop-mouse

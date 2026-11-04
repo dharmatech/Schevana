@@ -19,7 +19,7 @@
 (define slice-fuel 10000)        ; per process slice; roughly 15us
 
 ;; The profiler's hook: #f, or (begin . end), procedures that
-;; desktop/profile.ss sets while on: (begin key part) opens a span of key
+;; services/profile.ss sets while on: (begin key part) opens a span of key
 ;; (a symbol, or a window's or a process's id) and part (a window
 ;; handler's kind, or #f; #t for a process's turn); (end outer?) closes
 ;; the span open innermost, or with outer? true (the step's end) the

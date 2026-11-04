@@ -18,7 +18,7 @@
 ;; a preview or a place is drawn, or a window's handler runs
 (defvar *main-theme* *theme*)
 (defvar *theme-version* 0)
-;; Keeps a change to the layers: void, or what desktop/theme-file.ss sets
+;; Keeps a change to the layers: void, or what services/theme-file.ss sets
 ;; (the file saved soon after).
 (defvar *theme-saver* void)
 
@@ -461,6 +461,13 @@
                   (raise e)])
       (thunk)
       (theme-changed!))))
+
+;; The layers at once, as a saved look gives them (services/theme-file.ss).
+(define (theme-layers-set! style overrides changes scale)
+  (set! *style-name* style)
+  (set! *theme-overrides* overrides)
+  (set! *style-changes* changes)
+  (set! *scale-setting* scale))
 
 (define (set-changes! name plist)
   (set! *style-changes* (let ([rest (remp (lambda (c) (eq? (car c) name))

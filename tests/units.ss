@@ -20,8 +20,8 @@
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
 
 ;; Never touch the user's real theme file.
-(set! *theme-file* (string-append out-dir "/theme.ss"))
-(when (file-exists? *theme-file*) (delete-file *theme-file*))
+(set! *theme-file-path* (string-append out-dir "/theme.ss"))
+(when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
 
 (define failures 0)
 
@@ -2453,7 +2453,8 @@
     (deleted (window-style . amiga) (preset . workbench) (corner-radius . 4))))
 
 (define (write-theme-file! data)
-  (call-with-output-file *theme-file* (lambda (p) (write data p)) 'replace))
+  (call-with-output-file *theme-file-path* (lambda (p) (write data p))
+    'replace))
 
 ;; The colors a palette gives or derives (not those kits and styles add).
 (define palette-keys
@@ -2466,7 +2467,7 @@
         (map (lambda (f)
                (let ([file (cdr f)])
                  (write-theme-file! file)
-                 (load-saved-theme!)
+                 (theme-file-load!)
                  (list (car f)
                        (for-all (lambda (k)
                                   (equal? (theme k)
@@ -2510,7 +2511,7 @@
 ;; in hex.
 (check "the theme file round-trips: style, scale, Overrides, changes"
        (let ([text (lambda ()
-                     (call-with-input-file *theme-file* get-string-all))])
+                     (call-with-input-file *theme-file-path* get-string-all))])
          (set-style! 'genera)
          (set-theme! 'palette 'nord)
          (set-theme! 'corner-radius 4)
@@ -2519,10 +2520,10 @@
          (override! 'ui-font-size 15)
          (let ([state (list *style-name* *scale-setting* *theme-overrides*
                             *style-changes*)]
-               [file (begin (save-theme!) (text))])
+               [file (begin (theme-file-save!) (text))])
            (set-style! 'windows)
            (reset-theme!)
-           (load-saved-theme!)
+           (theme-file-load!)
            (let ([back (list *style-name* *scale-setting* *theme-overrides*
                              *style-changes*)])
              (reset-theme!)
@@ -3227,12 +3228,12 @@
 (check "a stipple given as a color is saved and loads back"
        (let ([gray (stipple 'text #f "#." "..")])
          (set-theme! 'accent-2 gray)
-         (save-theme!)
+         (theme-file-save!)
          (reset-theme!)
-         (load-saved-theme!)
+         (theme-file-load!)
          (let ([back (theme 'accent-2)])
            (reset-theme!)
-           (save-theme!)
+           (theme-file-save!)
            (equal? back gray))))
 
 (check "text-ink: a capital's ink stands on the baseline, as wide as it \
@@ -4390,16 +4391,16 @@
                     (drag-feedback . outline) (scrollbar-side . left)
                     (button-double-click . ((menu . close))))])
          (for-each (lambda (kv) (override! (car kv) (cdr kv))) set)
-         (save-theme!)
+         (theme-file-save!)
          (reset-theme!)
-         (load-saved-theme!)
+         (theme-file-load!)
          (let ([got (map (lambda (kv) (theme (car kv))) set)])
            (reset-theme!)
-           (save-theme!)
+           (theme-file-save!)
            (and (equal? got (map cdr set))
-                (not (valid-theme-value? 'bell #t))
-                (not (valid-theme-value? 'frame-edge 'wide))
-                (not (valid-theme-value? 'no-such-key 3))))))
+                (not (theme-file-valid-value? 'bell #t))
+                (not (theme-file-valid-value? 'frame-edge 'wide))
+                (not (theme-file-valid-value? 'no-such-key 3))))))
 
 (check "menu-choose release: a menu that opens under the pointer stays open \
         when the press that opened it is released there (a taskbar \
@@ -4622,16 +4623,16 @@
          (set-style! 'test-own)
          (set-theme! 'test-own-width 5)
          (set-theme! 'test-own-ink 'bright)
-         (save-theme!)
+         (theme-file-save!)
          (reset-theme!)
-         (load-saved-theme!)
+         (theme-file-load!)
          (let ([got (list (theme 'test-own-width) (theme 'test-own-ink))])
            (reset-theme!)
            (set-style! 'mac)
            (and (equal? got '(5 bright))
-                (valid-theme-value? 'test-own-width 2)
-                (not (valid-theme-value? 'test-own-width 'wide))
-                (not (valid-theme-value? 'test-own-ink 4))))))
+                (theme-file-valid-value? 'test-own-width 2)
+                (not (theme-file-valid-value? 'test-own-width 'wide))
+                (not (theme-file-valid-value? 'test-own-ink 4))))))
 
 (check "Settings shows a style's own options, and the common ones it does \
         not honor as fixed"
@@ -4658,7 +4659,7 @@
 (check "save-style-as! writes a define-style of your changes over the \
         chosen style, loads it and chooses it; a name in use is refused"
        (let ([dir (string-append out-dir "/saved-styles")])
-         (set! *style-save-directory* dir)
+         (set! *settings-style-directory* dir)
          (when (file-exists? (string-append dir "/test-saved.ss"))
            (delete-file (string-append dir "/test-saved.ss")))
          (set-style! 'test-own)
@@ -5392,7 +5393,8 @@
 (check "Reset to defaults is saved, as a change is"
        (let ([saved (lambda ()
                       (cdr (assq 'changes
-                                 (call-with-input-file *theme-file* read))))])
+                                 (call-with-input-file *theme-file-path*
+                                   read))))])
          (set-theme! 'corner-radius 3)
          (run-soon-timers!)
          (let ([before (saved)])
@@ -5406,7 +5408,8 @@
        (let ([reads-as-symbol?
               (lambda (name)
                 (symbol? (read (open-string-input-port (format "~s" name)))))])
-         (set! *style-save-directory* (string-append out-dir "/saved-styles"))
+         (set! *settings-style-directory*
+               (string-append out-dir "/saved-styles"))
          (let* ([names (map settings-style-name '("1984" "2" "-1" "1e3"))]
                 [path (save-style-as! (string->symbol "12") "Twelve")]
                 [form (call-with-input-file path read)])
@@ -5485,15 +5488,15 @@
          (set-style! 'interlisp)
          (set-theme! 'interlisp-title-shade #x808080)
          (set-theme! 'interlisp-scroll-shade #x404040)
-         (save-theme!)
+         (theme-file-save!)
          (reset-theme!)
-         (load-saved-theme!)
+         (theme-file-load!)
          (let ([got (list (theme 'interlisp-title-shade)
                           (theme 'interlisp-scroll-shade))])
            (reset-theme!)
            (set-style! 'mac)
            (and (equal? got '(#x808080 #x404040))
-                (valid-theme-value? 'genera-gray #x333333)))))
+                (theme-file-valid-value? 'genera-gray #x333333)))))
 
 (check "the stipple tiles cached are at most 64"
        (begin
@@ -6051,7 +6054,7 @@
               (equal? given (list '() keys)))))
 
 ;;; ------------------------------------------------------------------
-;;; the profiler (desktop/profile.ss)
+;;; the profiler (services/profile.ss)
 
 (for-each close-window! (windows))
 (steps 2)
@@ -6091,7 +6094,7 @@
 
 (check "profiling is on at boot: the hooks are the profiler's, the collect \
         handler its own, and ticks are kept"
-       (and (profiling?) (pair? *profile-span*)
+       (and (profile-on?) (pair? *profile-span*)
             (eq? (car *profile-span*) profile-begin!)
             (eq? (collect-request-handler) profile-collect)
             (pair? (profile-ticks))))
@@ -6099,16 +6102,16 @@
 (check "off, the hook is #f: no tick is kept, the clock is never read, \
         Chez's own collect handler is back; on again, ticks are kept"
        (let ([reads 0] [clock now-ns] [before (profile-ticks)])
-         (profiling! #f)
+         (profile-on! #f)
          (set! now-ns
            (lambda () (set! reads (+ reads 1)) (clock)))
          (steps 5)
          (set! now-ns clock)
-         (let ([off (and (not (profiling?)) (not *profile-span*)
+         (let ([off (and (not (profile-on?)) (not *profile-span*)
                          (equal? before (profile-ticks)) (= reads 0)
                          (eq? (collect-request-handler)
                               *profile-plain-collect*))])
-           (profiling! #t)
+           (profile-on! #t)
            (and off (= 3 (length (profile-test-ticks (lambda () (steps 3)))))
                 *profile-span*))))
 
@@ -6123,8 +6126,9 @@
                                  i))))))]
               [none (profile-test-bytes void)]   ; (statistics)'s own
               [on (begin (spans) (- (profile-test-bytes spans) none))]
-              [off (begin (profiling! #f) (- (profile-test-bytes spans) none))])
-         (profiling! #t)
+              [off (begin (profile-on! #f)
+                          (- (profile-test-bytes spans) none))])
+         (profile-on! #t)
          (printf "  ~a bytes on, ~a off, for 20,000 spans and a step\n" on off)
          (and (< on 1000) (= off 0))))
 
@@ -6263,7 +6267,7 @@
                    (pair? (profile-test-uses s p))))
             ss))))
 
-(check "a span on a thread other than the one profiling! saw is untimed, \
+(check "a span on a thread other than the one profile-on! saw is untimed, \
         and so is one deeper than the stack: no step is lost, nothing \
         overflows"
        (let* ([thread *profile-thread*]
@@ -6319,10 +6323,10 @@
          (steps 3)
          (set! profile-tick-done! done)
          (set! report-error! report)
-         (let ([off (not (profiling?))] [drawn *frames-drawn*])
+         (let ([off (not (profile-on?))] [drawn *frames-drawn*])
            (invalidate!)
            (steps 2)
-           (profiling! #t)
+           (profile-on! #t)
            (set! *toasts* '())
            (and off (= errors 1) (> *frames-drawn* drawn)))))
 

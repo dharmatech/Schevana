@@ -35,15 +35,15 @@
 
 (define (shown-status-strings) (filter string? (map cdr *status-shown*)))
 
-(defvar *last-second* -1)
+(defvar *status-last-second* -1)
 
 ;; Once a second the bar that shows the status asks for itself, box (the
 ;; clock). The status shown changes only with that bar: it is taken when
 ;; the frame this step draws holds the bar.
 (define (status-tick box)
   (let ([s (time-second (current-time))])
-    (unless (= s *last-second*)
-      (set! *last-second* s)
+    (unless (= s *status-last-second*)
+      (set! *status-last-second* s)
       (call-with-values box request-frame!)))
   (when (and *dirty* (holds? (frame-box *dirty*)
                              (call-with-values box pixel-box)))

@@ -373,30 +373,30 @@
 ;; name -> ((source serial signature doc) ...); and what each source
 ;; defined: source -> (serial name ...). A source whose text was kept
 ;; again is read again.
-(defvar *source-docs* (make-hashtable string-hash string=?))
-(defvar *source-names* (make-hashtable string-hash string=?))
+(defvar *repl-source-docs* (make-hashtable string-hash string=?))
+(defvar *repl-source-names* (make-hashtable string-hash string=?))
 
 ;; The index, brought up to date with the kept texts.
 (define (name-docs)
   (let-values ([(sources kept) (hashtable-entries *source-texts*)])
     (vector-for-each
      (lambda (source k)
-       (let ([had (hashtable-ref *source-names* source #f)])
+       (let ([had (hashtable-ref *repl-source-names* source #f)])
          (unless (and had (= (car had) (car k)))
            (when had
              (for-each (lambda (name) (forget-doc! name source)) (cdr had)))
-           (hashtable-set! *source-names* source
+           (hashtable-set! *repl-source-names* source
                            (cons (car k) (index-text! source (car k)
                                                       (cdr k)))))))
      sources kept))
-  *source-docs*)
+  *repl-source-docs*)
 
 (define (forget-doc! name source)
   (let ([ds (remp (lambda (d) (string=? (car d) source))
-                  (hashtable-ref *source-docs* name '()))])
+                  (hashtable-ref *repl-source-docs* name '()))])
     (if (null? ds)
-        (hashtable-delete! *source-docs* name)
-        (hashtable-set! *source-docs* name ds))))
+        (hashtable-delete! *repl-source-docs* name)
+        (hashtable-set! *repl-source-docs* name ds))))
 
 ;; Indexes every top-level definition in text: its argument list and the
 ;; ;; comment lines right above it. => the names it defines.
@@ -412,7 +412,7 @@
               (unless (eof-object? form)
                 (for-each
                  (lambda (d)   ; (name . signature)
-                   (hashtable-update! *source-docs* (car d)
+                   (hashtable-update! *repl-source-docs* (car d)
                      (lambda (ds)
                        (cons (list source serial (cdr d)
                                    (comment-above text prev start))

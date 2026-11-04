@@ -154,7 +154,7 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 ; watch it in (monitor); Ctrl+C or kill!
 (spawn "busy" (lambda () (let loop () (loop))))
 (monitor)                                  ; where the time and memory go
-(profiling! #f)                            ; the profiler off (on at boot)
+(profile-on! #f)                            ; the profiler off (on at boot)
 (profile-history! 60 30)                   ; a minute of ticks, 30 of seconds
 (profile-totals (profile-seconds))         ; what each window, ... spent
 (tasks)                                    ; a task manager; tasks are data
@@ -189,11 +189,11 @@ heap, the style, apps, timers waiting, whether profiling is on, the
 last error), then the windows in a table (a click focuses one, the
 focused one selected) and the processes in another, each with its
 state and a Kill button. Its second, Ticks, shows where the world's time
-and memory go, as the profiler (`desktop/profile.ss`) measures them.
+and memory go, as the profiler (`services/profile.ss`) measures them.
 Each part of a tab is under a group's heading (the kit's `group`
 label, at the rows' size).
 The profiler runs whether Monitor is open or not, from boot, until
-Monitor's Profiling or `(profiling! #f)` turns it off: a step of 30 Life
+Monitor's Profiling or `(profile-on! #f)` turns it off: a step of 30 Life
 windows costs about 1% more with it (`tests/bench.ss`), and it
 allocates nothing. Its unit is a tick of the pacer's: the steps of the
 main loop (`schevana-step!`: the wait for host events, then events,
@@ -237,7 +237,7 @@ The Ticks tab has three parts:
   time a second, over the seconds kept.
 
 Above them, Profiling turns the profiler on or off for the whole world
-(`(profiling! #f)`), Pause holds Monitor's view still (the profiler goes
+(`(profile-on! #f)`), Pause holds Monitor's view still (the profiler goes
 on), Clear forgets the history, and two menus say how long the history
 is: every tick of the last 30 seconds (at most 100 a second of them)
 and each second's sums for the last 10 minutes, by default
@@ -304,9 +304,10 @@ and the new definition takes the old one's place.
 
 To keep one, drop it into a file of its own in `~/.schevana.d/`, under
 `apps/`, `styles/`, `palettes/` or `wallpapers/`, with any code your apps
-share under `kits/` and your own bars, menus or keys under `desktop/`.
-These folders load at boot after Schevana's own (`kits` first, then
-`desktop`, `styles`, `palettes`, `wallpapers` and `apps`, each in
+share under `kits/` (or `services/`, if it keeps state) and your own bars,
+menus or keys under `desktop/`. These folders load at boot after
+Schevana's own (`kits` first, then `services`, `desktop`, `styles`,
+`palettes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
 styles and palettes with the others, and the saved look may name them.
 `(apps)`, `(styles)`, `(palettes)`, `(wallpapers)` and
@@ -325,8 +326,10 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
-             default keys, the commands that arrange the windows, the
-             profiler, the saved look (written soon after each change)
+             default keys, the commands that arrange the windows
+services/    long-lived state behind an API, no surface: profile, the
+             profiler; theme-file, the saved look, written soon after
+             each change
 kits/        app: launching one by name, the color a name gets; color:
              hue, saturation and lightness, a color as one fixnum, the
              text color that reads on one; complete: a completion list
@@ -359,8 +362,9 @@ src/ffi      the only file that knows about C (SDL3 + Cairo); only the
 ```
 
 `src/` is the core, the explicit, ordered list in `load.ss`. Its last
-file loads the folders: `kits/`, `desktop/`, `styles/`, `palettes/`,
-`wallpapers/` and `apps/`, one definition per file (`desktop/` aside),
+file loads the folders: `kits/`, `services/`, `desktop/`, `styles/`,
+`palettes/`, `wallpapers/` and `apps/`, one definition per file (`kits/`,
+`services/` and `desktop/` aside),
 each folder in file-name order. A file dropped into a folder loads at the
 next boot or `(reload!)`, with no list to edit, and `(source-files)`
 lists them all. Only the core calls C: the folders draw, measure and
@@ -398,8 +402,11 @@ Decisions worth keeping in mind for the real design:
   folder. Each kind has a definer shaped like `define-app` that registers it by
   name, in a list kept in registration order, and a query that lists them. Kits
   are world code shared by apps: they load at boot, stay top-level and keep a
-  name prefix (`ui-`, `edit-`, `complete-`). Code moves out of an app into a
-  kit when a second app needs it, not before. R6RS libraries are one-way black
+  name prefix (`ui-`, `edit-`, `complete-`), and they keep no state but
+  caches. Services are the same with state behind their procedures
+  (`profile-`, `theme-file-`). Code moves out of an app into a kit when a
+  second app needs it, not before. The rules every change follows, layers
+  and state among them, are in `AGENTS.md`. R6RS libraries are one-way black
   boxes, like C libraries: the world imports them, they never call into the
   world.
 - **Apps are procedures.** `define-app` defines a normal procedure that
@@ -460,7 +467,7 @@ Decisions worth keeping in mind for the real design:
   Override (`override!`); Reset forgets your changes to the style; Save
   as new style writes them as a `define-style` with the style as its
   parent, `(save-style-as! 'my-mac "My Mac")`, into
-  `~/.schevana.d/styles/` (`*style-save-directory*`). The saved file is
+  `~/.schevana.d/styles/` (`*settings-style-directory*`). The saved file is
   plain data: the
   style, the scale, the Overrides and your changes per style; an older,
   flat file loads as the saved style's changes.
@@ -680,7 +687,7 @@ Decisions worth keeping in mind for the real design:
   the process's id: in its turn a process runs slices for its share of
   the time left). Off, each costs a variable read and a branch, and
   the key is not even computed; nothing is allocated either way. On
-  (at boot; `(profiling! #f)` turns it off), `desktop/profile.ss`
+  (at boot; `(profile-on! #f)` turns it off), `services/profile.ss`
   times each on `now-ns`, the monotonic clock in fixnum ns
   (`SDL_GetTicksNS`), on a stack of fixed depth, giving each its self
   time (its time less the spans inside it), so that the parts add up

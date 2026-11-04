@@ -1,7 +1,7 @@
-;;; profile.ss — the profiler: where the world's time and memory go, tick
-;;; by tick, whether or not Monitor shows it. Level 1: Schevana's own
-;;; accounting, through the core's hook (with-profile-span, src/proc.ss);
-;;; nothing in an app's code is instrumented.
+;;; services/profile.ss — the profiler: where the world's time and memory
+;;; go, tick by tick, whether or not Monitor shows it. Level 1: Schevana's
+;;; own accounting, through the core's hook (with-profile-span,
+;;; src/proc.ss); nothing in an app's code is instrumented.
 ;;;
 ;;; The unit is a tick: the main loop's steps (schevana-step!) from the
 ;;; one after a tick's to the next tick's, the steps between ticks (input
@@ -17,7 +17,7 @@
 ;;; as many uses as its ring holds), and into per-second sums kept for 10
 ;;; minutes, with what each key spent for the last minute.
 ;;;
-;;;   (profiling! #f)            off: no records, no clock reads; #t: on
+;;;   (profile-on! #f)           off: no records, no clock reads; #t: on
 ;;;   (profile-history! 30 10)   seconds of ticks, minutes of seconds
 ;;;   (profile-totals (profile-seconds))   by subject, the most first
 ;;;   (map profile-tick-phases (profile-slow-ticks))   the ticks that came
@@ -275,7 +275,7 @@
 ;;; ------------------------------------------------------------------ spans
 
 ;; Spans in an engine (a process, a handler: one can be suspended
-;; halfway) or on another thread than the one profiling! saw are untimed.
+;; halfway) or on another thread than the one profile-on! saw are untimed.
 (define (profile-untimed?)
   (or (in-engine?) (not (eqv? (profile-thread-id) *profile-thread*))))
 
@@ -353,7 +353,7 @@
 ;; (*pacer-between?*). Its books are kept under one guard: an error turns
 ;; the profiler off, and is said once.
 (define (profile-end-step! now ns idle)
-  (guard (c [#t (profiling! #f) (report-error! 'profiler c)])
+  (guard (c [#t (profile-on! #f) (report-error! 'profiler c)])
     (profile-fx+! *profile-phase-ns* 0 idle)
     (set! *profile-tick-ns* (fx+ *profile-tick-ns* ns))
     (unless *pacer-between?*
@@ -504,10 +504,10 @@
 
 ;;; ------------------------------------------------------------------ the API
 
-;; (profiling! #f) turns the profiler off: the hooks go, and with them
-;; every clock read and record; (profiling! #t) turns it on, for the
+;; (profile-on! #f) turns the profiler off: the hooks go, and with them
+;; every clock read and record; (profile-on! #t) turns it on, for the
 ;; thread that calls it. The history stays; the spans open are dropped.
-(define (profiling! on?)
+(define (profile-on! on?)
   (with-interrupts-disabled
     (set! *profile-on?* (and on? #t))
     (set! *profile-depth* 0)
@@ -525,7 +525,7 @@
     (collect-request-handler
      (if on? profile-collect *profile-plain-collect*))))
 
-(define (profiling?) *profile-on?*)
+(define (profile-on?) *profile-on?*)
 
 ;; (profile-history! 30 10): keep every tick of the last 30 seconds (at
 ;; most 100 a second, and 120 seconds), and each second's sums for the
@@ -843,4 +843,4 @@
 
 ;; Loading this file (at boot, or in a reload) sets the hooks as the flag
 ;; says, the spans open dropped.
-(profiling! *profile-on?*)
+(profile-on! *profile-on?*)

@@ -181,6 +181,56 @@
                          (sort (lambda (a b) (> (cdr a) (cdr b))) counts))))))
 
 ;;; ------------------------------------------------------------------
+;;; one owner
+;;; Outside the core, only the file that defines a global sets it; the
+;;; others call its procedures. The core's hooks are the exception: they
+;;; are there for a later layer to set. fluid-let (a view for a while) is
+;;; not a set.
+
+(define core-hooks '(*profile-span* *theme-saver*))
+
+;; The names a file defines at its top level.
+(define (top-level-names f)
+  (filter-map (lambda (x)
+                (and (pair? x) (memq (car x) '(define defvar)) (pair? (cdr x))
+                     (let ([h (cadr x)])
+                       (cond [(symbol? h) h]
+                             [(and (pair? h) (symbol? (car h))) (car h)]
+                             [else #f]))))
+              (file-forms f)))
+
+;; What x sets with set!, its data left out.
+(define (set-targets x)
+  (cond [(not (pair? x)) '()]
+        [(eq? (car x) 'quote) '()]
+        [(and (eq? (car x) 'set!) (pair? (cdr x)) (symbol? (cadr x)))
+         (cons (cadr x) (set-targets (cddr x)))]
+        [else (let loop ([l x] [acc '()])
+                (if (pair? l)
+                    (loop (cdr l) (append acc (set-targets (car l))))
+                    acc))]))
+
+(check "outside src/, no file sets a global another file defines, but the \
+        core's hooks"
+       (let ([owner (make-eq-hashtable)])
+         (for-each (lambda (f)
+                     (for-each (lambda (n) (hashtable-set! owner n f))
+                               (top-level-names f)))
+                   world-files)
+         (none?
+          (apply append
+                 (map (lambda (f)
+                        (filter-map
+                         (lambda (n)
+                           (let ([o (hashtable-ref owner n #f)])
+                             (and o (not (equal? o f))
+                                  (not (memq n core-hooks))
+                                  (format "~a sets ~a, ~a's" f n o))))
+                         (apply append (map set-targets (file-forms f)))))
+                      (remp (lambda (f) (string-prefix? "src/" f))
+                            world-files))))))
+
+;;; ------------------------------------------------------------------
 ;;; only the core calls C
 ;;; One of the core's roles is to keep C away from the rest: outside src/
 ;;; no file names a binding of src/ffi.ss, a foreign-… procedure, an
@@ -329,7 +379,8 @@
 ;;; part would be passed by.
 
 (define seam-files
-  (append (filter (lambda (f) (member (file-folder f) '("kits" "desktop")))
+  (append (filter (lambda (f) (member (file-folder f)
+                                            '("kits" "services" "desktop")))
                   (folder-files))
           '("apps/tasks.ss" "apps/settings.ss")))
 

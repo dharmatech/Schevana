@@ -14,8 +14,8 @@
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
 
 ;; Never touch the user's real theme file.
-(set! *theme-file* (string-append out-dir "/theme.ss"))
-(when (file-exists? *theme-file*) (delete-file *theme-file*))
+(set! *theme-file-path* (string-append out-dir "/theme.ss"))
+(when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
 
 (define failures 0)
 
@@ -851,24 +851,24 @@
                    (eq? (theme 'wallpaper) 'gradient))))
 ;; A theme saved before Amiga and Workbench were removed still loads.
 (reset-theme!)
-(call-with-output-file *theme-file*
+(call-with-output-file *theme-file-path*
   (lambda (p)
     (write '((window-style . amiga) (preset . workbench) (corner-radius . 4))
            p)))
-(load-saved-theme!)
+(theme-file-load!)
 (check
  "a saved theme naming a removed style or palette falls back to the defaults"
  (and (eq? (theme 'window-style) 'mac) (eq? (theme 'palette) 'tokyo-night)
       (= 4 (theme 'corner-radius))))
-(delete-file *theme-file*)
+(delete-file *theme-file-path*)
 (reset-theme!)
 (for-each close-window! (windows))
 
 ;; Settings: every control is a theme key; changes apply live and persist.
 ;; Save as new style writes into the output folder, never ~/.schevana.d.
 (for-each close-window! (windows))
-(set! *style-save-directory* (string-append out-dir "/styles"))
-(let ([f (string-append *style-save-directory* "/my-windows.ss")])
+(set! *settings-style-directory* (string-append out-dir "/styles"))
+(let ([f (string-append *settings-style-directory* "/my-windows.ss")])
   (when (file-exists? f) (delete-file f)))
 ;; A style with its own palette and fonts, and few options: the text size
 ;; is not one.
@@ -888,16 +888,16 @@
 (check "settings opens" (and s (not (window-error s))))
 (check "settings is single-instance" (eq? s (settings)))
 ;; An old, flat theme file shows as its style, its choices your changes.
-(call-with-output-file *theme-file*
+(call-with-output-file *theme-file-path*
   (lambda (p) (write '((window-style . genera) (accent . #x3366cc)) p))
   'replace)
-(load-saved-theme!)
+(theme-file-load!)
 (steps 2)
 (check "an old theme file shows in Settings as its style and your changes"
        (and (eq? (current-style) 'genera) (= (theme 'accent) #x3366cc)
             (ui-find (settings-ui) '(revert accent))
             (not (ui-find (settings-ui) '(revert corner-radius)))))
-(delete-file *theme-file*)
+(delete-file *theme-file-path*)
 (reset-theme!)
 (set-style! 'mac)
 (steps 2)
@@ -1103,13 +1103,13 @@
   (close-window! r))
 (check "settings never crashed" (not (window-error s)))
 (check "changes are saved shortly after"
-       (wait-for (lambda () (and (not *theme-save-pending*)
-                                 (file-exists? *theme-file*)))))
+       (wait-for (lambda () (and (not *theme-file-save-pending*)
+                                 (file-exists? *theme-file-path*)))))
 (let ([saved-accent (theme 'accent)])
   (reset-theme!)
   (check "reset restores defaults"
          (= (theme 'corner-radius) (theme-default 'corner-radius)))
-  (load-saved-theme!)
+  (theme-file-load!)
   (check "saved theme loads back"
          (and (= (theme 'accent) saved-accent) (= 0 (theme 'corner-radius))
               (eq? (theme 'palette) 'nord)
@@ -2982,7 +2982,7 @@
 (check "profiling is on at boot, and collects with Monitor closed"
        (let ([s (car (profile-ticks))])
          (steps 1)
-         (and (profiling?) (not (find-window 'monitor))
+         (and (profile-on?) (not (find-window 'monitor))
               (not (eqv? s (car (profile-ticks)))))))
 (let* ([target (open-window "Target"   ; drawn at every step, slowly: a top row
                  'size '(200 . 100) 'pos '(1000 . 420)
@@ -3077,7 +3077,7 @@
   (let ([p (busy)])
     (steps 2)
     (check "Monitor's Profiling turns it off: no bars"
-           (and (not (profiling?)) (not *profile-span*) (null? (bars))))
+           (and (not (profile-on?)) (not *profile-span*) (null? (bars))))
     (click-ui! m '(tab overview))
     (check "its Overview lists the windows and processes in tables still \
             (a new one by its next view: twice a second)"
@@ -3097,7 +3097,7 @@
   (let ([until (+ (real-time) 700)])
     (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
   (check "and on again: the bars come back"
-         (and (profiling?) (pair? *profile-span*)
+         (and (profile-on?) (pair? *profile-span*)
               (pair? (bars)) (not (window-error m))))
   (close-window! m)
   (close-window! target)
@@ -3113,7 +3113,7 @@
   (check "windows still draw after reload"
          (not (window-error (find-window 'clock))))
   (check "reload keeps the profiler's history, and it goes on"
-         (and (profiling?) (pair? *profile-span*)
+         (and (profile-on?) (pair? *profile-span*)
               (memv s (profile-ticks))
               (not (eqv? s (car (profile-ticks)))))))
 (let ([s (settings)])

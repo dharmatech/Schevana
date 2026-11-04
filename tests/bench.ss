@@ -46,8 +46,8 @@
 (define args (command-line-arguments))
 (define out-dir (if (pair? args) (car args) "."))
 (define frames (if (> (length args) 1) (string->number (cadr args)) 100))
-(set! *theme-file* (string-append out-dir "/theme.ss"))
-(when (file-exists? *theme-file*) (delete-file *theme-file*))
+(set! *theme-file-path* (string-append out-dir "/theme.ss"))
+(when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
 
 (define fake-ms 1000000)
 (set! now-ms (lambda () fake-ms))
@@ -365,7 +365,7 @@
       (lambda () (format "Thu 29 Oct   12:00:~2,'0d" (mod second 60))))
     (frame-steps (lambda (i)
                    (set! second (+ second 1))
-                   (set! *last-second* -1)))))
+                   (set! *status-last-second* -1)))))
 
 ;; A REPL alone, where it opens, typed into.
 (define (lone-keystrokes)
@@ -742,14 +742,14 @@
 ;;; (30 paused Life windows), and a busy process with Life paused (its
 ;;; loops a second, 1 s each way, twice).
 
-(define profile-cost-was (profiling?))
+(define profile-cost-was (profile-on?))
 
 (define (profile-cost-steps measure)   ; (values on off): medians
   (let loop ([turn 0] [on '()] [off '()])
     (if (= turn 20)
         (values (median on) (median off))
         (let ([on? (even? turn)])
-          (profiling! on?)
+          (profile-on! on?)
           (steps 2 81)
           (let ([ms (map (lambda (i) (measure)) (iota 20))])
             (if on?
@@ -782,7 +782,7 @@
 (let-values ([(on off) (profile-cost-idle)])
   (printf "profiling's cost, an idle step: on ~,4f ms, off ~,4f ms\n" on off))
 (let* ([runs (map (lambda (on?)
-                    (profiling! on?)
+                    (profile-on! on?)
                     (let-values ([(loops fps) (busy-run 100 #f 1000)]) loops))
                   '(#t #f #t #f))]
        [on (+ (car runs) (caddr runs))] [off (+ (cadr runs) (cadddr runs))])
@@ -790,7 +790,7 @@
            (~,1f%)\n"
           (exact (round (/ on 2))) (exact (round (/ off 2)))
           (* 100 (/ (- on off) off))))
-(profiling! profile-cost-was)
+(profile-on! profile-cost-was)
 
 (define failures 0)
 (define (assert! name ok)

@@ -63,8 +63,8 @@
 
 (define out-dir
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
-(set! *theme-file* (string-append out-dir "/theme.ss"))
-(when (file-exists? *theme-file*) (delete-file *theme-file*))
+(set! *theme-file-path* (string-append out-dir "/theme.ss"))
+(when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
 
 (define failures 0)
 
@@ -454,7 +454,7 @@
     (steps 2)
     ;; the clock's second
     (set! tick 1)
-    (set! *last-second* -1)
+    (set! *status-last-second* -1)
     (let ([u0 *upload-bytes*])
       (steps 1)
       (set! shown
@@ -467,7 +467,7 @@
     (set! c-ink #x60a040)
     (let again ()
       (let ([s (time-second (current-time))] [u0 *upload-bytes*])
-        (set! *last-second* s)
+        (set! *status-last-second* s)
         (invalidate! c)
         (steps 1)
         (if (= s (time-second (current-time)))

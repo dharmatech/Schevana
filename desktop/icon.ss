@@ -79,8 +79,14 @@
     (list entry icon)))
 
 (defvar *icon-update-pending* #f)
-;; the theme the icon follows: the desktop's tick sees a newer one
+;; the theme the icon follows
 (defvar *icon-version* *theme-version*)
+
+;; At the desktop's tick: a newer theme repaints the icon, soon after.
+(define (icon-follow-theme!)
+  (unless (eqv? *icon-version* *theme-version*)
+    (set! *icon-version* *theme-version*)
+    (update-host-icon-soon!)))
 
 ;; Follow theme changes, once things settle.
 (define (update-host-icon-soon!)

@@ -7,7 +7,7 @@
 ;;; (set-theme! 'accent #xff9e64) for the chosen style, (override!
 ;;; 'ui-font-size 15) for every style that honors it, (reset-style!),
 ;;; (save-style-as! 'my-genera "My Genera"). Changes apply live and are
-;;; saved to *theme-file* (~/.schevana-theme.ss). Settings draws with the
+;;; saved to *theme-file-path* (~/.schevana-theme.ss). Settings draws with the
 ;;; widget kit, so it is drawn in the chosen style too; its own pictures
 ;;; (the styles' miniatures, swatches, color tracks) are its
 ;;; settings-draw-… procedures.
@@ -155,7 +155,8 @@
 (define (settings-choice-value c) (if (pair? c) (cdr c) c))
 
 ;; A color's six hex digits.
-(define (settings-hex-digits c) (substring (hex-color (color->fixnum c)) 2 8))
+(define (settings-hex-digits c)
+  (substring (theme-file-hex (color->fixnum c)) 2 8))
 
 (define (settings-wallpaper-title name)
   (let ([wp (assq name *wallpapers*)]) (if wp (cadr wp) (format "~a" name))))
@@ -188,7 +189,7 @@
 
 ;; Where Save as new style writes: the user's styles folder, which loads
 ;; at every boot. The tests point it at their output folder.
-(defvar *style-save-directory* (string-append user-directory "/styles"))
+(defvar *settings-style-directory* (string-append user-directory "/styles"))
 
 ;; A new style's name from its title: "My Genera" -> my-genera, "1984"
 ;; -> style-1984 (a name must not read as a number); #f for none.
@@ -216,7 +217,7 @@
 ;; A setting's value as save-style-as! writes it: colors in hex, names and
 ;; lists quoted.
 (define (settings-datum key v)
-  (cond [(and (memq key color-keys) (fixnum? v)) (hex-color v)]
+  (cond [(and (memq key color-keys) (fixnum? v)) (theme-file-hex v)]
         [(or (symbol? v) (pair? v) (null? v)) (format "'~s" v)]
         [else (format "~s" v)]))
 
@@ -230,10 +231,10 @@
     (errorf 'save-style-as! "a style named ~s exists already" name))
   (let* ([parent (current-style)]
          [changes (style-changes-of parent)]
-         [keys (filter (lambda (k) (plain-data? (plist-ref changes k #f)))
+         [keys (filter (lambda (k) (theme-file-plain? (plist-ref changes k #f)))
                        (plist-keys changes))]
-         [path (format "~a/~a.ss" *style-save-directory* name)])
-    (settings-make-directory! *style-save-directory*)
+         [path (format "~a/~a.ss" *settings-style-directory* name)])
+    (settings-make-directory! *settings-style-directory*)
     (when (file-exists? path) (delete-file path))
     (call-with-output-file path
       (lambda (p)
