@@ -40,7 +40,7 @@
 (define (curses-title win buttons?)
   (let ([c (curses-cell)] [s (curses-side)] [w (window-w win)])
     (define (fit lo hi)
-      (let* ([title (fit-text (window-title win) (- hi lo (* 4 c)) 'mono)]
+      (let* ([title (text-fit (window-title win) (- hi lo (* 4 c)) 'mono)]
              [gw (+ (text-width title 'mono) (* 4 c))])
         (and (<= gw (- hi lo))
              (list title (max lo (min (- hi gw) (/ (- w gw) 2))) gw))))

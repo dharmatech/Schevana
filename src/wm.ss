@@ -260,21 +260,7 @@
        (define (name . args) (parameterize ([current-app 'name]) body ...))
        (register-app! 'name title (lambda () (name))))]))
 
-(define (launch-app name)
-  (let ([a (find (lambda (a) (eq? (app-name a) name)) *apps*)])
-    (if a ((app-launch a)) (errorf 'launch-app "no app named ~s" name))))
-
 (define (apps) (map app-name *apps*))
-
-(define app-colors '(accent accent-2 green orange cyan red yellow teal magenta))
-
-;; mod n at every step: the same color as at the end, but a long name's
-;; hash never grows.
-(define (app-color name)
-  (let ([s (symbol->string (or name 'unknown))] [n (length app-colors)])
-    (list-ref app-colors
-              (fold-left (lambda (h c) (mod (+ (* h 31) (char->integer c)) n))
-                         (mod 7 n) (string->list s)))))
 
 ;;; ------------------------------------------------------------------ windows
 

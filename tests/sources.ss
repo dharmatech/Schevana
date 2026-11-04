@@ -392,7 +392,7 @@
              (or (drawing-primitive? name)
                  (exists (lambda (p) (string-prefix? p (symbol->string name)))
                          '("ui-draw-" "complete-draw-" "tasks-draw-"
-                           "settings-draw-"))))
+                           "settings-draw-" "text-draw-"))))
         (and (pair? form)
              (memq (car form) '(define-part theme-default! color-default!))
              #t))))

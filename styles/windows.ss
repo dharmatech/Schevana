@@ -41,13 +41,13 @@
       (lambda ()
         (fill-rect x y w th (if focused? 'title-bg-focus 'title-bg))
         (fill-round-rect (+ x 12) (+ y (quotient (- th is) 2)) is is 4 icon)
-        (draw-text-centered (+ x 12) (+ y (quotient (- th is) 2)) is is
+        (text-draw-centered (+ x 12) (+ y (quotient (- th is) 2)) is is
                             (if (string=? title "")
                                 "·"
                                 (string (char-upcase (string-ref title 0))))
-                            (readable-on icon) 'ui-small)
+                            (color-readable-on icon) 'ui-small)
         (draw-text (+ x is 22) (+ y (/ (- th (font-line-height 'ui)) 2))
-                   (fit-text title (- w is 22 (* 3 windows-button-width) 12)
+                   (text-fit title (- w is 22 (* 3 windows-button-width) 12)
                              'ui)
                    (if focused? 'title-text 'title-text-dim) 'ui)
         (for-each (lambda (b)

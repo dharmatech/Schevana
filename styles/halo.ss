@@ -50,7 +50,7 @@
   (let* ([ph (halo-pill-height)] [tx (halo-margin win)]
          [bx (- (cadr (car (halo-regions win))) 2)]
          [buttons (list bx (- (window-w win) tx bx) #f)]
-         [title (fit-text (window-title win)
+         [title (text-fit (window-title win)
                           (- (min bx (* 2/3 (window-w win))) tx ph 4) 'ui)]
          [tw (+ (text-width title 'ui) ph -2)])
     (if (or (> (+ tx tw 6) bx) (string=? title ""))
@@ -120,7 +120,7 @@
                 (fill-round-rect (+ x (car p)) top (cadr p) ph (/ ph 2)
                                  (window-bg win))
                 (when (caddr p)
-                  (draw-text-centered (+ x (car p)) top (cadr p) ph (caddr p)
+                  (text-draw-centered (+ x (car p)) top (cadr p) ph (caddr p)
                                       (if focused? 'title-text 'title-text-dim)
                                       'ui)))
               pills)
@@ -138,7 +138,9 @@
                                [down? (mix 'button-close 'text 0.3)]
                                [else 'button-close]))
             (halo-glyph win kind gx gy
-                        (if close? (readable-on 'button-close) 'title-text))]
+                        (if close?
+                            (color-readable-on 'button-close)
+                            'title-text))]
            [else (halo-glyph win kind gx gy 'text-dim)])))
      (halo-regions win))))
 

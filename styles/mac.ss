@@ -49,8 +49,8 @@
                                    (mix color #x000000 0.6)))))
                   '(18 38 58) '(button-close button-min button-max)
                   '(close minimize maximize))
-        (draw-text-centered (+ x 70) y (- w 140) th
-                            (fit-text (window-title win) (- w 160) 'title)
+        (text-draw-centered (+ x 70) y (- w 140) th
+                            (text-fit (window-title win) (- w 160) 'title)
                             (if focused? 'title-text 'title-text-dim)
                             'title)))))
 

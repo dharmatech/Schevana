@@ -37,7 +37,7 @@
 ;; where the line has room; else none, the count is beside it.
 (define (cadr-progress x y w h flags frac)
   (when (>= h (font-line-height 'ui-small))
-    (draw-text-centered x y w h
+    (text-draw-centered x y w h
                         (format "~a%" (exact (round (* 100 (min 1 frac)))))
                         'text 'ui-small)))
 

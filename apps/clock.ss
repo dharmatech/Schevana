@@ -29,7 +29,7 @@
       (hand (* (+ mm (/ ss 60)) (/ pi 30)) (* r 0.78) 'text-dim 3.5)
       (hand (* ss (/ pi 30)) (* r 0.86) 'red 1.5)
       (fill-circle cx cy 5 'red)
-      (draw-text-centered 0 (- h digital-h) w digital-h
+      (text-draw-centered 0 (- h digital-h) w digital-h
                           (format "~2,'0d:~2,'0d:~2,'0d" hh mm ss)
                           'text-dim 'mono))]))
 

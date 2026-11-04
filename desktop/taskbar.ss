@@ -26,7 +26,7 @@
          ;; the hint gives way when the buttons would be too narrow for their
          ;; titles
          [hint-w (let ([hw (+ 24 (text-width taskbar-hint 'ui-small))]
-                       [want (min 210 (+ 48 (widest-text (map window-title ws)
+                       [want (min 210 (+ 48 (text-widest (map window-title ws)
                                                          'ui)))])
                    (if (>= (button-w hw) want) hw 0))]
          [bw (button-w hint-w)])
@@ -65,7 +65,7 @@
                     (fill-circle (+ x 15) (+ y (/ h 2)) 4
                                  (if min? (alpha color 0.35) color))
                     (draw-text (+ x 27) (+ y (/ (- h lh) 2))
-                               (fit-text (window-title what) (- bw 36) 'ui)
+                               (text-fit (window-title what) (- bw 36) 'ui)
                                (if min? 'panel-dim 'panel-text) 'ui))))
             a))
          (taskbar-areas))))))

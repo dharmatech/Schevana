@@ -522,13 +522,13 @@
 
 ;; The widest kind, and room around it.
 (define (complete-kinds-width rows)
-  (+ 14 (widest-text (map cadr rows) 'ui-small)))
+  (+ 14 (text-widest (map cadr rows) 'ui-small)))
 
 ;; doc's lines under sig in a list w wide, at most k.
 (define (complete-doc-lines sig doc w k)
   (if (or (string=? sig "") (string=? doc ""))
       '()
-      (let ([lines (wrap-text doc (- w 20) 'ui-small)])
+      (let ([lines (text-wrap doc (- w 20) 'ui-small)])
         (if (> (length lines) k) (list-head lines k) lines))))
 
 ;; At least 260 wide, at most max-w. => (values w h)
@@ -601,7 +601,7 @@
              [sep-y (if above? (- rows-y 5) (+ rows-y (* count rh) 4))]
              [ty (if above? (+ y 6) (+ sep-y 5))])
         (ui-draw-separator (+ x 6) sep-y (- w 12) 1 '())
-        (draw-text (+ x 10) ty (fit-text sig (- w 20) 'mono-small)
+        (draw-text (+ x 10) ty (text-fit sig (- w 20) 'mono-small)
                    'text 'mono-small)
         (for-each (lambda (line i)
                     (draw-text (+ x 10)

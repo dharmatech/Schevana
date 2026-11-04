@@ -13,7 +13,7 @@
                    (alpha 'accent 0.25))))
     (stroke-round-rect (+ m 0.5) (+ m 0.5) (- s 1) (- s 1) r
                        (alpha 'text 0.18) 1)
-    (draw-text-centered m m s s "λ" 'text
+    (text-draw-centered m m s s "λ" 'text
                         (make-font* "serif" (* s 0.72) 'bold))))
 
 (define (update-host-icon!) (host-set-icon! 256 draw-app-icon))

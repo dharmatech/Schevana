@@ -60,7 +60,7 @@
   (let ([t (reticle-track)])
     (if (string=? title "")
         ""
-        (fit-text (string-upcase title) room reticle-font
+        (text-fit (string-upcase title) room reticle-font
                   (lambda (s) (+ (text-width s reticle-font)
                                  (* t (- (string-length s) 1))))))))
 

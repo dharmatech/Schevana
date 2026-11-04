@@ -152,7 +152,7 @@
          [cw (cons-car-width win)]
          [xs (map (lambda (p) (+ x p)) (cons-pairs win))]
          [t (car xs)] [b (cadr xs)] [m (caddr xs)]
-         [s (fit-text (window-title win) (- cw (* 4/5 c)) 'title)]
+         [s (text-fit (window-title win) (- cw (* 4/5 c)) 'title)]
          [close (cons-tint 'close hover pressed 'button-close)])
     (define (sign x kind plus? cdr-tint)
       (let ([tint (cons-tint kind hover pressed 'accent)])
@@ -245,7 +245,7 @@
                    [else 'text])]
          [lh (font-line-height 'ui)] [g (ui-glyph-size)]
          [gw (if glyph (* 3/2 g) 0)]   ; the glyph and its gap
-         [label (and label (fit-text label (- w 12 gw) 'ui))]
+         [label (and label (text-fit label (- w 12 gw) 'ui))]
          [cw (if label (+ gw (text-width label 'ui)) g)]
          [x0 (+ x (/ (- w cw) 2))])
     (when tint (px-fill x y w h tint))
@@ -276,7 +276,7 @@
          [tint (cons-tint-of flags ink)])
     (when tint (px-fill x by bw b tint))
     (cons-ring! x by bw b ink (if focused? 2 1))
-    (draw-text-centered x by bw b (if on? "#t" "#f")
+    (text-draw-centered x by bw b (if on? "#t" "#f")
                         (cond [tint 'window-bg] [on? 'accent] [else 'text-dim])
                         'mono)
     bw))
@@ -288,7 +288,7 @@
         [lh (font-line-height 'ui)])
     (when label
       (draw-text (+ x bw (cons-space)) (+ y (/ (- h lh) 2))
-                 (fit-text label (- w bw (cons-space)) 'ui)
+                 (text-fit label (- w bw (cons-space)) 'ui)
                  (if (memq 'checked flags) 'text-dim 'text) 'ui))))
 
 (define (cons-checkbox-size label)
@@ -301,7 +301,7 @@
         [lh (font-line-height 'ui)])
     (when label
       (draw-text (+ x bw (cons-space)) (+ y (/ (- h lh) 2))
-                 (fit-text label (- w bw (cons-space)) 'ui) 'text 'ui))))
+                 (text-fit label (- w bw (cons-space)) 'ui) 'text 'ui))))
 
 ;; Tabs are a list of symbols, [Board|•]→[List|•]→[Tree|/]: each a pair,
 ;; its car the word, its cdr a pointer to the next; the last one's (the
@@ -316,7 +316,7 @@
          [ink (if bold? 'accent 'cons-ink)] [lw (if bold? 2 1)]
          [tint (if (on? 'selected) 'accent (cons-tint-of flags ink))])
     (cons-pair-h! x y cw h c ink lw tint #f)
-    (draw-text-centered x y cw h (fit-text label (- cw 8) 'ui)
+    (text-draw-centered x y cw h (text-fit label (- cw 8) 'ui)
                         (if tint 'window-bg 'text) 'ui)
     (if (on? 'last)
         (cons-nil-h! (+ x cw) y c h ink lw #f)
@@ -387,7 +387,7 @@
          [lh (font-line-height 'ui)])
     (cons-pair-h! x y cw h c ink lw tint (and (on? 'open) ink))
     (draw-text (+ x (cons-space)) (+ y (/ (- h lh) 2))
-               (fit-text label (- cw (* 2 (cons-space))) 'ui)
+               (text-fit label (- cw (* 2 (cons-space))) 'ui)
                (cond [tint 'window-bg]
                      [(on? 'set) 'accent]
                      [(on? 'placeholder) 'text-faint]
@@ -400,7 +400,7 @@
 ;; The value, g in, and the cdr.
 (define (cons-dropdown-size labels)
   (values (min (* 10 (font-line-height 'ui))
-               (+ (* 2 (cons-space)) (cons-slot) (widest-text labels 'ui)))
+               (+ (* 2 (cons-space)) (cons-slot) (text-widest labels 'ui)))
           (ui-control-height)))
 
 ;; A tag is a symbol in a list: small chained cells, [perf|•]→[render|/],
@@ -452,7 +452,7 @@
                (cons-ring! x y w h 'cons-ink 1))
         (cons-pair-h! x y cw h h 'cons-ink 1 tint #f))
     (draw-text (+ x (cons-space)) (+ y (/ (- h sh) 2))
-               (fit-text label (- cw (* 2 (cons-space))
+               (text-fit label (- cw (* 2 (cons-space))
                                   (if removable? (cons-chip-x-side) 0))
                          'ui-small)
                (if tint 'window-bg 'text) 'ui-small)
@@ -586,7 +586,7 @@
 (define (cons-table-header x y w h flags label dir)
   (let* ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)]
          [tx (+ x (* 2 (cons-space)))]
-         [s (fit-text label (max 0 (- w (* 3 (cons-space)) g)) 'ui-small)]
+         [s (text-fit label (max 0 (- w (* 3 (cons-space)) g)) 'ui-small)]
          [ty (+ y (/ (- h sh) 2))]
          [end (draw-text tx ty s (if (or dir (memq 'hover flags)) 'text
                                      'text-faint)
@@ -676,7 +676,7 @@
 (define (cons-tooltip-size text)
   (let ([lines (ui-tooltip-lines text)])
     (values (+ 4 (* 2 (cons-space)) (* 2 (text-width "\"" 'mono-small))
-               (min 280 (widest-text lines 'ui-small)))
+               (min 280 (text-widest lines 'ui-small)))
             (+ 10 (* (length lines) (font-line-height 'ui-small))))))
 
 ;; A dialog is a window-shaped list, ("Delete TASK-16?" Cancel Delete): a
@@ -734,7 +734,7 @@
          [cars (map cdr (filter (lambda (a) (eq? (car a) 'button)) areas))]
          [cy (cadr t)] [tw (caddr t)]
          [close (cons-tint-of flags 'button-close)]
-         [s (fit-text title (- tw (* 4/5 c)) 'title)])
+         [s (text-fit title (- tw (* 4/5 c)) 'title)])
     (ui-draw-panel x y w h '(dialog))
     (px-fill x (+ y th -1) w 1 'window-border)
     (cons-pair! (car t) cy tw c ink lw #f #f)
@@ -772,7 +772,7 @@
          [tint (cond [sel? 'accent] [(on? 'hover) ink] [else #f])])
     (when tint (px-fill cx cy s s tint))
     (cons-ring! cx cy s s ink (if (or (on? 'today) (on? 'cursor)) 2 1))
-    (draw-text-centered x y w h label
+    (text-draw-centered x y w h label
                         (cond [tint 'window-bg]
                               [(on? 'outside) 'text-faint]
                               [else 'text])
@@ -782,7 +782,7 @@
 (define (cons-avatar x y w h flags name)
   (let ([color (app-color (string->symbol (string-downcase name)))])
     (cons-ring! x y w w color 1)
-    (draw-text-centered x y w w (ui-initials name) color 'ui-small)))
+    (text-draw-centered x y w w (ui-initials name) color 'ui-small)))
 
 ;;; Tasks' board: a column is a list of cards.
 
@@ -837,7 +837,7 @@
       (draw-text (+ end g) (+ y (/ (- hh sh) 2)) (number->string count)
                  'text-faint 'ui-small))
     (when (memq 'empty flags)
-      (draw-text-centered x (+ y hh) w (min 120 (- h hh)) "()" 'text-faint
+      (text-draw-centered x (+ y hh) w (min 120 (- h hh)) "()" 'text-faint
                           'mono))))
 
 ;; Dashes of 4 and gaps of 3 along the four edges of a box.
@@ -926,7 +926,7 @@
                             [px (+ x pad)] [pw (- w pad pad c)])
                        (cons-pair-h! px y pw c c 'cons-ink 1 tint #f)
                        (draw-text (+ px tx) (+ y (/ (- c lh) 2))
-                                  (fit-text (car (vector-ref es i)) (- pw tx 4)
+                                  (text-fit (car (vector-ref es i)) (- pw tx 4)
                                             font)
                                   (if tint 'window-bg (theme 'menu-ink)) font)
                        (if next
@@ -1004,7 +1004,7 @@
           (unless (or (null? doc) (< (- left title-end) 120))
             (draw-text (+ title-end 24)
                        (/ (- h (font-line-height 'mono-small)) 2)
-                       (fit-text (mouse-doc-text doc) (- left title-end 48)
+                       (text-fit (mouse-doc-text doc) (- left title-end 48)
                                  'mono-small)
                        'panel-dim 'mono-small)))))))
 
@@ -1063,7 +1063,7 @@
                                  [min? 'panel-dim]
                                  [else 'cons-ink])]
                       [tint (and (or focused? hover?) ink)]
-                      [s (fit-text (window-title win) (- cw 8) 'ui)])
+                      [s (text-fit (window-title win) (- cw 8) 'ui)])
                  (cons-pair! x cy cw c ink 1 tint #f)
                  (draw-text (+ x (floor (/ (- cw (text-width s 'ui)) 2)))
                             (+ cy (/ (- c lh) 2)) s
@@ -1086,7 +1086,7 @@
         (if (null? ts)
             (reverse acc)
             (let* ([t (car ts)]
-                   [text (fit-text (vector-ref t 1) (- (screen-w) 120) 'ui)]
+                   [text (text-fit (vector-ref t 1) (- (screen-w) 120) 'ui)]
                    [tw (+ (* 4 (cons-space)) c
                           (ceiling (text-width text 'ui)))])
               (loop (cdr ts) (+ y h a)
@@ -1127,10 +1127,10 @@
          [x0 (round (/ (- w s c a nw c) 2))] [y0 (round (/ (- h s) 2))]
          [x1 (+ x0 s c a)] [y1 (+ y0 (round (/ (- s c) 2)))])
     (cons-pair-h! x0 y0 s s c ink lw #f #f)
-    (draw-text-centered x0 y0 s s "λ" ink 'huge)
+    (text-draw-centered x0 y0 s s "λ" ink 'huge)
     (cons-right! (cons-dot-x (+ x0 s) c lw) (cons-dot-y y0 s lw) x1 c ink lw)
     (cons-pair-h! x1 y1 nw c c ink lw #f #f)
-    (draw-text-centered x1 y1 nw c name ink 'ui-bold)
+    (text-draw-centered x1 y1 nw c name ink 'ui-bold)
     (cons-nil! (+ x1 nw) y1 c ink lw #f)))
 
 (define-style cons "Cons"

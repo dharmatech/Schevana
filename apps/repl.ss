@@ -360,10 +360,10 @@
 ;;; closes. With nothing to choose, a popup says so: the sole completion,
 ;;; with its description, or none. What it offers depends on where the
 ;;; cursor is: inside a string, file names; after a quote in (theme '…),
-;;; (launch-app '…) and the like, the theme keys, apps, palettes or styles
+;;; (app-launch! '…) and the like, the theme keys, apps, palettes or styles
 ;;; that fit there; inside (import (…)), library names a part at a time;
 ;;; otherwise every name bound in this REPL's environment. Names match by
-;;; the kit's segments ("dtc" puts draw-text-centered first), Schevana's
+;;; the kit's segments ("dtc" puts text-draw-centered first), Schevana's
 ;;; own first among equals. The chosen name shows its argument list and
 ;;; the comment above its definition, read from the sources.
 
@@ -582,7 +582,7 @@
     (theme "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme-part "key" ,(lambda () (map symbol->string (theme-keys))))
     (theme-default "key" ,(lambda () (map symbol->string (theme-keys))))
-    (launch-app "app" ,(lambda () (map symbol->string (apps))))
+    (app-launch! "app" ,(lambda () (map symbol->string (apps))))
     (find-window "app" ,(lambda () (map symbol->string (apps))))
     (set-palette! "palette"
                          ,(lambda () (map symbol->string (palettes))))

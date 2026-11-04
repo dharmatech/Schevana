@@ -29,7 +29,7 @@
   (let* ([tx (+ (lambda-pad) (round (* 0.8 (lambda-mark-size))) 8)]
          [room (- (window-w win) tx lambda-gap (* 3 (lambda-button-width))
                   (* 2 lambda-slant (lambda-tab-height)))]
-         [title (fit-text (window-title win) (max 0 room) 'title)]
+         [title (text-fit (window-title win) (max 0 room) 'title)]
          [gap (if (string=? title "") 0 lambda-gap)])
     (values title tx (round (+ tx (text-width title 'title) gap)))))
 
@@ -63,7 +63,7 @@
          [g (round (* 0.16 bw))]
          [down? (eq? pressed kind)] [hot? (or down? (eq? hover kind))]
          [red? (and hot? (eq? kind 'close))]
-         [ink (if red? (readable-on 'button-close) ink)])
+         [ink (if red? (color-readable-on 'button-close) ink)])
     (when hot?
       (lambda-lean cx cy (* 0.3 bw) (min (* 0.34 bh) (* 0.42 bw))
                    (cond [red? (if down? (mix 'button-close ink 0.25)
@@ -82,7 +82,7 @@
                 [(end) (+ x bx (* 3 bw))]
                 [(tab) (if focused? 'accent 'window-border)]
                 [(ink) (if focused?
-                           (readable-on 'accent)
+                           (color-readable-on 'accent)
                            (mix 'title-text-dim 'title-text 0.3))])
     (window-shadow win x (+ y th) w (- h th) 0 focused?)   ; shadow
     ;; maximized, the tab stands on a strip, not on the windows behind

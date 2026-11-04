@@ -46,7 +46,7 @@
     (call-with-clip x y w s   ; even "…" may not fit a narrow window
       (lambda ()
         (let ([end (draw-text (+ x 4) (+ y 1)
-                              (fit-text (window-title win) (- w 8) 'ui-small)
+                              (text-fit (window-title win) (- w 8) 'ui-small)
                               (window-bg win) 'ui-small)])
           (when (< (+ end 2) (- (+ x w) k))
             (fill-rect (+ end 2) (+ y 1) (- (+ x w) k end 2) (- s k)

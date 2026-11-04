@@ -908,7 +908,7 @@
 (define (within-fuel? thunk)
   ((make-engine thunk) handler-fuel (lambda (left . r) #t) (lambda (e) #f)))
 
-;; fit-text as plainly as it can be said: a character shorter at a time.
+;; text-fit as plainly as it can be said: a character shorter at a time.
 (define (fit-plainly str max-w font)
   (if (<= (text-width str font) max-w)
       str
@@ -916,7 +916,7 @@
         (let ([s (string-append (substring str 0 (max n 0)) "…")])
           (if (or (<= n 0) (<= (text-width s font) max-w)) s (loop (- n 1)))))))
 
-(check "fit-text cuts where cutting a character at a time does: window, \
+(check "text-fit cuts where cutting a character at a time does: window, \
         task and made-up titles, other scripts, in five fonts and many \
         widths"
        (let ([strings
@@ -940,19 +940,19 @@
          (for-all (lambda (font)
                     (for-all (lambda (w)
                                (for-all (lambda (s)
-                                          (equal? (fit-text s w font)
+                                          (equal? (text-fit s w font)
                                                   (fit-plainly s w font)))
                                         strings))
                              '(-1 0 6 13 25 40 64 100 150 220 320)))
                   '(ui title ui-small mono-small heading))))
 
-(check "fit-text measures log n times: 100,000 characters in at most 18"
+(check "text-fit measures log n times: 100,000 characters in at most 18"
        (let* ([n 0] [orig text-width]
               [s (dynamic-wind
                    (lambda ()
                      (set! text-width
                            (lambda args (set! n (+ n 1)) (apply orig args))))
-                   (lambda () (fit-text (make-string 100000 #\W) 300 'ui))
+                   (lambda () (text-fit (make-string 100000 #\W) 300 'ui))
                    (lambda () (set! text-width orig)))]
               [k (- (string-length s) 1)])
          (and (<= 1 n 18)
@@ -979,14 +979,14 @@
   (substring (apply string-append (make-list (+ 1 (quotient n 6)) "words "))
              0 n))
 
-(check "fit-text looks at no more characters than its width could show: as \
+(check "text-fit looks at no more characters than its width could show: as \
         many measured to fit 100,000 characters into 300 pixels as to fit \
         2,000, with words or without"
        (for-all (lambda (make)
                   (= (characters-measured
-                      (lambda () (fit-text (make 2000) 300 'ui)))
+                      (lambda () (text-fit (make 2000) 300 'ui)))
                      (characters-measured
-                      (lambda () (fit-text (make 100000) 300 'ui)))))
+                      (lambda () (text-fit (make 100000) 300 'ui)))))
                 (list words-of (lambda (n) (make-string n #\W)))))
 
 (check "text-within: a string cut to one character more than its width in \
@@ -1010,13 +1010,13 @@
        (and (for-all
              (lambda (name)
                (eq? (app-color name)
-                    (list-ref app-colors
+                    (list-ref (theme 'app-colors)
                               (mod (fold-left (lambda (h c)
                                                 (+ (* h 31) (char->integer c)))
                                               7
                                               (string->list
                                                (symbol->string name)))
-                                   (length app-colors)))))
+                                   (length (theme 'app-colors))))))
              '(repl life settings tasks clock |Pavel Uvarov| perf λ ||))
             (let ([long (string->symbol (make-string 100000 #\a))])
               (within-fuel? (lambda () (app-color long))))))
@@ -1598,7 +1598,7 @@
                        (ui-label-lines (make-string 200 #\W) 100 'ui))
               (equal? (ui-label-lines "No task matches this, with Kind: Bug."
                                       120 'ui)
-                      (wrap-text "No task matches this, with Kind: Bug."
+                      (text-wrap "No task matches this, with Kind: Bug."
                                  120 'ui)))))
 
 (let ([soft (lay-of "aaa bbb ccc" 42)] [hard (lay-of "ab\ncd" 100)]
@@ -5966,7 +5966,7 @@
                    (printf "  ~s\n" (list plot (assq 'bar areas) hovered
                                           pressed given))
                    (and (= (car plot)
-                           (exact (ceiling (+ 10 12 (widest-text (map cdr rules)
+                           (exact (ceiling (+ 10 12 (text-widest (map cdr rules)
                                                                  'ui-small)))))
                         (for-all (lambda (v) (and (exact? v) (integer? v)))
                                  plot)

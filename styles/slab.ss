@@ -90,7 +90,7 @@
     (px-fill kx ky k k ink)
     (px-fill (+ kx t) (+ ky t) (- k t t) (- k t t) face)
     (slab-glyph win kind (+ kx (/ k 2)) (+ ky (/ k 2)) (round (* 2/9 k))
-                (if hot? (readable-on face) ink) face)))
+                (if hot? (color-readable-on face) ink) face)))
 
 ;; The card is filled with ink, and the bar and the content (which the
 ;; window manager fills) leave the outline and the bar's rule showing.
@@ -108,7 +108,7 @@
          [buttons (slab-regions win)] [ky (+ y t (slab-margin))]
          ;; as far from the outline as the capitals are from the bar's top
          [pad (quotient (- b (quotient (* 3 (slab-font)) 5)) 2)]
-         [title (fit-text (window-title win)
+         [title (text-fit (window-title win)
                           (- (cadar buttons) t pad pad) 'title)])
     (unless max? (slab-under x y cw ch o under))
     (px-fill x y cw ch ink)

@@ -11,7 +11,7 @@
         (if (null? ts)
             (reverse acc)
             (let* ([t (car ts)]
-                   [text (fit-text (vector-ref t 1) (- (screen-w) 120) 'ui)]
+                   [text (text-fit (vector-ref t 1) (- (screen-w) 120) 'ui)]
                    [tw (+ 40 (text-width text 'ui))])
               (loop (cdr ts) (+ y h 8)
                     (cons (vector (- (+ dx dw) tw 12) y tw h text

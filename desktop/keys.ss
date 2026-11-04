@@ -8,8 +8,8 @@
     ((ctrl shift #\m) . ,(lambda () (when *focus* (toggle-maximize! *focus*))))
     ((ctrl shift #\n) . ,(lambda () (when *focus* (minimize-window! *focus*))))
     ((ctrl shift #\t) . ,(lambda () (tile-windows!)))
-    ((ctrl shift #\r) . ,(lambda () (launch-app 'repl)))
-    ((ctrl shift #\p) . ,(lambda () (launch-app 'private-repl)))
+    ((ctrl shift #\r) . ,(lambda () (app-launch! 'repl)))
+    ((ctrl shift #\p) . ,(lambda () (app-launch! 'private-repl)))
     ((f11) . ,(lambda () (toggle-fullscreen!)))
     ((f12) . ,(lambda ()
                 (notify (format "Saved ~a"

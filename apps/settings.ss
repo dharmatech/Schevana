@@ -261,7 +261,7 @@
 (define (settings-sidebar-width)
   (max 168
        (+ 40 (text-width "Settings" 'heading))
-       (+ 48 (widest-text (map cdr settings-tabs) 'ui))
+       (+ 48 (text-widest (map cdr settings-tabs) 'ui))
        (+ 56 (text-width "Reset to defaults" 'ui))))
 
 (define (settings-tab-height) (max 32 (round (+ (font-line-height 'ui) 12))))
@@ -269,13 +269,13 @@
   (max 26 (round (+ (font-line-height 'ui) 11))))
 
 (define (settings-color-list-width)
-  (max 220 (+ 54 (widest-text (map symbol->string
+  (max 220 (+ 54 (text-widest (map symbol->string
                                    (filter symbol? (settings-color-rows)))
                               'ui))))
 
 ;; Color editor: label column, hex field and its marks.
 (define (settings-hsl-label-width)
-  (max 96 (+ 24 (widest-text '("Hue" "Saturation" "Lightness") 'ui))))
+  (max 96 (+ 24 (text-widest '("Hue" "Saturation" "Lightness") 'ui))))
 (define (settings-hsl-readout-width) (max 64 (+ 28 (text-width "100%" 'ui))))
 (define (settings-hex-width) (max 116 (+ 60 (text-width "000000" 'ui))))
 (define (settings-marks-width) (+ 12 (* 2 (ui-control-height))))
@@ -291,7 +291,7 @@
   (max 600 (* 30 (round (font-line-height 'ui)))))
 
 ;; Label column and readout of a slider row.
-(define (settings-label-width labels) (max 180 (+ 24 (widest-text labels 'ui))))
+(define (settings-label-width labels) (max 180 (+ 24 (text-widest labels 'ui))))
 (define (settings-readout-width) (max 60 (+ 24 (text-width "00 px" 'ui))))
 
 ;; Cards (styles, palettes) are wide enough for their labels, in whole
@@ -299,7 +299,7 @@
 (define (settings-card-label-height)
   (max 28 (round (+ (font-line-height 'ui) 10))))
 (define (settings-card-width labels)
-  (max 180 (+ 36 (exact (ceiling (widest-text labels 'ui))))))
+  (max 180 (+ 36 (exact (ceiling (text-widest labels 'ui))))))
 (define (settings-card-height) (+ 88 (settings-card-label-height)))
 
 ;; The pane's height while it is drawn: what lies outside it (cards,
@@ -383,10 +383,10 @@
                     (cons (settings-choice-label c) (settings-choice-value c)))
                   choices)]
          [h (ui-control-height)]
-         [sw (* (length cs) (+ 34 (widest-text (map car cs) 'ui)))])
+         [sw (* (length cs) (+ 34 (text-widest (map car cs) 'ui)))])
     (if (<= sw w)
         (ui-segmented ui id x y sw h cs current on-select)
-        (ui-dropdown ui id x y (min w (+ 60 (widest-text (map car cs) 'ui)))
+        (ui-dropdown ui id x y (min w (+ 60 (text-widest (map car cs) 'ui)))
                      h cs current on-select))))
 
 ;; Option o's control at x y, w wide: a slider (from the least the text
@@ -504,7 +504,7 @@
         (fill-rect x (- (+ y h) lh) w lh 'panel)
         (draw-text (+ x 12) (+ (- (+ y h) lh)
                                (/ (- lh (font-line-height 'ui)) 2))
-                   (fit-text title (- w 34) 'ui) 'panel-text 'ui)
+                   (text-fit title (- w 34) 'ui) 'panel-text 'ui)
         (when changed?
           (fill-circle (- (+ x w) 15) (- (+ y h) (/ lh 2)) 3.5
                        'panel-accent))))
@@ -984,7 +984,7 @@
          [h (ui-control-height)]
          [segmented-w (lambda (choices)
                         (* (length choices)
-                           (+ 34 (widest-text (map car choices) 'ui))))]
+                           (+ 34 (text-widest (map car choices) 'ui))))]
          [scale-w (segmented-w settings-scale-choices)]
          [stack? (< (- w label-w) scale-w)]   ; both rows stack, or neither
          [y (settings-row ui x y w label-w "Scale" '(dim) h scale-w 0

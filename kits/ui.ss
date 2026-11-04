@@ -680,7 +680,7 @@
                                  flags)])
                     (and f (cdr f))))]
          [ink (cond [(given 'ink)]
-                    [(memq 'primary flags) (readable-on 'accent)]
+                    [(memq 'primary flags) (color-readable-on 'accent)]
                     [(and (memq 'danger flags) (memq 'hover flags)) 'red]
                     [(memq 'hover flags) 'text]
                     [(memq 'quiet flags) 'text-faint]
@@ -774,13 +774,13 @@
                        [(on? 'selected) 'accent]
                        [(on? 'danger) 'red]
                        [else 'window-border])]
-         [color (cond [(on? 'primary) (readable-on 'accent)]
+         [color (cond [(on? 'primary) (color-readable-on 'accent)]
                       [(on? 'danger) 'red]
                       [(or (on? 'hover) (on? 'selected)) 'text]
                       [else 'text-dim])]
          [lh (font-line-height 'ui)] [g (ui-glyph-size)]
          [gw (if glyph (* 3/2 g) 0)]   ; the glyph and its gap
-         [label (and label (fit-text label (- w 12 gw) 'ui))]
+         [label (and label (text-fit label (- w 12 gw) 'ui))]
          [cw (if label (+ gw (text-width label 'ui)) g)]
          [x0 (+ x (/ (- w cw) 2))])
     (when fill (fill-round-rect x y w h 6 (ink fill)))
@@ -876,7 +876,7 @@
                                                  'text-faint))))
     (when label
       (draw-text (+ x b 8) (+ y (/ (- h lh) 2))
-                 (fit-text label (- w b 8) 'ui)
+                 (text-fit label (- w b 8) 'ui)
                  (if checked? 'text-dim 'text) 'ui))
     (when (memq 'focused flags) (ui-draw-focus x by b b flags 4))))
 
@@ -900,7 +900,7 @@
     (stroke-circle kx (+ ty (/ th 2)) r (alpha #x000000 0.35) 1)
     (when label
       (draw-text (+ x tw 8) (+ y (/ (- h lh) 2))
-                 (fit-text label (- w tw 8) 'ui)
+                 (text-fit label (- w tw 8) 'ui)
                  (if (memq 'hover flags) 'text 'text-dim) 'ui))
     (when (memq 'focused flags) (ui-draw-focus x ty tw th flags (/ th 2)))))
 
@@ -930,7 +930,7 @@
 
 (define-part (ui-draw-tab x y w h flags label)
   (let ([selected? (memq 'selected flags)] [lh (font-line-height 'ui-bold)])
-    (draw-text-centered x y w h label
+    (text-draw-centered x y w h label
                         (if (or selected? (memq 'hover flags)) 'text 'text-dim)
                         'ui-bold)
     (when selected?
@@ -989,7 +989,7 @@
         (fold-left (lambda (y line) (draw-text (at line) y line color font)
                      (+ y lh))
                    y (ui-label-lines text w font))
-        (let ([s (fit-text text w font)])
+        (let ([s (text-fit text w font)])
           (draw-text (at s) (+ y (max 0 (/ (- h lh) 2))) s color font)
           (+ y (max h lh))))))
 
@@ -1027,7 +1027,7 @@
       (values (map (lambda (r)
                      (let-values ([(s e) (edit-row lay r)])
                        (if (and cut? (= r (- k 1)))
-                           (fit-text (string-append
+                           (text-fit (string-append
                                       (substring text s (edit-row-last lay r))
                                       "…")
                                      w font)
@@ -1322,7 +1322,7 @@
       (lambda ()
         (if (memq 'placeholder flags)
             (when placeholder
-              (draw-text tx ty (fit-text placeholder tw font) 'text-faint font))
+              (draw-text tx ty (text-fit placeholder tw font) 'text-faint font))
             ;; only the rows in view
             (let loop ([r (max 0 (- (exact (floor (/ dy lh))) 1))])
               (let ([ry (- (+ ty (* r lh)) dy)] [rx (- tx dx)])
@@ -1348,7 +1348,7 @@
                                                  (edit-layout-count lay))
                                               (not (edit-layout-done? lay)))
                                           (> (+ ry lh lh) (+ ty th 1)))
-                                     (fit-text
+                                     (text-fit
                                       (string-append
                                        (substring text s (edit-row-last lay r))
                                        "…")
@@ -1767,7 +1767,7 @@
 ;; whatever its column's cells do (flags right: numbers).
 (define-part (ui-draw-table-header x y w h flags label dir)
   (let* ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)]
-         [s (fit-text label (max 0 (- w 16 g)) 'ui-small)]
+         [s (text-fit label (max 0 (- w 16 g)) 'ui-small)]
          [color (if (or dir (memq 'hover flags)) 'text 'text-faint)]
          [end (draw-text (+ x 10) (+ y (/ (- h sh) 2)) s color 'ui-small)])
     (fill-rect x (- (+ y h) 1) w 1 'window-border)
@@ -2047,7 +2047,7 @@
          [hue (app-color (string->symbol label))])
     (fill-round-rect x y w h r (alpha hue 0.18))
     (draw-text (+ x 8) (+ y (/ (- h sh) 2))
-               (fit-text label (- w 16 (if removable? (+ g 4) 0)) 'ui-small)
+               (text-fit label (- w 16 (if removable? (+ g 4) 0)) 'ui-small)
                'text 'ui-small)
     (when removable?
       (let ([a (cdr (assq 'remove (ui-chip-areas x y w h)))])
@@ -2190,7 +2190,7 @@
                                          (string-downcase
                                           (substring name i j))))]))])
     (fill-circle (+ x (/ w 2)) (+ y (/ w 2)) (/ w 2) color)
-    (draw-text-centered x y w w (ui-initials name) (readable-on color)
+    (text-draw-centered x y w w (ui-initials name) (color-readable-on color)
                         'ui-small)))
 
 ;;; ------------------------------------------------------------------
@@ -2291,7 +2291,7 @@
 ;; other edges, on whole pixels, and the bars' width: whole pixels, at
 ;; most 6, at least 1, for n bars. ((plot x y w h) (bar w))
 (define-part (ui-bar-chart-areas x y w h n rules)
-  (let* ([px (exact (ceiling (+ x 12 (widest-text (map cdr rules)
+  (let* ([px (exact (ceiling (+ x 12 (text-widest (map cdr rules)
                                                    'ui-small))))]
          [py (exact (ceiling (+ y 4)))]
          [pw (max 0 (exact (floor (- (+ x w) 4 px))))]
@@ -2476,7 +2476,7 @@
 
 (define-part (ui-tooltip-size text)
   (let ([lines (ui-tooltip-lines text)])
-    (values (+ 16 (min 280 (widest-text lines 'ui-small)))
+    (values (+ 16 (min 280 (text-widest lines 'ui-small)))
             (+ 10 (* (length lines) (font-line-height 'ui-small))))))
 
 (define-part (ui-draw-tooltip x y w h flags text)
@@ -2520,7 +2520,7 @@
     (fill-round-rect x y w h 6 (if hot? 'bg-3 'bg-2))
     (stroke-round-rect x y w h 6
                        (if (or set? (memq 'open flags)) 'accent 'window-border))
-    (draw-text (+ x 10) (+ y (/ (- h lh) 2)) (fit-text label (- w 22 s) 'ui)
+    (draw-text (+ x 10) (+ y (/ (- h lh) 2)) (text-fit label (- w 22 s) 'ui)
                (cond [set? 'accent] [(memq 'placeholder flags) 'text-faint]
                      [hot? 'text] [else 'text-dim])
                'ui)
@@ -2532,7 +2532,7 @@
 ;; The text, 10 in, then 6, the chevron and 6.
 (define-part (ui-dropdown-size labels)
   (values (min (* 10 (font-line-height 'ui))
-               (+ 24 (ui-glyph-size) (widest-text labels 'ui)))
+               (+ 24 (ui-glyph-size) (text-widest labels 'ui)))
           (ui-control-height)))
 
 ;; A date (year month day) or #f. Opens a calendar under it; Delete and
@@ -2664,9 +2664,9 @@
          [t (cdr (assq 'title areas))] [wk (cdr (assq 'week areas))]
          [cell (/ (caddr wk) 7)])
     (ui-draw-panel x y w h '())
-    (apply draw-text-centered (append t (list title 'text 'ui-bold)))
+    (apply text-draw-centered (append t (list title 'text 'ui-bold)))
     (do ([i 0 (+ i 1)]) ((= i 7))
-      (draw-text-centered (+ (car wk) (* i cell)) (cadr wk) cell (cadddr wk)
+      (text-draw-centered (+ (car wk) (* i cell)) (cadr wk) cell (cadddr wk)
                           (string (string-ref "MTWTFSS" i)) 'text-faint
                           'ui-small))))
 
@@ -2681,8 +2681,8 @@
       (stroke-round-rect cx cy s s 6 (if (on? 'selected) 'text 'accent) 1.5))
     (when (on? 'cursor) (stroke-round-rect (- cx 1) (- cy 1) (+ s 2) (+ s 2) 7
                                            'text 1))
-    (draw-text-centered x y w h label
-                        (cond [(on? 'selected) (readable-on 'accent)]
+    (text-draw-centered x y w h label
+                        (cond [(on? 'selected) (color-readable-on 'accent)]
                               [(on? 'outside) 'text-faint]
                               [else 'text])
                         'ui)))
@@ -2782,7 +2782,7 @@
   (let* ([areas (ui-dialog-areas x y w h '())] [t (cdr (assq 'title areas))]
          [m (cdr (assq 'message areas))])
     (ui-draw-panel x y w h '(dialog))
-    (draw-text (car t) (cadr t) (fit-text title (caddr t) 'heading) 'text
+    (draw-text (car t) (cadr t) (text-fit title (caddr t) 'heading) 'text
                'heading)
     (fold-left (lambda (ly line) (draw-text (car m) ly line 'text-dim 'ui)
                  (+ ly (font-line-height 'ui)))
@@ -2815,6 +2815,6 @@
            (after 0
              (lambda ()
                (let ([new (parameterize ([new-window-position (cons x y)])
-                            (launch-app app))])
+                            (app-launch! app))])
                  (when (window? new) (resize-window! new cw ch))))))))))
  (windows))

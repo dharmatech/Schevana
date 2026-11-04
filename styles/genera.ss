@@ -52,7 +52,7 @@
                       (if (eq? (theme 'genera-label-align) 'top)
                           0
                           (floor (/ (- lh (font-line-height f)) 2))))
-                   (fit-text (window-title win) (- w (* 2 (+ b m))) f)
+                   (text-fit (window-title win) (- w (* 2 (+ b m))) f)
                    'text f)))))
 
 ;; A window not selected is grayed over, as Genera grays one it is not
@@ -85,11 +85,11 @@
          [ty (lambda (y) (+ y (floor (/ (- lh (font-line-height 'mono)) 2))))]
          [field (lambda (what s)
                   (apply (lambda (fx fy fw fh)
-                           (draw-text fx (ty fy) (fit-text s fw 'mono) 'text
+                           (draw-text fx (ty fy) (text-fit s fw 'mono) 'text
                                       'mono))
                          (cdr (assq what as))))])
     (fill-rect 0 y w lh 'text)
-    (draw-text cw (ty y) (fit-text (mouse-doc-text (mouse-doc)) (- w cw cw)
+    (draw-text cw (ty y) (text-fit (mouse-doc-text (mouse-doc)) (- w cw cw)
                                    'mono)
                'bg-1 'mono)
     (fill-rect 0 (+ y lh) w lh 'bg-1)
@@ -171,13 +171,13 @@
            (genera-hover x y w h)])
     (cond
       [box?
-       (let* ([text (fit-text label (- w 4 sp s) font)]
+       (let* ([text (text-fit label (- w 4 sp s) font)]
               [x0 (+ x (/ (- w (text-width text font) sp s) 2))]
               [end (draw-text x0 (genera-text-y y h font) text ink font)])
          (genera-choice-box (+ end sp) (+ y (/ (- h s) 2)) s
                             (on? 'pressed)))]
       [label
-       (draw-text-centered x y w h (fit-text label (- w 4) font) ink font)]
+       (text-draw-centered x y w h (text-fit label (- w 4) font) ink font)]
       [glyph
        (let ([g (ui-glyph-size)])
          (ui-draw-glyph (+ x (/ (- w g) 2)) (+ y (/ (- h g) 2)) g g
@@ -217,7 +217,7 @@
   (let* ([s (genera-choice-side)] [sp (font-char-width 'ui)]
          [end (if label
                   (draw-text x (genera-text-y y h 'ui)
-                             (fit-text label (- w sp s) 'ui) 'text 'ui)
+                             (text-fit label (- w sp s) 'ui) 'text 'ui)
                   x)]
          [bx (if label (+ end sp) x)])
     (genera-choice-box bx (+ y (/ (- h s) 2)) s (memq 'checked flags))
@@ -262,7 +262,7 @@
   (let ([font (theme 'genera-command-font)] [sel? (memq 'selected flags)])
     (cond [sel? (px-fill x y w h 'text)]
           [(memq 'hover flags) (genera-hover x y w h)])
-    (draw-text-centered x y w h label (if sel? 'window-bg 'text) font)
+    (text-draw-centered x y w h label (if sel? 'window-bg 'text) font)
     (when (memq 'focused flags) (ui-draw-focus x y w h flags 0))))
 
 (define (genera-tabs-size labels)
@@ -313,13 +313,13 @@
                   'ui
                   'ui-bold)])
     (when (or (memq 'hover flags) (memq 'open flags)) (genera-hover x y w h))
-    (draw-text (+ x 3) (genera-text-y y h font) (fit-text label (- w 6) font)
+    (draw-text (+ x 3) (genera-text-y y h font) (text-fit label (- w 6) font)
                (if (memq 'placeholder flags) 'text-faint 'text) font)
     (when (memq 'focused flags) (ui-draw-focus x y w h flags 0))))
 
 (define (genera-dropdown-size labels)
   (values (min (* 10 (font-line-height 'ui))
-               (+ 8 (widest-text labels 'ui-bold)))
+               (+ 8 (text-widest labels 'ui-bold)))
           (ui-control-height)))
 
 ;; A tag as a Zmail keyword, in braces (E&M p.2434); one that can go, a
@@ -328,7 +328,7 @@
   (let* ([removable? (memq 'removable flags)] [g (ui-small-glyph-size)]
          [room (- w (text-width "{}" 'ui) (if removable? (+ g 4) 0))])
     (draw-text x (genera-text-y y h 'ui)
-               (string-append "{" (fit-text label room 'ui) "}") 'text 'ui)
+               (string-append "{" (text-fit label room 'ui) "}") 'text 'ui)
     (when removable?
       (let ([a (cdr (assq 'remove (ui-chip-areas x y w h)))])
         (ui-draw-glyph (+ (car a) (/ (- (caddr a) g) 2))
@@ -398,7 +398,7 @@
   (let* ([f (theme 'genera-heading-font)]
          [mark (case dir [(up) "↑"] [(down) "↓"] [else #f])]
          [arrow (if mark (string-append " " mark) "")]
-         [label (fit-text label (max 0 (- w 14 (text-width arrow f))) f)]
+         [label (text-fit label (max 0 (- w 14 (text-width arrow f))) f)]
          [s (string-append label arrow)]
          [ty (genera-text-y y h f)]
          [tx (+ x 10)]
@@ -485,7 +485,7 @@
 
 (define (genera-tooltip-size text)
   (let ([lines (ui-tooltip-lines text)])
-    (values (+ 12 (min 280 (widest-text lines 'ui-small)))
+    (values (+ 12 (min 280 (text-widest lines 'ui-small)))
             (+ 8 (* (length lines) (font-line-height 'ui-small))))))
 
 ;; A dialog: Genera's accept-values window (UG Fig. 135), the CADR's
@@ -500,7 +500,7 @@
          [w (clamp (+ in (max (text-width title 'heading)
                               (text-width message 'ui)
                               (* (length labels)
-                                 (+ 24 (widest-text
+                                 (+ 24 (text-widest
                                         labels
                                         (theme 'genera-command-font))))))
                    (* 22 lh) (* 32 lh))])
@@ -526,7 +526,7 @@
          [t (cdr (assq 'title areas))] [m (cdr (assq 'message areas))]
          [b (theme 'genera-panel-border)])
     (ui-draw-panel x y w h '(dialog))
-    (draw-text (car t) (cadr t) (fit-text title (caddr t) 'heading) 'text
+    (draw-text (car t) (cadr t) (text-fit title (caddr t) 'heading) 'text
                'heading)
     (px-fill (+ x b) (+ (cadr t) (cadddr t) 6) (- w b b) 1 'text)
     (fold-left (lambda (ly line)
@@ -571,7 +571,7 @@
          [wk (cdr (assq 'week areas))] [cell (/ (caddr wk) 7)]
          [f (theme 'genera-heading-font)])
     (ui-draw-panel x y w h '())
-    (apply draw-text-centered
+    (apply text-draw-centered
            (append t (list title 'text (theme 'genera-standout-font))))
     (do ([i 0 (+ i 1)]) ((= i 7))
       (let* ([s (substring "MoTuWeThFrSaSu" (* 2 i) (+ 2 (* 2 i)))]
@@ -642,7 +642,7 @@
          [f (if (tasks-overdue? t today)
                 (font (font-family f) (font-size f) 'bold)
                 f)])
-    (draw-text x y (fit-text (tasks-due-label (task-due t) today) w f) 'text
+    (draw-text x y (text-fit (tasks-due-label (task-due t) today) w f) 'text
                f)))
 
 ;; Where a dragged card would land: a box over the gray.

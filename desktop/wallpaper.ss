@@ -97,8 +97,8 @@
   (when (eq? (wallpaper-shown (theme 'wallpaper)) 'gradient)
     (fill-glow (* w 0.80) (* h 0.22) (* 0.55 (max w h)) (alpha 'accent-2 0.10))
     (fill-glow (* w 0.12) (* h 0.90) (* 0.50 (max w h)) (alpha 'accent 0.08)))
-  (draw-text-centered 0 0 w (- h 60) "λ" (alpha 'watermark 0.05) 'huge)
-  (draw-text-centered 0 (+ (/ h 2) 150) w 30 "S C H E V A N A"
+  (text-draw-centered 0 0 w (- h 60) "λ" (alpha 'watermark 0.05) 'huge)
+  (text-draw-centered 0 (+ (/ h 2) 150) w 30 "S C H E V A N A"
                       (alpha 'watermark 0.10) 'ui-bold))
 
 (define (desktop-mouse kind what x y button clicks)

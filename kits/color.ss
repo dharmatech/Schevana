@@ -1,5 +1,6 @@
 ;;; kits/color.ss — color math: a color as hue, saturation and lightness,
-;;; and back (Settings' color picker).
+;;; and back (Settings' color picker); as one #xRRGGBB fixnum; the text
+;;; color that reads on it.
 
 ;; Hue in degrees, saturation and lightness in [0, 1].
 (define (color->hsl c)
@@ -26,3 +27,15 @@
                                 [(< hp 5) (values x 0 c)]
                                 [else (values c 0 x)])])
       (rgb (byte r) (byte g) (byte b)))))
+
+;; c as one #xRRGGBB fixnum, its alpha dropped.
+(define (color->fixnum c)
+  (let-values ([(r g b a) (color-rgba c)])
+    (rgb (exact (round (* r 255)))
+         (exact (round (* g 255)))
+         (exact (round (* b 255))))))
+
+;; Black or white, whichever reads better on color c.
+(define (color-readable-on c)
+  (let-values ([(r g b a) (color-rgba c)])
+    (if (> (+ (* 0.299 r) (* 0.587 g) (* 0.114 b)) 0.45) #x111111 #xf4f4f4)))

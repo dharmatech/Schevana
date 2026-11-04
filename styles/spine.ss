@@ -30,7 +30,7 @@
 (define (spine-colors win focused?)
   (let ([app (app-color (window-app win))])
     (if focused?
-        (values app (readable-on app))
+        (values app (color-readable-on app))
         (let ([band (mix 'title-bg app 0.24)])
           (values band (mix band 'title-text 0.5))))))
 
@@ -50,7 +50,7 @@
                          [down? (mix 'button-close #x000000 0.2)]
                          [else 'button-close])))
     (spine-glyph win kind cx cy
-                 (cond [(and hot? close?) (readable-on 'button-close)]
+                 (cond [(and hot? close?) (color-readable-on 'button-close)]
                        [hot? ink]
                        [else (alpha ink (if focused? 0.7 0.55))]))))
 
@@ -70,7 +70,7 @@
                             (+ 12 (min 100 (text-width (window-title win)
                                                        'title))))]
                 [(end) (if foot? tail (+ y h -4))]
-                [(title) (fit-text (window-title win) (- end head 12) 'title)]
+                [(title) (text-fit (window-title win) (- end head 12) 'title)]
                 [(a) (font-ascent 'title)])
     (window-shadow win x y w h r focused?)   ; shadow
     (fill-round-rect x y w h r (window-bg win))
@@ -86,7 +86,7 @@
                   (spine-regions win))
         (when foot?
           (spine-rules x tail s (alpha ink 0.35))
-          (draw-text-centered x (+ tail 6) s c "λ" ink 'title))
+          (text-draw-centered x (+ tail 6) s c "λ" ink 'title))
         (unless (string=? title "…")   ; a spine too short for any title
           (spine-rules x head s (alpha ink 0.35))
           ;; turned to read upward, its capitals (about 3/4 of the

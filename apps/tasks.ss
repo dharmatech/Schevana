@@ -1144,7 +1144,7 @@
     (values (max side (ui-scrollbar-inset 'left))
             (max side (ui-scrollbar-inset 'right)))))
 (define (tasks-label-width)
-  (max 72 (+ 16 (widest-text '("Status" "Priority" "Kind" "Assignee" "Due"
+  (max 72 (+ 16 (text-widest '("Status" "Priority" "Kind" "Assignee" "Due"
                                "Tags" "Blocked by" "Blocks")
                              'ui))))
 (define (tasks-list-min-width) (* 36 (font-line-height 'ui)))
@@ -1187,7 +1187,7 @@
 ;; s as a menu entry or a message quotes it: at most 20 line heights wide,
 ;; so a long name keeps a menu on the screen, and a long title leaves room
 ;; for what the message says after it.
-(define (tasks-quoted s) (fit-text s (* 20 (font-line-height 'ui)) 'ui))
+(define (tasks-quoted s) (text-fit s (* 20 (font-line-height 'ui)) 'ui))
 
 ;; The title's lines on a card w wide, wrapped as the details wrap it (a
 ;; long word breaks): at most 3, the last ending in "…" when there are
@@ -1258,16 +1258,16 @@
          [names (filter-map task-assignee *tasks*)]
          [all `((id "ID" ,(+ in2 (tasks-id-width)))
                 (status "Status"
-                        ,(+ in2 8 m (widest-text (map cdr tasks-statuses)
+                        ,(+ in2 8 m (text-widest (map cdr tasks-statuses)
                                                  'ui)))
                 (priority "Priority"
-                          ,(+ in2 8 m (widest-text (map cdr tasks-priorities)
+                          ,(+ in2 8 m (text-widest (map cdr tasks-priorities)
                                                    'ui)))
                 (kind "Kind"
-                      ,(+ in2 8 m (widest-text (map cdr tasks-kinds) 'ui)))
+                      ,(+ in2 8 m (text-widest (map cdr tasks-kinds) 'ui)))
                 (assignee "Assignee"
                           ,(min (* 9 lh)
-                                (+ in2 24 (widest-text (cons "Assignee" names)
+                                (+ in2 24 (text-widest (cons "Assignee" names)
                                                        'ui))))
                 (due "Due" ,(+ in2 (text-width "Nov 15, 2026" 'ui)))
                 (updated "Updated"
@@ -1311,7 +1311,7 @@
    "Blocked by "
    (string-join (map (lambda (b)
                        (format "~a ~a" (task-label b)
-                               (fit-text (tasks-shown-title b) 180 'ui-small)))
+                               (text-fit (tasks-shown-title b) 180 'ui-small)))
                      (remp (lambda (b) (eq? (task-status b) 'done))
                            (tasks-blockers-of t)))
                 ", ")))
@@ -1352,7 +1352,7 @@
     [(blocked)
      (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (* s 0.45) 'orange)
      (fill-rect (+ x (* s 0.25)) (+ y (* s 0.41)) (* s 0.5) (* s 0.18)
-                (readable-on 'orange))]
+                (color-readable-on 'orange))]
     [(status)
      (fill-circle (+ x (/ s 2)) (+ y (/ s 2)) (/ s 3)
                   (case value
@@ -1370,7 +1370,7 @@
 
 ;; t's due date at (x, y), cut to w: red when overdue, orange today.
 (define-part (tasks-draw-due x y w t today font)
-  (draw-text x y (fit-text (tasks-due-label (task-due t) today) w font)
+  (draw-text x y (text-fit (tasks-due-label (task-due t) today) w font)
              (cond [(tasks-overdue? t today) 'red]
                    [(and (equal? (task-due t) today)
                          (not (eq? (task-status t) 'done)))
@@ -1461,7 +1461,7 @@
       (draw-text (+ end 8) (+ y (/ (- hh sh) 2)) (number->string count)
                  'text-faint 'ui-small))
     (when (memq 'empty flags)
-      (draw-text-centered x (+ y hh) w (min 120 (- h hh)) "No tasks"
+      (text-draw-centered x (+ y hh) w (min 120 (- h hh)) "No tasks"
                           'text-faint 'ui))))
 
 ;; Where a dragged card would land.
@@ -1481,7 +1481,7 @@
   (let* ([lh (font-line-height 'ui)] [sh (font-line-height 'ui-small)]
          [m (tasks-mark-size)] [in (tasks-cell-inset)] [px (+ x in)]
          [ty (+ y (/ (- h lh) 2))] [my (+ y (/ (- h m) 2))] [cw (- w in in)]
-         [text (lambda (x s color) (draw-text x ty (fit-text s (- (+ px cw) x)
+         [text (lambda (x s color) (draw-text x ty (text-fit s (- (+ px cw) x)
                                                              'ui)
                                               color 'ui))])
     (case key
@@ -1493,7 +1493,7 @@
                              (+ px m 6))
                       px)]
               [end (tasks-draw-title
-                    tx ty (fit-text (tasks-shown-title t) (- (+ px cw) tx) 'ui)
+                    tx ty (text-fit (tasks-shown-title t) (- (+ px cw) tx) 'ui)
                     t)])
          ;; those that fit, (tag x w h), the last of them saying so
          (let* ([fit (let loop ([gs (list-head (task-tags t)
@@ -1556,7 +1556,7 @@
                           (list (string-append "↑ under " where)
                                 (string-append "↑ " where))))]
          [hint-x (if hint (- right (text-width hint 'ui-small)) right)]
-         [line (fit-text title (- (if hint (- hint-x 8) right) tx) 'ui)])
+         [line (text-fit title (- (if hint (- hint-x 8) right) tx) 'ui)])
     (draw-text px (+ y (/ (- h (font-line-height 'mono-small)) 2))
                (task-label t) 'text-faint 'mono-small)
     (when (memq 'blocked flags)
@@ -1576,12 +1576,12 @@
          [y1 (+ y (font-line-height 'heading) 6)]
          [y2 (+ y1 lh 18)])
     (draw-text x y "No task selected" 'text 'heading)
-    (draw-text x y1 (fit-text "Click a card, or use the arrow keys." w 'ui)
+    (draw-text x y1 (text-fit "Click a card, or use the arrow keys." w 'ui)
                'text-dim 'ui)
     (let ([y3 (fold-left
                (lambda (ky row)
                  (draw-text x (+ ky 1) (car row) 'accent 'mono-small)
-                 (draw-text (+ x kw) ky (fit-text (cdr row) (- w kw) 'ui)
+                 (draw-text (+ x kw) ky (text-fit (cdr row) (- w kw) 'ui)
                             'text-dim 'ui)
                  (+ ky lh 7))
                y2
@@ -1595,7 +1595,7 @@
                  ("Esc" . "Leave a field, then the task")))])
       (draw-text x (+ y3 14) "FROM A REPL" 'text-faint 'ui-small)
       (fold-left (lambda (ly line)
-                   (draw-text x ly (fit-text line w 'mono-small) 'text-dim
+                   (draw-text x ly (text-fit line w 'mono-small) 'text-dim
                               'mono-small)
                    (+ ly (font-line-height 'mono-small) 6))
                  (+ y3 14 (font-line-height 'ui-small) 10)

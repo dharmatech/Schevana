@@ -90,10 +90,10 @@ the sole completion, with its description, or no completions; the next
 key, text, click or wheel closes it. It offers what fits where the
 cursor is: names bound in that REPL's environment; theme keys, apps,
 palettes or styles after a quote in `(theme '…)`,
-`(set-theme! '…)`, `(launch-app '…)` and the like; file names inside a
+`(set-theme! '…)`, `(app-launch! '…)` and the like; file names inside a
 string; library names inside `(import (…))`, a part at a time. Names
 match as in the editor e: in segments, each starting where a part of the
-name starts, in any order (`dtc` puts `draw-text-centered` first,
+name starts, in any order (`tdc` puts `text-draw-centered` first,
 `winfind` `find-window`); fewer segments, in order, earlier, tighter and
 shorter come first, ignoring case. The chosen one shows its argument
 list and the `;;` comment above its definition (a library shows what it
@@ -176,7 +176,7 @@ Define a new app and it appears in the launcher immediately:
   (let ([n 0])
     (open-window "Counter" 'size '(240 . 100)
       'draw (lambda (win w h)
-              (draw-text-centered 0 0 w h (number->string n) 'accent 'big))
+              (text-draw-centered 0 0 w h (number->string n) 'accent 'big))
       'mouse-down (lambda (win x y button clicks) (set! n (+ n 1))))))
 ```
 
@@ -326,19 +326,22 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows, the
-             profiler
-kits/        color: hue, saturation and lightness; complete: a completion
-             list beside a caret (matching, keys, clicks, placement);
-             edit: text editing, pure, and a text's rows, computed only
-             as far as they are shown; fill: gradient and glow fills;
-             pixmap: pixel buffers drawn scaled up; px: pixel art on
-             whole device pixels (rectangles, bevels, small pictures,
-             text); theme: which layer gives a setting, what a palette
-             would show; ui: immediate-mode widgets (buttons, text fields
-             and areas, dropdowns, tabs, checkboxes, a table, a tree,
-             chips, a date picker, scroll views, tooltips, a dialog,
-             charts: stacked bars, lines, a sparkline, a legend),
-             keyboard focus
+             profiler, the saved look (written soon after each change)
+kits/        app: launching one by name, the color a name gets; color:
+             hue, saturation and lightness, a color as one fixnum, the
+             text color that reads on one; complete: a completion list
+             beside a caret (matching, keys, clicks, placement); edit:
+             text editing, pure, and a text's rows, computed only as far
+             as they are shown; fill: gradient and glow fills; pixmap:
+             pixel buffers drawn scaled up; px: pixel art on whole
+             device pixels (rectangles, bevels, small pictures, text);
+             text: the widest of some strings, a string centered, cut to
+             fit or wrapped; theme: which layer gives a setting, what a
+             palette would show; ui: immediate-mode widgets (buttons,
+             text fields and areas, dropdowns, tabs, checkboxes, a
+             table, a tree, chips, a date picker, scroll views,
+             tooltips, a dialog, charts: stacked bars, lines, a
+             sparkline, a legend), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
@@ -350,7 +353,7 @@ src/gfx      immediate-mode drawing API, colors, stipples and gradients,
              raw pixels, PNG files; the two screen buffers
 src/shadows  window, menu and toast shadows (marked ;; shadow{ … } elsewhere)
 src/theme    the whole look: settings in layers, rules, palettes, styles,
-             parts, the frame's parts; save/load
+             parts, the frame's parts; a hook that keeps each change
 src/ffi      the only file that knows about C (SDL3 + Cairo); only the
              core uses it
 ```

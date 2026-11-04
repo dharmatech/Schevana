@@ -94,7 +94,7 @@
     (call-with-clip x y w th   ; even "…" may not fit a narrow window
       (lambda ()
         (draw-text (+ x fold-margin) (- base (font-ascent 'title))
-                   (fit-text (window-title win)
+                   (text-fit (window-title win)
                              (- w fold-margin th g (* 2 (+ fold-mark g)))
                              'title)
                    ink 'title)))
@@ -118,7 +118,7 @@
       (let ([cx (+ (round (- (+ x w) (/ f (sqrt 2)))) 1/2)]
             [cy (+ (round (+ y (/ f (sqrt 2)))) 1/2)])
         (ui-draw-glyph (- cx 3.5) (- cy 3.5) 7 7
-                       (list (cons 'ink (readable-on 'button-close))
+                       (list (cons 'ink (color-readable-on 'button-close))
                              '(width . 1.5))
                        'close)))))
 

@@ -48,7 +48,7 @@
          [size (format "~a~a × ~a" (if (string=? title "") "" " · ")
                        (exact (round (window-w win)))
                        (exact (round (window-h win))))]
-         [cut (fit-text title room 'title)])
+         [cut (text-fit title room 'title)])
     (cond [(<= (+ (text-width title 'title) (text-width size 'ui)) room)
            (values title size)]
           [(or (string=? cut title) (> (string-length cut) 5))
@@ -88,7 +88,7 @@
                             [else 'button-close])))
          (draft-glyph win kind (+ cx (/ c 2) 1/2) (+ y (quotient b 2) 1/2)
                       (quotient c 6)
-                      (cond [red? (readable-on 'button-close)]
+                      (cond [red? (color-readable-on 'button-close)]
                             [hot? 'accent]
                             [else ink]))))
      (draft-regions win))))

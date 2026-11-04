@@ -92,7 +92,7 @@
 
 ;; str cut with "…" until its ink fits in w (ZacOS's truncation).
 (define (px-fit str w font)
-  (fit-text str w font
+  (text-fit str w font
             (lambda (s) (let-values ([(l t iw ih) (text-ink s font)]) iw))))
 
 ;; Swaps ink and paper in the rectangle, as the Lisp machines' XOR did:
