@@ -688,6 +688,7 @@
   'genera-heading-underline #t
   'label-section-font 'ui-bold-italic
   'label-section-upcase #f
+  'label-group-font 'ui-bold-italic
   'faint-text-font 'ui-italic-of
   'text-caret 'block
   'text-selection 'underline

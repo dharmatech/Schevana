@@ -2980,10 +2980,10 @@
 (let ([m (find-window 'monitor)]) (when m (close-window! m)))
 (steps 2)
 (check "profiling is on at boot, and collects with Monitor closed"
-       (let ([s (car (profile-steps))])
+       (let ([s (car (profile-ticks))])
          (steps 1)
          (and (profiling?) (not (find-window 'monitor))
-              (not (eqv? s (car (profile-steps)))))))
+              (not (eqv? s (car (profile-ticks)))))))
 (let* ([target (open-window "Target"   ; drawn at every step, slowly: a top row
                  'size '(200 . 100) 'pos '(1000 . 420)
                  'tick (lambda (win) (invalidate! win))
@@ -2997,7 +2997,7 @@
        [bars (lambda ()
                (filter (lambda (r)
                          (let ([id (ui-region-id r)])
-                           (and (pair? id) (eq? (car id) 'monitor-steps))))
+                           (and (pair? id) (eq? (car id) 'monitor-ticks))))
                        (ui-state-regions ui)))]
        [row (lambda (table x xs)   ; x's row in the table of xs, by id
               (list table 'row (list-index (lambda (y) (eq? y x)) xs)))]
@@ -3007,13 +3007,19 @@
                                 (windows))))])
   (move-window! m 20 40)
   (focus-window! m)
+  (steps 2)
+  (check "Monitor opens on its Overview: the windows and processes in \
+          tables, no bars"
+         (and (null? (bars)) (ui-find ui (window-row))
+              (ui-find ui (row 'monitor-procs p (procs)))))
+  (click-ui! m '(tab ticks))
   ;; the Consumers sum seconds done: one with Target in it done, and
   ;; Monitor's view moved on (twice a second) since
   (let ([until (+ (real-time) 1700)])
     (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
   (steps 1)
   (screenshot (string-append out-dir "/monitor.png"))
-  (check "Monitor draws its graphs: a bar a step, a row a consumer"
+  (check "Monitor draws its graphs: a bar a tick, a row a consumer"
          (and (not (window-error m)) (>= (length (bars)) 20)
               (ui-find ui (list 'monitor-kill (proc-id p)))
               (ui-find ui (list 'monitor-focus (window-id target)))))
@@ -3047,7 +3053,7 @@
   ;; the pointer resting on the newest bar: its tooltip, what it spent
   (let* ([newest (apply max (map (lambda (r) (cadr (ui-region-id r)))
                                  (bars)))]
-         [id (list 'monitor-steps newest)])
+         [id (list 'monitor-ticks newest)])
     (let-values ([(x y) (ui-point m id 0.5)])
       (inject! `(mouse-move ,x ,y))
       (let ([until (+ (real-time) 800)])
@@ -3055,11 +3061,11 @@
       (screenshot (string-append out-dir "/monitor-tip.png"))
       (let ([tip (let ([r (ui-find ui id)]) (and r (ui-region-tip r)))])
         (printf "  ~s\n" tip)
-        (check "hovering a bar of Monitor's Steps shows its tooltip: its \
-                step, whether it was a frame late, and its phases"
+        (check "hovering a bar of Monitor's Ticks shows its tooltip: its \
+                tick, whether it came late, and its phases"
                (and (string? tip)
-                    (string-contains-ci? tip "step ")
-                    (string-contains-ci? tip "(a frame is ")
+                    (string-contains-ci? tip "tick ")
+                    (string-contains-ci? tip "(a tick is ")
                     (< (+ (car (ui-state-rest ui)) ui-tip-ms) (now-ms)))))))
   (click-ui! m (list 'monitor-focus (window-id target)))
   (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
@@ -3070,11 +3076,12 @@
   (click-ui! m 'profiling)
   (let ([p (busy)])
     (steps 2)
-    (check "Monitor's Profiling turns it off, and Monitor lists the windows \
-            and processes in tables (a new one by its next view: twice a \
-            second)"
-           (and (not (profiling?)) (not *profile-span*) (null? (bars))
-                (ui-find ui (window-row))
+    (check "Monitor's Profiling turns it off: no bars"
+           (and (not (profiling?)) (not *profile-span*) (null? (bars))))
+    (click-ui! m '(tab overview))
+    (check "its Overview lists the windows and processes in tables still \
+            (a new one by its next view: twice a second)"
+           (and (ui-find ui (window-row))
                 (wait-for (lambda ()
                             (ui-find ui (row 'monitor-procs p (procs)))))))
     (click-ui! m (window-row))
@@ -3082,7 +3089,10 @@
     (focus-window! m)
     (steps 2)
     (click-ui! m (row 'monitor-procs p (procs)))
-    (check "and a process's row kills it" (not (memq p (procs)))))
+    (check "a process's row only selects it" (memq p (procs)))
+    (click-ui! m (list 'monitor-proc-kill (proc-id p)))
+    (check "and its Kill kills it" (not (memq p (procs)))))
+  (click-ui! m '(tab ticks))
   (click-ui! m 'profiling)
   (let ([until (+ (real-time) 700)])
     (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
@@ -3095,7 +3105,7 @@
 
 ;; Reloading the sources keeps the world's state, and the profiler's
 ;; history.
-(let ([n (length (windows))] [s (car (profile-steps))])
+(let ([n (length (windows))] [s (car (profile-ticks))])
   (reload!)
   (check "reload asks for the whole screen" (eq? *dirty* #t))
   (steps 2)
@@ -3104,8 +3114,8 @@
          (not (window-error (find-window 'clock))))
   (check "reload keeps the profiler's history, and it goes on"
          (and (profiling?) (pair? *profile-span*)
-              (memv s (profile-steps))
-              (not (eqv? s (car (profile-steps)))))))
+              (memv s (profile-ticks))
+              (not (eqv? s (car (profile-ticks)))))))
 (let ([s (settings)])
   (steps 2)
   (click-ui! s '(tab theme))

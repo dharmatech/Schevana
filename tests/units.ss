@@ -6062,25 +6062,25 @@
     (let loop ()
       (when (< (- (now-ns) t0) (* ms 1000000)) (loop)))))
 
-;; The steps recorded by thunk, the newest first.
-(define (profile-test-steps thunk)
-  (let ([before (profile-steps)])
+;; The ticks recorded by thunk, the newest first.
+(define (profile-test-ticks thunk)
+  (let ([before (profile-ticks)])
     (thunk)
-    (let loop ([l (profile-steps)] [acc '()])
+    (let loop ([l (profile-ticks)] [acc '()])
       (if (or (null? l) (memv (car l) before))
           (reverse acc)
           (loop (cdr l) (cons (car l) acc))))))
 
-;; A step's uses of x: a window's or a process's subject, or a key.
-(define (profile-test-uses step x)
+;; A tick's uses of x: a window's or a process's subject, or a key.
+(define (profile-test-uses tick x)
   (filter (lambda (u) (equal? (profile-use-subject u) (profile-subject-of x)))
-          (profile-step-uses step)))
+          (profile-tick-uses tick)))
 
 (define (profile-test-near? a b) (< (abs (- a b)) 1e-6))
 
-;; A step's phases' ms, all of them.
-(define (profile-test-phases step)
-  (map (lambda (p) (profile-step-phase-ms step p))
+;; A tick's phases' ms, all of them.
+(define (profile-test-phases tick)
+  (map (lambda (p) (profile-tick-phase-ms tick p))
        (vector->list profile-phase-names)))
 
 ;; Bytes allocated by thunk, (statistics) aside.
@@ -6090,26 +6090,26 @@
     (- (sstats-bytes (statistics)) b0)))
 
 (check "profiling is on at boot: the hooks are the profiler's, the collect \
-        handler its own, and steps are kept"
+        handler its own, and ticks are kept"
        (and (profiling?) (pair? *profile-span*)
             (eq? (car *profile-span*) profile-begin!)
             (eq? (collect-request-handler) profile-collect)
-            (pair? (profile-steps))))
+            (pair? (profile-ticks))))
 
-(check "off, the hook is #f: no step is kept, the clock is never read, \
-        Chez's own collect handler is back; on again, steps are kept"
-       (let ([reads 0] [clock now-ns] [before (profile-steps)])
+(check "off, the hook is #f: no tick is kept, the clock is never read, \
+        Chez's own collect handler is back; on again, ticks are kept"
+       (let ([reads 0] [clock now-ns] [before (profile-ticks)])
          (profiling! #f)
          (set! now-ns
            (lambda () (set! reads (+ reads 1)) (clock)))
          (steps 5)
          (set! now-ns clock)
          (let ([off (and (not (profiling?)) (not *profile-span*)
-                         (equal? before (profile-steps)) (= reads 0)
+                         (equal? before (profile-ticks)) (= reads 0)
                          (eq? (collect-request-handler)
                               *profile-plain-collect*))])
            (profiling! #t)
-           (and off (= 3 (length (profile-test-steps (lambda () (steps 3)))))
+           (and off (= 3 (length (profile-test-ticks (lambda () (steps 3)))))
                 *profile-span*))))
 
 (check "a span allocates nothing, on or off: neither its hook's site nor \
@@ -6130,7 +6130,7 @@
 
 (check "spans nest: each keeps its self time, the phases and the uses add \
         up to the step, idle is the step's own"
-       (let* ([s (car (profile-test-steps
+       (let* ([s (car (profile-test-ticks
                        (lambda ()
                          (with-profile-span 'step #f
                            (profile-test-busy 1)
@@ -6140,35 +6140,35 @@
                                (profile-test-busy 3)))))))]
               [use (lambda (k) (profile-use-ms
                                 (car (profile-test-uses s k))))])
-         (and (< 0.5 (profile-step-phase-ms s 'input-wait) 1.5)
+         (and (< 0.5 (profile-tick-phase-ms s 'input-wait) 1.5)
               (< 1.5 (use 'render) 2.5)
               (< 2.5 (use 'profile-test-inner) 3.5)
               (eq? (profile-use-phase (car (profile-test-uses
                                             s 'profile-test-inner)))
                    'render)
               (profile-test-near?
-               (+ (profile-step-phase-ms s 'render)
-                  (profile-step-phase-ms s 'gc))
-               (apply + (map profile-use-ms (profile-step-uses s))))
+               (+ (profile-tick-phase-ms s 'render)
+                  (profile-tick-phase-ms s 'gc))
+               (apply + (map profile-use-ms (profile-tick-uses s))))
               (profile-test-near? (apply + (profile-test-phases s))
-                                  (profile-step-ms s)))))
+                                  (profile-tick-ms s)))))
 
 (let ([life-win (life)])
   (move-window! life-win 600 300)
   (check "every step of the world adds up: its phases to its time, its uses \
           and its input-wait too, no part below 0"
-         (let ([ss (profile-test-steps (lambda () (steps 20)))])
+         (let ([ss (profile-test-ticks (lambda () (steps 20)))])
            (close-window! life-win)
            (and (= (length ss) 20)
                 (for-all
                  (lambda (s)
-                   (let ([uses (profile-step-uses s)])
+                   (let ([uses (profile-tick-uses s)])
                      (and (profile-test-near? (apply + (profile-test-phases s))
-                                              (profile-step-ms s))
+                                              (profile-tick-ms s))
                           (profile-test-near?
-                           (+ (profile-step-phase-ms s 'input-wait)
+                           (+ (profile-tick-phase-ms s 'input-wait)
                               (apply + (map profile-use-ms uses)))
-                           (profile-step-ms s))
+                           (profile-tick-ms s))
                           (for-all (lambda (u) (>= (profile-use-ms u) 0))
                                    uses)
                           (for-all (lambda (ms) (>= ms 0))
@@ -6182,7 +6182,7 @@
       [life-win (life)])
   (check "a window whose draw is made slow comes first among Monitor's \
           consumers, its draw the most of its parts"
-         (let* ([ss (profile-test-steps (lambda () (steps 10)))]
+         (let* ([ss (profile-test-ticks (lambda () (steps 10)))]
                 [ts (filter (lambda (t)
                               (monitor-subject? (profile-total-what t)))
                             (profile-totals ss #t))])
@@ -6194,13 +6194,13 @@
                 (equal? (profile-total-what
                          (car (profile-total-parts (car ts))))
                         '(draw . render))
-                (= (profile-total-steps (car ts)) 10)
+                (= (profile-total-ticks (car ts)) 10)
                 (>= (/ (profile-total-ms (car ts)) 10) 3)))))
 
 (let ([p (spawn "profile-test-busy" (lambda () (let loop () (loop))))])
   (check "a busy process shows its share: most of the processes' phase, in \
           one turn a step"
-         (let ([ss (profile-test-steps (lambda () (steps 10)))])
+         (let ([ss (profile-test-ticks (lambda () (steps 10)))])
            (kill! p)
            (for-all
             (lambda (s)
@@ -6208,16 +6208,16 @@
                 (and (= (length u) 1)
                      (= (profile-use-calls (car u)) 1)
                      (> (profile-use-ms (car u))
-                        (* 0.8 (profile-step-phase-ms s 'procs))))))
+                        (* 0.8 (profile-tick-phase-ms s 'procs))))))
             ss))))
 
 (check "a (collect) shows in the memory numbers, and so does the heap; a \
         collection requested on the main loop is a span of its own, gc"
-       (let* ([timer (profile-test-steps
+       (let* ([timer (profile-test-ticks
                       (lambda () (after 0 (lambda () (collect))) (steps 2)))]
               [g0 (collections)]
               [requested
-               (car (profile-test-steps
+               (car (profile-test-ticks
                      (lambda ()
                        (with-profile-span 'step #f
                          (with-profile-span 'event #f
@@ -6227,15 +6227,15 @@
                                            (if (> (length keep) 50)
                                                '()
                                                keep))))))))))])
-         (and (exists (lambda (s) (>= (profile-step-ref s 'gcs) 1)) timer)
-              (for-all (lambda (s) (> (profile-step-ref s 'heap) 0)) timer)
-              (>= (profile-step-ref requested 'gcs) 1)
-              (> (profile-step-ref requested 'allocated) 0)
+         (and (exists (lambda (s) (>= (profile-tick-ref s 'gcs) 1)) timer)
+              (for-all (lambda (s) (> (profile-tick-ref s 'heap) 0)) timer)
+              (>= (profile-tick-ref requested 'gcs) 1)
+              (> (profile-tick-ref requested 'allocated) 0)
               (pair? (profile-test-uses requested 'gc))
               (eq? (profile-use-phase (car (profile-test-uses requested 'gc)))
                    'event)
-              (> (profile-step-phase-ms requested 'gc) 0)
-              (> (profile-step-ref requested 'gc-ms) 0))))
+              (> (profile-tick-phase-ms requested 'gc) 0)
+              (> (profile-tick-ref requested 'gc-ms) 0))))
 
 (let* ([w (open-window "Inner"
             'size '(200 . 100)
@@ -6249,7 +6249,7 @@
                      (loop))))])
   (check "a span inside an engine (a handler, a process) is not timed: its \
           time is its handler's or its process's"
-         (let ([ss (profile-test-steps (lambda () (steps 5)))])
+         (let ([ss (profile-test-ticks (lambda () (steps 5)))])
            (close-window! w)
            (kill! p)
            (for-all
@@ -6267,12 +6267,12 @@
         and so is one deeper than the stack: no step is lost, nothing \
         overflows"
        (let* ([thread *profile-thread*]
-              [others (profile-test-steps
+              [others (profile-test-ticks
                        (lambda ()
                          (set! *profile-thread* (+ thread 1))
                          (steps 3)
                          (set! *profile-thread* thread)))]
-              [deep (profile-test-steps
+              [deep (profile-test-ticks
                      (lambda ()
                        (with-profile-span 'step #f
                          (let nest ([n 100])
@@ -6282,13 +6282,13 @@
                                  (nest (- n 1))))))))])
          (and (null? others) (= (length deep) 1)
               (profile-test-near? (apply + (profile-test-phases (car deep)))
-                                  (profile-step-ms (car deep)))
-              (>= (profile-step-phase-ms (car deep) 'render) 1))))
+                                  (profile-tick-ms (car deep)))
+              (>= (profile-tick-phase-ms (car deep) 'render) 1))))
 
 (check "a raise out of a span, caught in its parent, leaves it open: the \
         ends after it close a span each, the innermost, the step's end the \
         rest, and the step's phases still add up to it"
-       (let ([s (car (profile-test-steps
+       (let ([s (car (profile-test-ticks
                       (lambda ()
                         (with-profile-span 'step #f
                           (with-profile-span 'render #f
@@ -6301,7 +6301,7 @@
              [ms (lambda (s k)
                    (apply + (map profile-use-ms (profile-test-uses s k))))])
          (and (profile-test-near? (apply + (profile-test-phases s))
-                                  (profile-step-ms s))
+                                  (profile-tick-ms s))
               (< 1.5 (ms s 'profile-test-raiser) 2.5)
               (< 2.5 (ms s 'profile-test-after) 3.5)
               (< (ms s 'render) 0.5)
@@ -6311,13 +6311,13 @@
 
 (check "a collector that raises turns itself off, says so once, and the \
         world goes on drawing"
-       (let ([done profile-step-done!] [errors 0] [report report-error!])
+       (let ([done profile-tick-done!] [errors 0] [report report-error!])
          (set! report-error! (lambda (who c)
                                (set! errors (+ errors 1))
                                (report who c)))
-         (set! profile-step-done! (lambda (now ns) (car '())))
+         (set! profile-tick-done! (lambda (now ns) (car '())))
          (steps 3)
-         (set! profile-step-done! done)
+         (set! profile-tick-done! done)
          (set! report-error! report)
          (let ([off (not (profiling?))] [drawn *frames-drawn*])
            (invalidate!)
@@ -6345,8 +6345,8 @@
                 (exists (lambda (s)
                           (member (car subjects)
                                   (map profile-use-subject
-                                       (profile-step-uses s))))
-                        (profile-steps))
+                                       (profile-tick-uses s))))
+                        (profile-ticks))
                 (equal? (map car subjects) '(window process))
                 (equal? (map cdr subjects) ids)
                 (equal? (map profile-subject-name subjects)
@@ -6372,7 +6372,7 @@
                        "Single")))
   (for-each close-window! (list b c)))
 
-(check "the history keeps the steps of the last seconds (at most 100 a \
+(check "the history keeps the ticks of the last seconds (at most 100 a \
         second of them) and the seconds of the last minutes asked for \
         (profile-history!), by the clock"
        (let ([clock now-ns] [fake (expt 10 15)])
@@ -6380,13 +6380,13 @@
            (do ([i 0 (+ i 1)]) ((= i (* 10 seconds)))
              (set! fake (+ fake (expt 10 8)))
              (schevana-step! 0)))
-         (define (within? seconds)   ; the steps kept span that, a second more
-           (let ([ss (profile-steps)])
+         (define (within? seconds)   ; the ticks kept span that, a second more
+           (let ([ss (profile-ticks)])
              (and (pair? ss)
-                  (> (profile-step-end (car (last-pair ss)))
-                     (- (profile-step-end (car ss)) (* 1000 (+ seconds 1))))
-                  (< (profile-step-end (car (last-pair ss)))
-                     (- (profile-step-end (car ss)) (* 1000 (- seconds 1)))))))
+                  (> (profile-tick-end (car (last-pair ss)))
+                     (- (profile-tick-end (car ss)) (* 1000 (+ seconds 1))))
+                  (< (profile-tick-end (car (last-pair ss)))
+                     (- (profile-tick-end (car ss)) (* 1000 (- seconds 1)))))))
          (set! now-ns (lambda () fake))
          (profile-clear!)
          (profile-history! 30 1)
@@ -6402,7 +6402,7 @@
                ;; of it
                (profile-history! 2 10)
                (steps 2000)
-               (let ([most (= (length (profile-steps)) 200)])
+               (let ([most (= (length (profile-ticks)) 200)])
                  (profile-history! 30 10)
                  (profile-clear!)
                  (and long now later most)))))))
@@ -6410,6 +6410,14 @@
 (check "Monitor's Consumers fit their columns to the tree's room: the last \
         (the minute's lines) ends clear of a scroll bar always shown"
        (let* ([m (monitor)] [ui (window-ref m 'ui)])
+         (steps 3)
+         (let-values ([(cx cy cw ch) (content-rect m)])   ; its Ticks
+           (let* ([r (ui-find ui '(tab ticks))]
+                  [x (exact (round (+ cx (ui-region-x r)
+                                      (/ (ui-region-w r) 2))))]
+                  [y (exact (round (+ cy (ui-region-y r)
+                                      (/ (ui-region-h r) 2))))])
+             (inject! `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left))))
          (steps 3)
          (let-values ([(cx cy cw ch) (content-rect m)])
            (let* ([r (ui-find ui '(consumers header spark))]
@@ -6571,6 +6579,25 @@
          (and (<= 60 (length ticks) 61) (<= frames (length ticks))
               (> steps 200))))
 
+(check "the profiler keeps a tick, not a step: the steps between ticks \
+        (a key every 2 ms) sum into the tick they lead up to, each about \
+        a period long"
+       (let* ([r #f]
+              [made (profile-test-ticks
+                     (lambda () (set! r (pacer-test-run #f 5 1000 'flood))))]
+              [ticks (length (cdr (assq 'ticks r)))]
+              [steps (cdr (assq 'steps r))]
+              [period (cdr (assq 'period r))]
+              ;; the run's, newest first: not the step after it, nor the
+              ;; ticks of its 100 ms of settling
+              [run (list-head (cdr made) (- ticks 1))]
+              [lengths (map (lambda (seq) (profile-tick-ns seq 'ns)) run)])
+         (printf "  ~a ticks, ~a steps, ~a kept, ~a..~a ns\n" ticks steps
+                 (length made) (apply min lengths) (apply max lengths))
+         (and (> steps (* 3 ticks)) (<= (length made) (+ ticks 10))
+              (for-all (lambda (ns) (< (abs (- ns period)) 3000000))
+                       lengths))))
+
 (check "past a period of work, the pacer slows down: ticks come as soon \
         as the last is done, none skipped, none closer than a period"
        (let* ([r (pacer-test-run #t 20 1000)]
@@ -6591,22 +6618,21 @@
              (pacer-rate! rate)
              (and (= p30 33333333) (= screen (host-frame-ns)))))))
 
-;;; The Steps: a bar a step, its waits too, against a frame.
+;;; The Ticks: a bar a tick, its waits too, against the pacer's period.
 
 
-(check "a step's waits are phases of their own, the screen's too, so that \
-        its phases add up to it; profile-step-phases says where its time \
-        went, the most first, and profile-slow-steps the steps a frame \
-        late: past one and a half frames, its wait for input aside; \
-        Monitor stacks its bars' work the same way, its waits above, and \
-        its tooltip says the same"
+(check "a tick's waits are phases of their own, the screen's too, so that \
+        its phases add up to it; profile-tick-phases says where its time \
+        went, the most first, and profile-slow-ticks the ticks that came \
+        late: past one and a half periods; Monitor stacks its bars' work \
+        the same way, its waits above, and its tooltip says the same"
        (let* ([real now-ns] [fake (* 1000 1000000000)]
               [clock (lambda (ns) (set! fake (+ fake ns)))]
               [win (open-window "Grower" 'size '(120 . 80) 'pos '(600 . 400))])
-         ;; a step by hand, as the main loop's (a window's handlers run in
-         ;; an engine, where spans are untimed): 10 ms waiting for input
-         ;; (the step's own), 1 of ticks, 3 of the window's drawing, and 2
-         ;; waiting for the screen in present
+         ;; a step by hand, a tick of its own, as the main loop's (a
+         ;; window's handlers run in an engine, where spans are untimed):
+         ;; 10 ms waiting for input (the step's own), 1 of ticks, 3 of the
+         ;; window's drawing, and 2 waiting for the screen in present
          (set! now-ns (lambda () fake))
          (profile-clear!)
          (with-profile-span 'step #f
@@ -6617,18 +6643,18 @@
            (with-profile-span 'present #f
              (with-profile-span 'vsync-wait #f (clock 2000000))))
          (set! now-ns real)
-         (let* ([seq (profile-newest-step)]
-                [phases (profile-step-phases seq)]
+         (let* ([seq (profile-newest-tick)]
+                [phases (profile-tick-phases seq)]
                 [index (lambda (p) (list-index (lambda (q) (eq? (car q) p))
                                                monitor-phases))]
                 [order (monitor-bars-order (list seq))]
-                ;; the step ended at 12:00:03.400 of the day
+                ;; the tick ended at 12:00:03.400 of the day
                 [zero (- (+ (* 1000 (+ (* 12 3600) 3)) 400)
-                         (quotient (profile-step-ns seq 'end) 1000000))]
-                [tip (monitor-step-tip seq zero 16666666)]
-                [late (monitor-step-tip seq zero 3000000)]
-                [lines (list (format "step ~a, ended 12:00:03.400" seq)
-                             "16 ms, in time (a frame is 16.7 ms)"
+                         (quotient (profile-tick-ns seq 'end) 1000000))]
+                [tip (monitor-tick-tip seq zero 16666666)]
+                [late (monitor-tick-tip seq zero 3000000)]
+                [lines (list (format "tick ~a, ended 12:00:03.400" seq)
+                             "16 ms, in time (a tick is 16.7 ms)"
                              "waiting for input 10 ms" "render 3 ms"
                              "waiting for the screen 2 ms" "ticks 1 ms"
                              "Grower 3.00 ms")])
@@ -6636,22 +6662,22 @@
            (printf "  ~s\n  ~s\n" phases tip)
            (and (equal? phases '((input-wait . 10000000) (render . 3000000)
                                  (vsync-wait . 2000000) (tick . 1000000)))
-                (= (profile-step-ns seq 'ns) (apply + (map cdr phases)))
+                (= (profile-tick-ns seq 'ns) (apply + (map cdr phases)))
                 ;; every phase of the profiler's a series of the bars'
                 (= (length monitor-phases) profile-phase-count)
                 (for-all (lambda (p) (assq p monitor-phases))
                          (vector->list profile-phase-names))
-                ;; 6 ms without the input wait: late past frames of 4 ms
-                (member seq (profile-slow-steps 3999999))
-                (not (member seq (profile-slow-steps 4000000)))
-                (not (member seq (profile-slow-steps 5000000)))
-                (fixnum? (host-frame-ns))
+                ;; 16 ms, its wait for input too: late past periods of
+                ;; 32/3 ms
+                (member seq (profile-slow-ticks 10666666))
+                (not (member seq (profile-slow-ticks 10666667)))
+                (not (member seq (profile-slow-ticks 16666666)))
                 ;; the work by what it spent, the waits above it
                 (equal? order (map index '(render tick input-wait vsync-wait)))
                 ;; the kit's tooltip shows it a line each, as it is
                 (equal? (ui-tooltip-lines tip) lines)
                 (equal? (cadr (ui-tooltip-lines late))
-                        "16 ms, a frame late (a frame is 3 ms)")
+                        "16 ms, late (a tick is 3 ms)")
                 (= 9 (length (ui-tooltip-lines
                               "1\n2\n3\n4\n5\n6\n7\n8\n9")))))))
 

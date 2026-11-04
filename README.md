@@ -155,7 +155,7 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 (spawn "busy" (lambda () (let loop () (loop))))
 (monitor)                                  ; where the time and memory go
 (profiling! #f)                            ; the profiler off (on at boot)
-(profile-history! 60 30)                   ; a minute of steps, 30 of seconds
+(profile-history! 60 30)                   ; a minute of ticks, 30 of seconds
 (profile-totals (profile-seconds))         ; what each window, ... spent
 (tasks)                                    ; a task manager; tasks are data
 (add-task! "Fix the menu" 'priority 'high 'tags '("ui"))   ; shows at once
@@ -182,36 +182,49 @@ Define a new app and it appears in the launcher immediately:
 
 ## Monitor
 
-`(monitor)`, or Monitor in the launcher, shows where the world's time
+`(monitor)`, or Monitor in the launcher, shows the world live, in two
+tabs. Its first, Overview, redrawn twice a second, has the World's
+facts in a grid (uptime, the screen, the ticks, the last frame, the
+heap, the style, apps, timers waiting, whether profiling is on, the
+last error), then the windows in a table (a click focuses one, the
+focused one selected) and the processes in another, each with its
+state and a Kill button. Its second, Ticks, shows where the world's time
 and memory go, as the profiler (`desktop/profile.ss`) measures them.
+Each part of a tab is under a group's heading (the kit's `group`
+label, at the rows' size).
 The profiler runs whether Monitor is open or not, from boot, until
 Monitor's Profiling or `(profiling! #f)` turns it off: a step of 30 Life
 windows costs about 1% more with it (`tests/bench.ss`), and it
-allocates nothing. Its unit is a step, one `schevana-step!` (the wait
-for host events, then events, timers, a tick, processes, the frame and
-its upload), and it is level 1: Schevana's own accounting, with nothing
-in an app's code instrumented.
+allocates nothing. Its unit is a tick of the pacer's: the steps of the
+main loop (`schevana-step!`: the wait for host events, then events,
+timers, a tick when due, processes, the frame and its upload) from the
+one after a tick's to the next tick's, so that the steps that only
+handle input between ticks sum into the tick they lead up to; a test's
+steps, not paced, tick every one. It is level 1: Schevana's own
+accounting, with nothing in an app's code instrumented.
 
-- **Steps:** a bar a step, all of its time, stacked by phase: events,
-  timers, processes, ticks, render, present, the collector, and the two
-  waits, for input (the step's wait for host events) and for the screen
-  (presenting a frame with vsync on), in muted colors. A wait delays
-  the next frame as much as work does, so both count. The work is at
-  the bottom, the phase that spent the most over the graph lowest and
-  first in the legend, and the waits above it, so that a bar past the
-  top loses a wait, never work. A line marks a frame of the screen's
-  (16.7 ms at 60 Hz, from its refresh rate) and the top is two. A step
-  a frame late is flagged at the top: its time, its wait for input
-  aside, past one and a half frames (`profile-step-late?`). Not just
-  past one, for a step that draws ends about at a refresh, a little
-  before or after it, and one that missed a refresh waited for the
-  next; nor the wait for input, which input ends at once. All of it is
-  whole ns and pixels, no float. Hover a bar for where its time went:
-  its step, how long it took and whether it was a frame late, its
-  phases and its three largest consumers; click it to pause there.
+The Ticks tab has three parts:
+
+- **Ticks:** a bar a tick, all of its time since the last, stacked by
+  phase: events, timers, processes, ticks, render, present, the
+  collector, and the two waits, for input (the steps' wait for host
+  events) and for the screen (presenting a frame with vsync on), in
+  muted colors. A wait delays the next tick as much as work does, so
+  both count. The work is at the bottom, the phase that spent the most
+  over the graph lowest and first in the legend, and the waits above
+  it, so that a bar past the top loses a wait, never work. A line marks
+  the pacer's period (16.7 ms at 60 Hz, a refresh of the screen's by
+  default) and the top is two. A tick that came late is flagged at the
+  top: past one and a half periods after the last
+  (`profile-tick-late?`). Not just past one, for a tick ends about at a
+  refresh, a little before or after it, and one that missed a refresh
+  waited for the next. All of it is whole ns and pixels, no float.
+  Hover a bar for where its time went: its tick, how long it took and
+  whether it came late, its phases and its three largest consumers;
+  click it to pause there.
 - **Consumers:** every window, surface (the desktop, the bars, the menu,
   the toasts) and process, and the collector, by milliseconds a second
-  over the last 5 seconds, with the average and the longest a step, the
+  over the last 5 seconds, with the average and the longest a tick, the
   calls a second and a line of the last minute; hover a heading for
   what its column means. A window's row opens to
   its handlers (`draw`, `tick`, `key`, ...) and its frame, the style's
@@ -223,30 +236,30 @@ in an app's code instrumented.
 - **Memory:** the heap, the bytes allocated a second and the collector's
   time a second, over the seconds kept.
 
-At the top, Profiling turns the profiler on or off for the whole world
+Above them, Profiling turns the profiler on or off for the whole world
 (`(profiling! #f)`), Pause holds Monitor's view still (the profiler goes
 on), Clear forgets the history, and two menus say how long the history
-is: every step of the last 30 seconds (at most 100 a second of them)
+is: every tick of the last 30 seconds (at most 100 a second of them)
 and each second's sums for the last 10 minutes, by default
-(`(profile-history! 30 10)`). With profiling off, Monitor lists the
-windows (a click focuses one) and the processes (a click kills one),
-the heap and the last frame's time.
+(`(profile-history! 30 10)`). With profiling off, the tab says how to
+turn it on.
 
-The history is data, read in place: `(profile-steps)` and
-`(profile-seconds)` give the steps kept and the seconds done as seqs,
-the newest first; `(profile-step-ms seq)`, `(profile-step-phase-ms seq
-'render)`, `(profile-step-phases seq)` (where its time went, waits too,
-the most first), `(profile-step-ref seq 'heap)` and
-`(profile-step-uses seq)`
+The history is data, read in place: `(profile-ticks)` and
+`(profile-seconds)` give the ticks kept and the seconds done as seqs,
+the newest first; `(profile-tick-ms seq)`, `(profile-tick-phase-ms seq
+'render)`, `(profile-tick-phases seq)` (where its time went, waits too,
+the most first), `(profile-tick-ref seq 'heap)` and
+`(profile-tick-uses seq)`
 (what each key spent: a window's handler, a surface, a process) read a
-step, and `profile-second-ms`, ... a second; `(profile-totals seconds)`
+tick, and `profile-second-ms`, ... a second; `(profile-totals seconds)`
 sums seconds by subject, the most first, each with its parts, and
-`(profile-totals steps #t)` steps. The same as Monitor's Steps, for a
-reader without eyes (a headless agent, a test): `(profile-slow-steps)`
-gives the steps a frame late, by a frame of the screen's
-(`(host-frame-ns)`), so `(map profile-step-phases (profile-slow-steps))` says where each late
-frame's time went, and `(profile-totals (profile-slow-steps) #t)` who
-spent it. The steps go into a ring of 2 minutes, each second's sums into one of an hour and the last minute's
+`(profile-totals ticks #t)` ticks. The same as Monitor's Ticks, for a
+reader without eyes (a headless agent, a test): `(profile-slow-ticks)`
+gives the ticks that came late, by the pacer's period
+(`(pacer-period)`), so `(map profile-tick-phases (profile-slow-ticks))`
+says where each late tick's time went, and
+`(profile-totals (profile-slow-ticks) #t)` who spent it. The ticks go
+into a ring of 2 minutes, each second's sums into one of an hour and the last minute's
 uses into one of their own, all made once; a window or a process is
 kept by its id, with its title or name when first seen, so the history
 keeps no closed window or ended process alive. Monitor
@@ -644,7 +657,7 @@ Decisions worth keeping in mind for the real design:
   them as one full-width rectangle. The other rows need no look: after
   every frame the second buffer equals the screen, and a new canvas asks
   for the whole screen. A frame that changes nothing uploads and
-  presents nothing. Monitor shows where each step's time goes (below),
+  presents nothing. Monitor shows where each tick's time goes (below),
   or, with profiling off, the last frame's time (drawing it and
   comparing its rows) and the rows it uploaded. A process may be
   switched out at any call while frames go on, so typed in a REPL (or
@@ -668,8 +681,8 @@ Decisions worth keeping in mind for the real design:
   times each on `now-ns`, the monotonic clock in fixnum ns
   (`SDL_GetTicksNS`), on a stack of fixed depth, giving each its self
   time (its time less the spans inside it), so that the parts add up
-  to the step; the step's end adds them up into tables cleared, not
-  made again, and rings made once. A span allocates nothing; a step's
+  to the tick; a tick's last step's end adds them up into tables
+  cleared, not made again, and rings made once. A span allocates nothing; a step's
   books allocate their one guard, under which an error turns the
   profiler off, reported once, and the world goes on. A raise out of a
   span leaves it open until the step's end closes it with the rest. A
@@ -752,8 +765,8 @@ Tasks measures, the same with a title of 100,000 characters as with one
 of 10,000. The kit's charts: the bar chart's areas, the bar under the
 pointer and a press on one reported by index, and each chart's look its
 part's, under a style that replaces it. And the profiler: on at boot,
-off (no step kept, no clock read) and on again, nothing allocated by
-20,000 spans, spans nesting and every step's parts adding up to it, a
+off (no tick kept, no clock read) and on again, nothing allocated by
+20,000 spans, spans nesting and every tick's parts adding up to it, a
 slow window first among the consumers, a busy process's share, a
 collection in the memory numbers and as a span of its own, a span
 inside an engine, on another thread or past the stack's depth untimed,

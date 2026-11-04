@@ -19,6 +19,9 @@
 (defvar *pacer-ticks* 0)
 (defvar *pacer-tick-ms* 0)
 (defvar *pacer-render* 0)
+;; this step is paced and came between ticks: the profiler sums it into
+;; the next tick
+(defvar *pacer-between?* #f)
 
 ;; (after 1000 (lambda () (notify "a second later")))
 (define (after ms thunk)
@@ -110,6 +113,7 @@
                   (let ([now (and (pair? paced) (now-ns))])
                     (and (or (not now) (>= now (pacer-start)))
                          (begin (pacer-tick! now) #t)))))])
+      (set! *pacer-between?* (and (pair? paced) (not ticked?)))
       (safely 'procs
               (lambda () (run-procs! (if (null? paced) 10 (pacer-procs-ms)))))
       ;; frames are paced by the screen's wait, or without it by the ticks

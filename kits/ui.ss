@@ -948,13 +948,17 @@
 ;;; font, a color or a fill
 
 ;; A section's label: its font, and whether it is in capitals (Genera
-;; heads a pane in bold italic instead).
+;; heads a pane in bold italic instead). A group's heading, over a block
+;; of rows (a table, a grid): at the rows' size, so that it stands over
+;; them, not under them.
 (theme-default! 'label-section-font 'ui-small)
 (theme-default! 'label-section-upcase #t)
+(theme-default! 'label-group-font 'ui-bold)
 
 (define (ui-label-font flags)
   (cond [(memq 'heading flags) 'heading]
         [(memq 'section flags) (theme 'label-section-font)]
+        [(memq 'group flags) (theme 'label-group-font)]
         [(memq 'hint flags) 'ui-small]
         [(memq 'mono flags) 'mono-small]
         [else 'ui]))
@@ -964,7 +968,7 @@
       (string-upcase text)
       text))
 
-;; flags: a role (heading body dim hint section mono), wrap, center
+;; flags: a role (heading body dim hint section group mono), wrap, center
 ;; or right. Without wrap the text is cut to w and centered in h; with it,
 ;; a paragraph from y. Returns the y below it.
 (define-part (ui-draw-label x y w h flags text)

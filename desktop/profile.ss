@@ -1,27 +1,30 @@
-;;; profile.ss — the profiler: where the world's time and memory go, step
-;;; by step, whether or not Monitor shows it. Level 1: Schevana's own
+;;; profile.ss — the profiler: where the world's time and memory go, tick
+;;; by tick, whether or not Monitor shows it. Level 1: Schevana's own
 ;;; accounting, through the core's hook (with-profile-span, src/proc.ss);
 ;;; nothing in an app's code is instrumented.
 ;;;
-;;; The unit is a step (schevana-step!). In it each span (a phase of the
-;;; main loop, a window's handler or drawing, a surface's draw or tick, a
-;;; process's turn, the collector) keeps its self time: its time less
-;;; the spans inside it, so that the parts add up to the step; two are
-;;; waits, input-wait the step's own (mostly the wait for host events)
-;;; and vsync-wait the screen's (presenting a frame, with vsync on), for
-;;; a wait delays the next frame as much as work. Each step's sums go
-;;; into a ring of the last 30 seconds (at most 100 steps a second, and
+;;; The unit is a tick: the main loop's steps (schevana-step!) from the
+;;; one after a tick's to the next tick's, the steps between ticks (input
+;;; handled as it comes) summed into the tick they lead up to; a step not
+;;; paced (a test's) ticks, a tick of its own. In it each span (a phase of
+;;; the main loop, a window's handler or drawing, a surface's draw or
+;;; tick, a process's turn, the collector) keeps its self time: its time
+;;; less the spans inside it, so that the parts add up to the tick; two
+;;; are waits, input-wait the steps' own (mostly the wait for host
+;;; events) and vsync-wait the screen's (presenting a frame, with vsync
+;;; on), for a wait delays the next tick as much as work. Each tick's sums
+;;; go into a ring of the last 30 seconds (at most 100 ticks a second, and
 ;;; as many uses as its ring holds), and into per-second sums kept for 10
 ;;; minutes, with what each key spent for the last minute.
 ;;;
 ;;;   (profiling! #f)            off: no records, no clock reads; #t: on
-;;;   (profile-history! 30 10)   seconds of steps, minutes of seconds
+;;;   (profile-history! 30 10)   seconds of ticks, minutes of seconds
 ;;;   (profile-totals (profile-seconds))   by subject, the most first
-;;;   (map profile-step-phases (profile-slow-steps))   the steps a frame
+;;;   (map profile-tick-phases (profile-slow-ticks))   the ticks that came
 ;;;                              late, and where their time went
 ;;;
 ;;; In the hot path it allocates nothing: the clock is fixnum ns (now-ns),
-;;; the spans open a stack of fixed depth, a step's and a second's sums go
+;;; the spans open a stack of fixed depth, a tick's and a second's sums go
 ;;; into tables cleared, not made again, and the history into rings made
 ;;; once and used again in place. Keys are ids and symbols: a window or a
 ;;; process is kept as its id (and its title or name when first seen), so
@@ -31,23 +34,23 @@
 ;;; a reload keeps the history and the flag.
 
 (defvar *profile-on?* #t)
-;; how long the history is: seconds of steps, minutes of seconds
-(defvar *profile-step-seconds* 30)
+;; how long the history is: seconds of ticks, minutes of seconds
+(defvar *profile-tick-seconds* 30)
 (defvar *profile-minutes* 10)
 
-;; At most so many steps a second are kept (back to back, the tests',
-;; steps run thousands a second), so many seconds of steps and minutes of
-;; seconds at the most, and so many steps' uses in all.
-(define profile-step-rate 100)
-(define profile-most-step-seconds 120)
+;; At most so many ticks a second are kept (back to back, the tests'
+;; steps tick thousands a second), so many seconds of ticks and minutes
+;; of seconds at the most, and so many ticks' uses in all.
+(define profile-tick-rate 100)
+(define profile-most-tick-seconds 120)
 (define profile-most-minutes 60)
-(define profile-step-uses-kept 131072)
+(define profile-tick-uses-kept 131072)
 ;; the seconds that keep what each key spent, each at most so many
 (define profile-detail-seconds 60)
 (define profile-second-uses-most 512)
 (define profile-second-subjects-most 128)
 
-;; A step's phases, by index: its self times go to them.
+;; A tick's phases, by index: its self times go to them.
 (define profile-phase-names
   '#(input-wait event timers procs tick render present gc other vsync-wait))
 (define profile-phase-count (vector-length profile-phase-names))
@@ -59,15 +62,15 @@
 
 ;;; ------------------------------------------------------------------ tables
 ;;; Open addressing in vectors made once: a slot a (key part phase), its
-;;; ns, calls, steps and longest, and the step that last added to it (by
-;;; seq) and what it spent in that step; the slots in use listed, so that
+;;; ns, calls, ticks and longest, and the tick that last added to it (by
+;;; seq) and what it spent in that tick; the slots in use listed, so that
 ;;; a table is cleared by them.
 
 (defvar *profile-none* (list 'none))   ; an empty slot's key
 
 (define-record-type profile-table
-  (nongenerative schevana-profile-table)
-  (fields keys parts phases ns calls steps longest seen this used
+  (nongenerative schevana-profile-table-2)
+  (fields keys parts phases ns calls ticks longest seen this used
           (mutable count)))
 
 (define (profile-new-table n)   ; n a power of 2
@@ -105,7 +108,7 @@
                     (fxvector-set! phases i phase)
                     (fxvector-set! (profile-table-ns t) i 0)
                     (fxvector-set! (profile-table-calls t) i 0)
-                    (fxvector-set! (profile-table-steps t) i 0)
+                    (fxvector-set! (profile-table-ticks t) i 0)
                     (fxvector-set! (profile-table-longest t) i 0)
                     (fxvector-set! (profile-table-seen t) i -1)
                     (fxvector-set! (profile-table-used t) n i)
@@ -118,8 +121,8 @@
 
 (define (profile-fx+! v i n) (fxvector-set! v i (fx+ (fxvector-ref v i) n)))
 
-;; ns and calls of step seq added to (key part phase) in t: its steps
-;; count the steps it ran in, and its longest is its most in one.
+;; ns and calls of tick seq added to (key part phase) in t: its ticks
+;; count the ticks it ran in, and its longest is its most in one.
 (define (profile-tally! t seq key part phase ns calls)
   (let ([i (profile-slot! t key part phase)])
     (when i
@@ -129,7 +132,7 @@
             (begin
               (fxvector-set! seen i seq)
               (fxvector-set! this i ns)
-              (profile-fx+! (profile-table-steps t) i 1)))
+              (profile-fx+! (profile-table-ticks t) i 1)))
         (profile-fx+! (profile-table-ns t) i ns)
         (profile-fx+! (profile-table-calls t) i calls)
         (let ([v (profile-table-longest t)])
@@ -148,8 +151,8 @@
   (cond [(not (fixnum? key)) #f] [(eq? part #t) #t] [else 'window]))
 
 ;;; ------------------------------------------------------------------ rings
-;;; The history, made once and used again in place: a ring of steps (a
-;;; step's slot its seq modulo the ring's size), its uses in a ring of
+;;; The history, made once and used again in place: a ring of ticks (a
+;;; tick's slot its seq modulo the ring's size), its uses in a ring of
 ;;; entries, and a ring of seconds, the last minute's uses and subjects in
 ;;; rings of their own.
 
@@ -164,13 +167,13 @@
                                         (iota k)))
                      (make-fxvector (fx* n profile-phase-count) 0)))
 
-;; A step's fields: its end and length (ns), collections, their ns, bytes
+;; A tick's fields: its end and length (ns), collections, their ns, bytes
 ;; allocated, heap, and where its uses start in their ring and how many.
-(define profile-step-fields '(end ns gcs gc-ns allocated heap start count))
-;; A second's: its clock second, steps, ns, the longest step's ns, the
-;; rest as a step's, and its subjects' start and count.
+(define profile-tick-fields '(end ns gcs gc-ns allocated heap start count))
+;; A second's: its clock second, ticks, ns, the longest tick's ns, the
+;; rest as a tick's, and its subjects' start and count.
 (define profile-second-fields
-  '(second steps ns longest gcs gc-ns allocated heap start count
+  '(second ticks ns longest gcs gc-ns allocated heap start count
     subjects-start subjects-count))
 
 (define (profile-field r names name)   ; the fxvector of a field
@@ -188,7 +191,7 @@
                                                (profile-ring-seqs r))))
 
 ;; n entries of k fields: keys and parts (vectors); phases, ns, calls,
-;; and with k 7 steps and longest (a step's: 1, and its ns).
+;; and with k 7 ticks and longest (a tick's: 1, and its ns).
 (define (profile-new-entries n k)
   (list->vector (map (lambda (f) (if (fx< f 2)
                                      (make-vector n #f)
@@ -205,14 +208,14 @@
     (fxvector-set! (vector-ref e 4) j (fxvector-ref (profile-table-calls t) i))
     (when (fx= (vector-length e) 7)
       (fxvector-set! (vector-ref e 5) j
-                     (fxvector-ref (profile-table-steps t) i))
+                     (fxvector-ref (profile-table-ticks t) i))
       (fxvector-set! (vector-ref e 6) j
                      (fxvector-ref (profile-table-longest t) i)))))
 
-(defvar *profile-steps-ring*
-  (profile-new-ring (* profile-step-rate profile-most-step-seconds)
-                    (length profile-step-fields)))
-(defvar *profile-step-uses* (profile-new-entries profile-step-uses-kept 5))
+(defvar *profile-ticks-ring*
+  (profile-new-ring (* profile-tick-rate profile-most-tick-seconds)
+                    (length profile-tick-fields)))
+(defvar *profile-tick-uses* (profile-new-entries profile-tick-uses-kept 5))
 (defvar *profile-seconds-ring*
   (profile-new-ring (* 60 profile-most-minutes)
                     (length profile-second-fields)))
@@ -221,12 +224,12 @@
 (defvar *profile-second-subjects*
   (profile-new-entries (* profile-detail-seconds profile-second-subjects-most)
                        7))
-;; the steps kept, by seq: the oldest and the newest (none: newest is
+;; the ticks kept, by seq: the oldest and the newest (none: newest is
 ;; oldest less 1), and how many entries their uses have taken in all
-(defvar *profile-step-oldest* 0)
-(defvar *profile-step-newest* -1)
-(defvar *profile-step-entries* 0)
-;; the seconds: the oldest kept, the one steps go into now (none: -1),
+(defvar *profile-tick-oldest* 0)
+(defvar *profile-tick-newest* -1)
+(defvar *profile-tick-entries* 0)
+;; the seconds: the oldest kept, the one ticks go into now (none: -1),
 ;; and the entries their uses and subjects have taken
 (defvar *profile-second-oldest* 0)
 (defvar *profile-second-now* -1)
@@ -246,14 +249,16 @@
 (defvar *profile-inner* (make-fxvector profile-stack-size 0))
 (defvar *profile-depth* 0)
 (defvar *profile-past* 0)
-;; this step's self time by phase, and its uses
+;; this tick's self time by phase, and its uses, and its steps' ns so far
+;; (the steps between ticks it sums)
 (defvar *profile-phase-ns* (make-fxvector profile-phase-count 0))
-(defvar *profile-step-table* (profile-new-table 512))
+(defvar *profile-tick-table* (profile-new-table 512))
+(defvar *profile-tick-ns* 0)
 ;; the second's uses and subjects
 (defvar *profile-second-table* (profile-new-table 1024))
 (defvar *profile-second-subject-table* (profile-new-table 256))
 ;; the collector's ns in all (timed in its request handler); the memory
-;; at the last step's end: collections, bytes allocated, the collector's
+;; at the last tick's end: collections, bytes allocated, the collector's
 (defvar *profile-gc-ns* 0)
 (defvar *profile-memory* (make-fxvector 3 0))
 ;; the thread profiled; Chez's own handler of a collect request
@@ -311,7 +316,7 @@
 ;; its own, and what closed inside them is inside it, so the books add
 ;; up. Its self time goes to its phase (the collector's to gc, the wait
 ;; for the screen's to vsync-wait) and to its use; the step's closes the
-;; step.
+;; step, and the tick with it unless the step came between ticks.
 (define (profile-close! d)
   (let ([now (now-ns)] [inner *profile-inner*])
     (do ([j (fx- *profile-depth* 1) (fx- j 1)]) ((fx<= j d))
@@ -329,8 +334,8 @@
             (profile-fx+! *profile-phase-ns*
                           (case key [(gc) 7] [(vsync-wait) 9] [else phase])
                           self)
-            (profile-tally! *profile-step-table*
-                            (fx+ *profile-step-newest* 1) key
+            (profile-tally! *profile-tick-table*
+                            (fx+ *profile-tick-newest* 1) key
                             (vector-ref *profile-parts* d) phase self 1))))))
 
 ;; The collector's work: timed in all, and a span of its own, gc.
@@ -341,31 +346,35 @@
     (set! *profile-gc-ns* (fx+ *profile-gc-ns* (fx- (now-ns) t0))))
   (profile-end! #f))
 
-;;; ------------------------------------------------------------------ steps
+;;; ------------------------------------------------------------------ ticks
 
-;; The step ended at now, ns long, idle of it its own (its input-wait).
-;; Its books are kept under one guard: an error turns the profiler off,
-;; and is said once.
+;; The step ended at now, ns long, idle of it its own (its input-wait):
+;; summed into the tick, which ends with it unless it came between ticks
+;; (*pacer-between?*). Its books are kept under one guard: an error turns
+;; the profiler off, and is said once.
 (define (profile-end-step! now ns idle)
   (guard (c [#t (profiling! #f) (report-error! 'profiler c)])
     (profile-fx+! *profile-phase-ns* 0 idle)
-    (profile-second-at! now)
-    (profile-step-done! now ns)
-    (profile-clear-table! *profile-step-table*)
-    (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
-      (fxvector-set! *profile-phase-ns* i 0))
-    (profile-trim-steps! now)))
+    (set! *profile-tick-ns* (fx+ *profile-tick-ns* ns))
+    (unless *pacer-between?*
+      (profile-second-at! now)
+      (profile-tick-done! now *profile-tick-ns*)
+      (set! *profile-tick-ns* 0)
+      (profile-clear-table! *profile-tick-table*)
+      (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
+        (fxvector-set! *profile-phase-ns* i 0))
+      (profile-trim-ticks! now))))
 
-;; The step's slot in the ring: its fields and phases, its uses into the
+;; The tick's slot in the ring: its fields and phases, its uses into the
 ;; uses' ring and the second's table, and by subject into the second's.
-(define (profile-step-done! now ns)
-  (let* ([r *profile-steps-ring*] [names profile-step-fields]
-         [seq (fx+ *profile-step-newest* 1)] [slot (profile-slot-of r seq)]
+(define (profile-tick-done! now ns)
+  (let* ([r *profile-ticks-ring*] [names profile-tick-fields]
+         [seq (fx+ *profile-tick-newest* 1)] [slot (profile-slot-of r seq)]
          [sr *profile-seconds-ring*] [sn profile-second-fields]
          [s (profile-slot-of sr *profile-second-now*)]
          [m *profile-memory*] [gcs (collections)]
          [allocated (+ (bytes-allocated) (bytes-deallocated))]
-         [t *profile-step-table*] [at *profile-step-entries*]
+         [t *profile-tick-table*] [at *profile-tick-entries*]
          [count (profile-table-count t)]
          [subjects *profile-second-subject-table*])
     (fxvector-set! (profile-ring-seqs r) slot seq)
@@ -396,16 +405,16 @@
              [n (fxvector-ref (profile-table-ns t) i)]
              [calls (fxvector-ref (profile-table-calls t) i)]
              [seen (profile-table-count subjects)])
-        (profile-put! *profile-step-uses* (fx+ at j) t i)
+        (profile-put! *profile-tick-uses* (fx+ at j) t i)
         (profile-tally! *profile-second-table* seq key part
                         (fxvector-ref (profile-table-phases t) i) n calls)
         (profile-tally! subjects seq key kind 0 n calls)
         ;; new in this second: a window's or a process's name kept
         (unless (fx= seen (profile-table-count subjects))
           (profile-name! key kind))))
-    (set! *profile-step-entries* (fx+ at count))
-    (set! *profile-step-newest* seq)
-    (profile-fx+! (profile-field sr sn 'steps) s 1)
+    (set! *profile-tick-entries* (fx+ at count))
+    (set! *profile-tick-newest* seq)
+    (profile-fx+! (profile-field sr sn 'ticks) s 1)
     (profile-fx+! (profile-field sr sn 'ns) s ns)
     (let ([v (profile-field sr sn 'longest)])
       (fxvector-set! v s (fxmax ns (fxvector-ref v s))))
@@ -431,25 +440,25 @@
                                 [(eq? kind #t) (proc-name x)]
                                 [else (window-title x)])))))))
 
-;; Only the steps kept: those of the last *profile-step-seconds*, at most
-;; profile-step-rate a second of them, whose uses their ring still holds.
-(define (profile-trim-steps! now)
-  (let* ([r *profile-steps-ring*] [names profile-step-fields]
-         [since (fx- now (fx* *profile-step-seconds* 1000000000))]
+;; Only the ticks kept: those of the last *profile-tick-seconds*, at most
+;; profile-tick-rate a second of them, whose uses their ring still holds.
+(define (profile-trim-ticks! now)
+  (let* ([r *profile-ticks-ring*] [names profile-tick-fields]
+         [since (fx- now (fx* *profile-tick-seconds* 1000000000))]
          [most (fxmin (fxvector-length (profile-ring-seqs r))
-                      (fx* profile-step-rate *profile-step-seconds*))]
-         [least (fx- *profile-step-entries* profile-step-uses-kept)])
+                      (fx* profile-tick-rate *profile-tick-seconds*))]
+         [least (fx- *profile-tick-entries* profile-tick-uses-kept)])
     (let loop ()
-      (let ([slot (profile-slot-of r *profile-step-oldest*)])
-        (when (and (fx<= *profile-step-oldest* *profile-step-newest*)
-                   (or (fx>= (fx- *profile-step-newest* *profile-step-oldest*)
+      (let ([slot (profile-slot-of r *profile-tick-oldest*)])
+        (when (and (fx<= *profile-tick-oldest* *profile-tick-newest*)
+                   (or (fx>= (fx- *profile-tick-newest* *profile-tick-oldest*)
                              most)
                        (fx< (profile-ring-ref r names 'end slot) since)
                        (fx< (profile-ring-ref r names 'start slot) least)))
-          (set! *profile-step-oldest* (fx+ *profile-step-oldest* 1))
+          (set! *profile-tick-oldest* (fx+ *profile-tick-oldest* 1))
           (loop))))))
 
-;; The second a step that ended at now goes into: a new one puts the last
+;; The second a tick that ended at now goes into: a new one puts the last
 ;; one done, its uses and subjects into their rings, and starts afresh.
 (define (profile-second-at! now)
   (let* ([r *profile-seconds-ring*] [names profile-second-fields]
@@ -503,7 +512,8 @@
     (set! *profile-on?* (and on? #t))
     (set! *profile-depth* 0)
     (set! *profile-past* 0)
-    (profile-clear-table! *profile-step-table*)
+    (set! *profile-tick-ns* 0)
+    (profile-clear-table! *profile-tick-table*)
     (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
       (fxvector-set! *profile-phase-ns* i 0))
     (fxvector-set! *profile-memory* 0 (collections))
@@ -517,27 +527,27 @@
 
 (define (profiling?) *profile-on?*)
 
-;; (profile-history! 30 10): keep every step of the last 30 seconds (at
+;; (profile-history! 30 10): keep every tick of the last 30 seconds (at
 ;; most 100 a second, and 120 seconds), and each second's sums for the
 ;; last 10 minutes (at most 60).
 (define (profile-history! seconds minutes)
-  (set! *profile-step-seconds* (min seconds profile-most-step-seconds))
+  (set! *profile-tick-seconds* (min seconds profile-most-tick-seconds))
   (set! *profile-minutes* (min minutes profile-most-minutes))
-  (when (fx>= *profile-step-newest* 0) (profile-trim-steps! (now-ns))))
+  (when (fx>= *profile-tick-newest* 0) (profile-trim-ticks! (now-ns))))
 
 (define (profile-clear!)
-  (set! *profile-step-oldest* (fx+ *profile-step-newest* 1))
+  (set! *profile-tick-oldest* (fx+ *profile-tick-newest* 1))
   (set! *profile-second-oldest* (fx+ *profile-second-now* 1)))
 
-;;; What the history tells, read in place by seq: a step's or a second's
+;;; What the history tells, read in place by seq: a tick's or a second's
 ;;; (a fixnum, the newest the largest). A seq is good while its ring
 ;;; keeps it: a view that holds seqs (Monitor paused) loses the oldest as
-;;; new steps and seconds take their slots.
+;;; new ticks and seconds take their slots.
 
-;; The steps kept, and the seconds done, the newest first.
-(define (profile-steps)
-  (let loop ([seq *profile-step-oldest*] [acc '()])
-    (if (fx> seq *profile-step-newest*) acc (loop (fx+ seq 1) (cons seq acc)))))
+;; The ticks kept, and the seconds done, the newest first.
+(define (profile-ticks)
+  (let loop ([seq *profile-tick-oldest*] [acc '()])
+    (if (fx> seq *profile-tick-newest*) acc (loop (fx+ seq 1) (cons seq acc)))))
 
 (define (profile-seconds)
   (let loop ([seq (fxmax *profile-second-oldest*
@@ -547,21 +557,21 @@
         acc
         (loop (fx+ seq 1) (cons seq acc)))))
 
-;; The newest step kept, or the oldest; or #f.
-(define (profile-newest-step)
-  (and (profile-step-kept? *profile-step-newest*) *profile-step-newest*))
+;; The newest tick kept, or the oldest; or #f.
+(define (profile-newest-tick)
+  (and (profile-tick-kept? *profile-tick-newest*) *profile-tick-newest*))
 
-(define (profile-oldest-step)
-  (and (profile-step-kept? *profile-step-oldest*) *profile-step-oldest*))
+(define (profile-oldest-tick)
+  (and (profile-tick-kept? *profile-tick-oldest*) *profile-tick-oldest*))
 
-(define (profile-step-kept? seq)
-  (and (fx>= seq *profile-step-oldest*) (fx<= seq *profile-step-newest*)))
+(define (profile-tick-kept? seq)
+  (and (fx>= seq *profile-tick-oldest*) (fx<= seq *profile-tick-newest*)))
 
-;; A step's field: end (ms, by the clock), ms, gcs, gc-ms, allocated or
-;; heap (bytes); a second's: second (the clock's), steps, ms, longest
-;; (ms), and the rest as a step's.
-(define (profile-step-ref seq name)
-  (profile-ref *profile-steps-ring* profile-step-fields seq name))
+;; A tick's field: end (ms, by the clock), ms, gcs, gc-ms, allocated or
+;; heap (bytes); a second's: second (the clock's), ticks, ms, longest
+;; (ms), and the rest as a tick's.
+(define (profile-tick-ref seq name)
+  (profile-ref *profile-ticks-ring* profile-tick-fields seq name))
 
 (define (profile-second-ref seq name)
   (profile-ref *profile-seconds-ring* profile-second-fields seq name))
@@ -572,20 +582,20 @@
                              (profile-slot-of r seq))])
     (if (memq name '(end ms longest gc-ms)) (profile-ms v) v)))
 
-;; A step's end, length or phase as kept: whole ns, by the clock (now-ns).
-(define (profile-step-ns seq name)   ; end or ns
-  (profile-ring-ref *profile-steps-ring* profile-step-fields name
-                    (profile-slot-of *profile-steps-ring* seq)))
+;; A tick's end, length or phase as kept: whole ns, by the clock (now-ns).
+(define (profile-tick-ns seq name)   ; end or ns
+  (profile-ring-ref *profile-ticks-ring* profile-tick-fields name
+                    (profile-slot-of *profile-ticks-ring* seq)))
 
-(define (profile-step-phase-ns seq phase)
-  (profile-phase-ns *profile-steps-ring* seq phase))
+(define (profile-tick-phase-ns seq phase)
+  (profile-phase-ns *profile-ticks-ring* seq phase))
 
-(define (profile-step-end seq) (profile-step-ref seq 'end))
-(define (profile-step-ms seq) (profile-step-ref seq 'ms))
+(define (profile-tick-end seq) (profile-tick-ref seq 'end))
+(define (profile-tick-ms seq) (profile-tick-ref seq 'ms))
 
-;; The ms of phase (one of profile-phase-names) in a step, or a second.
-(define (profile-step-phase-ms seq phase)
-  (profile-phase-ms *profile-steps-ring* seq phase))
+;; The ms of phase (one of profile-phase-names) in a tick, or a second.
+(define (profile-tick-phase-ms seq phase)
+  (profile-phase-ms *profile-ticks-ring* seq phase))
 
 (define (profile-second-phase-ms seq phase)
   (profile-phase-ms *profile-seconds-ring* seq phase))
@@ -601,38 +611,35 @@
                            i))
         (loop (fx+ i 1)))))
 
-;; A step's time but its waits.
+;; A tick's time but its waits.
 (define (profile-busy seq)
-  (- (profile-step-ms seq) (profile-step-phase-ms seq 'input-wait)
-     (profile-step-phase-ms seq 'vsync-wait)))
+  (- (profile-tick-ms seq) (profile-tick-phase-ms seq 'input-wait)
+     (profile-tick-phase-ms seq 'vsync-wait)))
 
-;; Where step seq's time went: ((phase . ns) ...), every phase that took
-;; any (its waits too), the most first. They add up to the step's ns.
-(define (profile-step-phases seq)
+;; Where tick seq's time went: ((phase . ns) ...), every phase that took
+;; any (its waits too), the most first. They add up to the tick's ns.
+(define (profile-tick-phases seq)
   (list-sort (lambda (a b) (fx> (cdr a) (cdr b)))
              (filter (lambda (p) (fx> (cdr p) 0))
                      (map (lambda (phase)
-                            (cons phase (profile-step-phase-ns seq phase)))
+                            (cons phase (profile-tick-phase-ns seq phase)))
                           (vector->list profile-phase-names)))))
 
-;; Was step seq a frame late: its time, its wait for input aside (input
-;; ends that at once, and after a frame it ends when the next is due),
-;; past one and a half frames of frame-ns? Half past, not just past: a
-;; step that draws ends about at a refresh, a little before or after it,
-;; and one that missed a refresh waited for the next.
-(define (profile-step-late? seq frame-ns)
-  (fx> (fx* 2 (fx- (profile-step-ns seq 'ns)
-                   (profile-step-phase-ns seq 'input-wait)))
-       (fx* 3 frame-ns)))
+;; Did tick seq come late: past one and a half periods of period-ns
+;; after the last? Half past, not just past: a tick ends about at a
+;; refresh, a little before or after it, and one that missed a refresh
+;; waited for the next.
+(define (profile-tick-late? seq period-ns)
+  (fx> (fx* 2 (profile-tick-ns seq 'ns)) (fx* 3 period-ns)))
 
-;; The steps kept a frame late (frame-ns, by default the screen's:
-;; host-frame-ns), the newest first.
-(define profile-slow-steps
+;; The ticks kept that came late (period-ns, by default the pacer's:
+;; pacer-period), the newest first.
+(define profile-slow-ticks
   (case-lambda
-    [() (profile-slow-steps (host-frame-ns))]
-    [(frame-ns)
-     (filter (lambda (seq) (profile-step-late? seq frame-ns))
-             (profile-steps))]))
+    [() (profile-slow-ticks (pacer-period))]
+    [(period-ns)
+     (filter (lambda (seq) (profile-tick-late? seq period-ns))
+             (profile-ticks))]))
 
 ;; A use's subject as readers see it: (window . id), (process . id), or
 ;; the key itself; profile-subject-of gives a live window's or process's.
@@ -656,16 +663,16 @@
                       (cdr s) #f)))
 
 ;; What one key spent, as readers see it: its subject, part (a window
-;; handler's kind, or #f), phase (a symbol), ms, calls, the steps it ran
+;; handler's kind, or #f), phase (a symbol), ms, calls, the ticks it ran
 ;; in and its most in one (ms).
 (define-record-type profile-use
-  (nongenerative schevana-profile-use-4)
-  (fields subject part phase ms calls steps longest))
+  (nongenerative schevana-profile-use-5)
+  (fields subject part phase ms calls ticks longest))
 
 ;; count entries of e from at as uses, new records; none if e has taken
 ;; their entries again.
 (define (profile-uses e at count held whole?)
-  (let ([n (vector-length (vector-ref e 0))] [step? (fx= (vector-length e) 5)])
+  (let ([n (vector-length (vector-ref e 0))] [tick? (fx= (vector-length e) 5)])
     (if (fx< at (fx- held n))
         '()
         (let loop ([j 0] [acc '()])
@@ -688,18 +695,18 @@
                                                             i)))
                              (profile-ms ns)
                              (fxvector-ref (vector-ref e 4) i)
-                             (if step? 1 (fxvector-ref (vector-ref e 5) i))
-                             (profile-ms (if step?
+                             (if tick? 1 (fxvector-ref (vector-ref e 5) i))
+                             (profile-ms (if tick?
                                              ns
                                              (fxvector-ref (vector-ref e 6)
                                                            i))))
                             acc))))))))
 
-;; A step's uses; a second's (of the last minute), or its subjects'
+;; A tick's uses; a second's (of the last minute), or its subjects'
 ;; (whole? true: part and phase #f).
-(define (profile-step-uses seq)
-  (profile-uses *profile-step-uses* (profile-step-ref seq 'start)
-                (profile-step-ref seq 'count) *profile-step-entries* #f))
+(define (profile-tick-uses seq)
+  (profile-uses *profile-tick-uses* (profile-tick-ref seq 'start)
+                (profile-tick-ref seq 'count) *profile-tick-entries* #f))
 
 (define (profile-second-uses seq . whole?)
   (let ([whole? (and (pair? whole?) (car whole?))])
@@ -742,16 +749,16 @@
                           (fx+ ns (fxvector-ref (vector-ref e 3) i))
                           ns))))))))
 
-;; What node, a subject or (subject part phase), spent in a step (ms, or
+;; What node, a subject or (subject part phase), spent in a tick (ms, or
 ;; whole ns), or a second of the last minute.
-(define (profile-step-node-ns seq node)
-  (profile-node-ns *profile-step-uses* (profile-step-ref seq 'start)
-                   (profile-step-ref seq 'count) *profile-step-entries*
+(define (profile-tick-node-ns seq node)
+  (profile-node-ns *profile-tick-uses* (profile-tick-ref seq 'start)
+                   (profile-tick-ref seq 'count) *profile-tick-entries*
                    (if (and (pair? node) (pair? (cdr node))) (car node) node)
                    (and (pair? node) (pair? (cdr node)) (cdr node))))
 
-(define (profile-step-node-ms seq node)
-  (profile-ms (profile-step-node-ns seq node)))
+(define (profile-tick-node-ms seq node)
+  (profile-ms (profile-tick-node-ns seq node)))
 
 (define (profile-second-node-ms seq node)
   (profile-ms
@@ -768,37 +775,37 @@
                    ms))
              0.0 uses))
 
-;; What a subject, or one of its parts, spent over some steps or seconds:
-;; ms in all, calls, the steps it ran in, its most in one step; and a
+;; What a subject, or one of its parts, spent over some ticks or seconds:
+;; ms in all, calls, the ticks it ran in, its most in one tick; and a
 ;; subject's parts, each a total whose what is (part . phase).
 (define-record-type profile-total
-  (nongenerative schevana-profile-total)
-  (fields what (mutable ms) (mutable calls) (mutable steps)
+  (nongenerative schevana-profile-total-2)
+  (fields what (mutable ms) (mutable calls) (mutable ticks)
           (mutable longest) (mutable parts)))
 
-;; By subject, what seconds (seqs) spent, or steps (steps? true), the
+;; By subject, what seconds (seqs) spent, or ticks (ticks? true), the
 ;; most first, each with its parts, the most first.
-(define (profile-totals seqs . steps?)
+(define (profile-totals seqs . ticks?)
   (define (total what) (make-profile-total what 0.0 0 0 0.0 '()))
   (define (add! t u)
     (profile-total-ms-set! t (+ (profile-total-ms t) (profile-use-ms u)))
     (profile-total-calls-set! t (+ (profile-total-calls t)
                                    (profile-use-calls u)))
-    (profile-total-steps-set! t (+ (profile-total-steps t)
-                                   (profile-use-steps u)))
+    (profile-total-ticks-set! t (+ (profile-total-ticks t)
+                                   (profile-use-ticks u)))
     (profile-total-longest-set!
      t (max (profile-total-longest t) (profile-use-longest u))))
   (define (most-first ts)
     (sort (lambda (a b) (> (profile-total-ms a) (profile-total-ms b))) ts))
   (let ([totals (make-hashtable equal-hash equal?)]
-        [steps? (and (pair? steps?) (car steps?))])
+        [ticks? (and (pair? ticks?) (car ticks?))])
     (define (total-of subject)
       (or (hashtable-ref totals subject #f)
           (let ([t (total subject)]) (hashtable-set! totals subject t) t)))
     (for-each
      (lambda (seq)
-       (let ([uses (if steps?
-                       (profile-step-uses seq)
+       (let ([uses (if ticks?
+                       (profile-tick-uses seq)
                        (profile-second-uses seq))])
          (for-each
           (lambda (u)
@@ -814,7 +821,7 @@
           uses)
          (for-each
           (lambda (u) (add! (total-of (profile-use-subject u)) u))
-          (if steps?   ; a step's subjects: its uses summed by subject
+          (if ticks?   ; a tick's subjects: its uses summed by subject
               (map (lambda (s)
                      (let ([mine (filter (lambda (u)
                                            (equal? (profile-use-subject u) s))
