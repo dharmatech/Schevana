@@ -11,9 +11,10 @@
 ;;; System code reports its errors as notifications (report-error!).
 
 ;; defvar, not define: a reload must not swap out parameters that running
-;; engines are still parameterizing.
-(defvar in-engine? (make-parameter #f))
-(defvar current-proc (make-parameter #f))
+;; engines are still parameterizing. Thread parameters: another thread's
+;; binding is never the main thread's.
+(defvar in-engine? (make-thread-parameter #f))
+(defvar current-proc (make-thread-parameter #f))
 
 (define handler-fuel 50000000)   ; per handler call; roughly 0.1s of pure Scheme
 (define slice-fuel 10000)        ; per process slice; roughly 15us

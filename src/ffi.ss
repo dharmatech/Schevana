@@ -29,15 +29,25 @@
    '("libcairo.so.2" "libcairo.so" "libcairo.2.dylib" "libcairo.dylib"
      "libcairo-2.dll" "cairo.dll")))
 
+;; The thread that loads the core is the main thread. SDL's and Cairo's
+;; bindings are its alone, but those declared any-thread.
+(define main-thread?
+  (if (threaded?)
+      (let ([id (get-thread-id)]) (lambda () (fx= (get-thread-id) id)))
+      (lambda () #t)))
+
 ;; Like foreign-procedure, but `double` arguments accept any real number,
 ;; and `bool` is C's one-byte bool (SDL3's) as #t or #f: Chez's boolean is
-;; an int, whose upper bytes a C bool leaves undefined.
-(define-syntax define-foreign
+;; an int, whose upper bytes a C bool leaves undefined. how: main (only
+;; the main thread may call it, checked), any (any thread), or
+;; collect-safe (main's, and a collection another thread needs does not
+;; wait for it to return: for calls that block, given foreign memory only).
+(define-syntax define-foreign-as
   (lambda (x)
     (define (is? t name) (eq? (syntax->datum t) name))
     (define (c-type t) (if (is? t 'bool) #'unsigned-8 t))
     (syntax-case x ()
-      [(_ name cname (type ...) ret)
+      [(_ how name cname (type ...) ret)
        (with-syntax ([(arg ...) (generate-temporaries #'(type ...))])
          (with-syntax ([(conv ...)
                         (map (lambda (t a)
@@ -48,11 +58,26 @@
                        [(ctype ...) (map c-type #'(type ...))]
                        [cret (c-type #'ret)])
            #`(define name
-               (let ([f (foreign-procedure cname (ctype ...) cret)])
+               (let ([f #,(if (is? #'how 'collect-safe)
+                              #'(foreign-procedure __collect_safe cname
+                                                   (ctype ...) cret)
+                              #'(foreign-procedure cname (ctype ...) cret))])
                  (lambda (arg ...)
+                   #,@(if (is? #'how 'any)
+                          '()
+                          (list #'(unless (main-thread?)
+                                    (errorf 'name "only the main thread \
+                                                   may call this"))))
                    #,(if (is? #'ret 'bool)
                          #'(not (fx= 0 (f conv ...)))
                          #'(f conv ...)))))))])))
+
+(define-syntax define-foreign
+  (syntax-rules () [(_ . spec) (define-foreign-as main . spec)]))
+(define-syntax define-foreign/any-thread
+  (syntax-rules () [(_ . spec) (define-foreign-as any . spec)]))
+(define-syntax define-foreign/collect-safe
+  (syntax-rules () [(_ . spec) (define-foreign-as collect-safe . spec)]))
 
 (define (c-string->string ptr)
   (if (= ptr 0)
@@ -95,7 +120,7 @@
 (define-foreign sdl-init "SDL_Init" (unsigned-32) bool)
 (define-foreign sdl-quit "SDL_Quit" () void)
 (define-foreign sdl-get-error "SDL_GetError" () string)
-(define-foreign sdl-get-ticks-ns "SDL_GetTicksNS" () unsigned-64)
+(define-foreign/any-thread sdl-get-ticks-ns "SDL_GetTicksNS" () unsigned-64)
 (define-foreign sdl-set-hint "SDL_SetHint" (string string) bool)
 (define-foreign sdl-create-window "SDL_CreateWindow"
   (string int int unsigned-64) uptr)
@@ -120,18 +145,20 @@
 (define-foreign sdl-set-texture-scale-mode "SDL_SetTextureScaleMode"
   (uptr int) bool)
 (define-foreign sdl-destroy-texture "SDL_DestroyTexture" (uptr) void)
-(define-foreign sdl-update-texture "SDL_UpdateTexture"
+(define-foreign/collect-safe sdl-update-texture "SDL_UpdateTexture"
   (uptr uptr uptr int) bool)
 (define-foreign sdl-render-texture "SDL_RenderTexture"
   (uptr uptr uptr uptr) bool)
-(define-foreign sdl-render-present "SDL_RenderPresent" (uptr) bool)
+(define-foreign/collect-safe sdl-render-present "SDL_RenderPresent"
+  (uptr) bool)
 (define-foreign sdl-set-render-vsync "SDL_SetRenderVSync" (uptr int) bool)
 (define-foreign sdl-get-display-for-window "SDL_GetDisplayForWindow"
   (uptr) unsigned-32)
 (define-foreign sdl-get-current-display-mode "SDL_GetCurrentDisplayMode"
   (unsigned-32) uptr)
 (define-foreign sdl-poll-event "SDL_PollEvent" (uptr) bool)
-(define-foreign sdl-wait-event-timeout "SDL_WaitEventTimeout" (uptr int) bool)
+(define-foreign/collect-safe sdl-wait-event-timeout "SDL_WaitEventTimeout"
+  (uptr int) bool)
 (define-foreign sdl-start-text-input "SDL_StartTextInput" (uptr) bool)
 (define-foreign sdl-get-clipboard-text "SDL_GetClipboardText" () uptr)
 (define-foreign sdl-set-clipboard-text "SDL_SetClipboardText" (string) bool)

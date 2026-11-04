@@ -41,6 +41,25 @@
         (safe-call 'timer (cdr t) (lambda (c) (report-error! 'timer c)))
         (loop)))))
 
+;; (post-main! thunk), from any thread: thunk runs on the main thread at
+;; its next step, after the events, in the order each thread posted it,
+;; under safely (so a service's thunk calls an app's code under
+;; safe-call). Lock-free: neither a post nor the step ever waits.
+(defvar *main-mail* (box '()))   ; thunks, the newest first
+
+(define (post-main! thunk)
+  (let loop ()
+    (let ([mail (unbox *main-mail*)])
+      (unless (box-cas! *main-mail* mail (cons thunk mail)) (loop)))))
+
+(define (run-main-mail!)
+  (let loop ()
+    (let ([mail (unbox *main-mail*)])
+      (cond [(null? mail)]
+            [(box-cas! *main-mail* mail '())
+             (for-each (lambda (t) (safely 'jobs t)) (reverse mail))]
+            [else (loop)]))))
+
 ;; Feed a synthetic event into the world, exactly as if the host sent it:
 ;; (inject! '(mouse-down 100 100 left 1))
 (define (inject! . events)
@@ -85,13 +104,14 @@
     [(eq? (car ev) 'quit) (quit!)]
     [else (set! *held-events* (cons ev *held-events*))]))
 
-;; One turn of the world: events, timers, a tick, processes, and a frame
-;; if something asked for one: input's at once while the screen's wait
-;; paces frames, else at the next tick. The profiler's unit: a step.
-;; Paced (the main loop's), it ticks only when the pacer's tick is due, and its
-;; processes run until the frame must be drawn for the next tick (what
-;; it would have waited for the screen in present); else (a test's) it
-;; always ticks, and its processes run 10 ms.
+;; One turn of the world: events, mail (post-main!), timers, a tick,
+;; processes, and a frame if something asked for one: input's at once
+;; while the screen's wait paces frames, else at the next tick. Paced (the
+;; main loop's), it ticks only when the pacer's tick is due, and its
+;; processes run until the frame must be drawn for the next tick (what it
+;; would have waited for the screen in present); else (a test's) it always
+;; ticks, and its processes run 10 ms. The profiler sums the steps between
+;; ticks into the next tick.
 (define (schevana-step! wait-ms . paced)
   (with-profile-span 'step #f
     (let* ([hold? (reload-holding?)]
@@ -109,6 +129,7 @@
     (let ([ticked?
            (and (not (reload-holding?))
                 (begin
+                  (run-main-mail!)
                   (safely 'timers run-timers!)
                   (let ([now (and (pair? paced) (now-ns))])
                     (and (or (not now) (>= now (pacer-start)))

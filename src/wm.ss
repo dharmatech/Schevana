@@ -245,7 +245,7 @@
   (fields name title launch))
 
 (defvar *apps* '())
-(defvar current-app (make-parameter #f))
+(defvar current-app (make-thread-parameter #f))
 
 (define (register-app! name title launch)
   (set! *apps* (registry-add *apps* (make-app name title launch) app-name))
@@ -303,7 +303,7 @@
 ;; Where a window opens when open-window gets no 'pos: #f to cascade, or a
 ;; point for its top-left corner, moved as little as needed to fit on the
 ;; desktop. (parameterize ([new-window-position '(400 . 300)]) (clock))
-(defvar new-window-position (make-parameter #f))
+(defvar new-window-position (make-thread-parameter #f))
 
 ;; The next window that cascades opens at the cascade's first place.
 (define (cascade-reset!) (set! *cascade* 0))

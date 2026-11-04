@@ -3364,7 +3364,9 @@
         (let ([x (read p)])
           (cond
             [(eof-object? x) acc]
-            [(and (pair? x) (eq? (car x) 'define-foreign)
+            [(and (pair? x)
+                  (memq (car x) '(define-foreign define-foreign/any-thread
+                                  define-foreign/collect-safe))
                   (string-prefix? "SDL_" (caddr x))
                   ;; plain memory: kept
                   (not (member (caddr x) '("SDL_memcmp" "SDL_memcpy"))))
