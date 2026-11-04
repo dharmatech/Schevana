@@ -1878,7 +1878,7 @@
 ;; The List: a table of the visible tasks.
 (define (tasks-table v visible today x y w h)
   (let* ([ui (tasks-view-ui v)] [pad (ui-pad)]
-         [columns (tasks-list-columns (- w pad pad))]
+         [columns (tasks-list-columns (ui-table-room (- w pad pad)))]
          [title-w (caddr (assq 'title (ui-table-columns ui 'table
                                                          columns)))])
     (ui-draw-surface (+ x pad) (+ y pad) (- w pad pad) (- h pad pad) '(well))
@@ -1938,7 +1938,8 @@
           (up (hashtable-ref homes id #f)))))
     (ui-draw-surface (+ x pad) (+ y pad) (- w pad pad) (- h pad pad) '(well))
     (ui-tree ui 'tree (+ x pad) (+ y pad 4) (- w pad pad) (- h pad pad 8)
-             (tasks-tree-columns (- w pad pad)) roots children at
+             (tasks-tree-columns (ui-table-room (- w pad pad)))
+             roots children at
              (lambda (node)
                (tasks-pick! v node)
                (when (tasks-narrow? v) (tasks-view-page?-set! v #t)))

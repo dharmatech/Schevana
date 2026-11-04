@@ -192,17 +192,28 @@ for host events, then events, timers, processes, ticks, the frame and
 its upload), and it is level 1: Schevana's own accounting, with nothing
 in an app's code instrumented.
 
-- **Steps:** the last 10 seconds in columns of equal time, each showing
-  the slowest step that ended in it, its time stacked by phase (events,
-  timers, processes, ticks, render, present and the collector; idle,
-  mostly the wait for host events, left out), with a line at a frame's
-  16.7 ms; the scale doubles from two frames as slow steps need. Hover
-  a column for what its step spent: its phases and its three largest
-  consumers; click it to pause there.
+- **Steps:** a bar a step, all of its time, stacked by phase: events,
+  timers, processes, ticks, render, present, the collector, and the two
+  waits, for input (the step's wait for host events) and for the screen
+  (presenting a frame with vsync on), in muted colors. A wait delays
+  the next frame as much as work does, so both count. The work is at
+  the bottom, the phase that spent the most over the graph lowest and
+  first in the legend, and the waits above it, so that a bar past the
+  top loses a wait, never work. A line marks a frame of the screen's
+  (16.7 ms at 60 Hz, from its refresh rate) and the top is two. A step
+  a frame late is flagged at the top: its time, its wait for input
+  aside, past one and a half frames (`profile-step-late?`). Not just
+  past one, for a step that draws ends about at a refresh, a little
+  before or after it, and one that missed a refresh waited for the
+  next; nor the wait for input, which input ends at once. All of it is
+  whole ns and pixels, no float. Hover a bar for where its time went:
+  its step, how long it took and whether it was a frame late, its
+  phases and its three largest consumers; click it to pause there.
 - **Consumers:** every window, surface (the desktop, the bars, the menu,
   the toasts) and process, and the collector, by milliseconds a second
   over the last 5 seconds, with the average and the longest a step, the
-  calls a second and a line of the last minute. A window's row opens to
+  calls a second and a line of the last minute; hover a heading for
+  what its column means. A window's row opens to
   its handlers (`draw`, `tick`, `key`, ...) and its frame, the style's
   drawing around the content; a surface's to its draw and its tick. A
   row selected shows its share of every bar. A window's name focuses
@@ -214,31 +225,38 @@ in an app's code instrumented.
 
 At the top, Profiling turns the profiler on or off for the whole world
 (`(profiling! #f)`), Pause holds Monitor's view still (the profiler goes
-on), Clear forgets the history, and two menus say how long it is: every
-step of the last 30 seconds (at most 100 a second of them) and each
-second's sums for the last 10 minutes, by default (`(profile-history! 30
-10)`). With profiling off, Monitor lists the windows (a click focuses
-one) and the processes (a click kills one), the heap and the last
-frame's time.
+on), Clear forgets the history, and two menus say how long the history
+is: every step of the last 30 seconds (at most 100 a second of them)
+and each second's sums for the last 10 minutes, by default
+(`(profile-history! 30 10)`). With profiling off, Monitor lists the
+windows (a click focuses one) and the processes (a click kills one),
+the heap and the last frame's time.
 
 The history is data, read in place: `(profile-steps)` and
 `(profile-seconds)` give the steps kept and the seconds done as seqs,
 the newest first; `(profile-step-ms seq)`, `(profile-step-phase-ms seq
-'render)`, `(profile-step-ref seq 'heap)` and `(profile-step-uses seq)`
+'render)`, `(profile-step-phases seq)` (where its time went, waits too,
+the most first), `(profile-step-ref seq 'heap)` and
+`(profile-step-uses seq)`
 (what each key spent: a window's handler, a surface, a process) read a
 step, and `profile-second-ms`, ... a second; `(profile-totals seconds)`
 sums seconds by subject, the most first, each with its parts, and
-`(profile-totals steps #t)` steps. The steps go into a ring of 2
-minutes, each second's sums into one of an hour and the last minute's
+`(profile-totals steps #t)` steps. The same as Monitor's Steps, for a
+reader without eyes (a headless agent, a test): `(profile-slow-steps)`
+gives the steps a frame late, by a frame of the screen's
+(`(host-frame-ns)`), so `(map profile-step-phases (profile-slow-steps))` says where each late
+frame's time went, and `(profile-totals (profile-slow-steps) #t)` who
+spent it. The steps go into a ring of 2 minutes, each second's sums into one of an hour and the last minute's
 uses into one of their own, all made once; a window or a process is
 kept by its id, with its title or name when first seen, so the history
 keeps no closed window or ended process alive. Monitor
 draws all of it with the widget kit: its charts (`ui-bar-chart`,
 `ui-draw-line-chart`, `ui-draw-sparkline`, `ui-draw-legend`), its tree,
 its tables and its labels. A chart's series are the kit's color
-settings `chart-1` to `chart-8`, from the palette's hues, and
-`chart-mark`, `chart-share` and `chart-rule` its mark, its share and its
-reference lines: Genera and the CADR, which have no color, give them as
+settings `chart-1` to `chart-8`, from the palette's hues,
+`chart-muted-1` and `chart-muted-2` for what is not work, and
+`chart-mark`, `chart-share`, `chart-rule` and `chart-flag` its mark,
+its share, its reference lines and a flag over a bar: Genera and the CADR, which have no color, give them as
 stipples of ink.
 
 ## Your own apps, styles, palettes and wallpapers

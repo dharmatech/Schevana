@@ -6,8 +6,10 @@
 ;;; The unit is a step (schevana-step!). In it each span (a phase of the
 ;;; main loop, a window's handler or drawing, a surface's draw or tick, a
 ;;; process's turn, the collector) keeps its self time: its time less
-;;; the spans inside it, so that the parts add up to the step; idle is
-;;; the step's own (mostly the wait for host events). Each step's sums go
+;;; the spans inside it, so that the parts add up to the step; two are
+;;; waits, input-wait the step's own (mostly the wait for host events)
+;;; and vsync-wait the screen's (presenting a frame, with vsync on), for
+;;; a wait delays the next frame as much as work. Each step's sums go
 ;;; into a ring of the last 30 seconds (at most 100 steps a second, and
 ;;; as many uses as its ring holds), and into per-second sums kept for 10
 ;;; minutes, with what each key spent for the last minute.
@@ -15,6 +17,8 @@
 ;;;   (profiling! #f)            off: no records, no clock reads; #t: on
 ;;;   (profile-history! 30 10)   seconds of steps, minutes of seconds
 ;;;   (profile-totals (profile-seconds))   by subject, the most first
+;;;   (map profile-step-phases (profile-slow-steps))   the steps a frame
+;;;                              late, and where their time went
 ;;;
 ;;; In the hot path it allocates nothing: the clock is fixnum ns (now-ns),
 ;;; the spans open a stack of fixed depth, a step's and a second's sums go
@@ -45,7 +49,8 @@
 
 ;; A step's phases, by index: its self times go to them.
 (define profile-phase-names
-  '#(idle event timers procs tick render present gc other))
+  '#(input-wait event timers procs tick render present gc other vsync-wait))
+(define profile-phase-count (vector-length profile-phase-names))
 
 (define (profile-phase-index key)
   (case key
@@ -152,12 +157,12 @@
   (nongenerative schevana-profile-ring)
   (fields seqs fields phases))   ; fields: a vector of fxvectors
 
-;; A ring of n slots, each its seq, k fields and 9 phases.
+;; A ring of n slots, each its seq, k fields and its phases.
 (define (profile-new-ring n k)
   (make-profile-ring (make-fxvector n -1)
                      (list->vector (map (lambda (i) (make-fxvector n 0))
                                         (iota k)))
-                     (make-fxvector (fx* n 9) 0)))
+                     (make-fxvector (fx* n profile-phase-count) 0)))
 
 ;; A step's fields: its end and length (ns), collections, their ns, bytes
 ;; allocated, heap, and where its uses start in their ring and how many.
@@ -242,7 +247,7 @@
 (defvar *profile-depth* 0)
 (defvar *profile-past* 0)
 ;; this step's self time by phase, and its uses
-(defvar *profile-phase-ns* (make-fxvector 9 0))
+(defvar *profile-phase-ns* (make-fxvector profile-phase-count 0))
 (defvar *profile-step-table* (profile-new-table 512))
 ;; the second's uses and subjects
 (defvar *profile-second-table* (profile-new-table 1024))
@@ -304,8 +309,9 @@
 
 ;; The span at depth d closes, and those above it with it: their time is
 ;; its own, and what closed inside them is inside it, so the books add
-;; up. Its self time goes to its phase (the collector's to gc) and to its
-;; use; the step's closes the step.
+;; up. Its self time goes to its phase (the collector's to gc, the wait
+;; for the screen's to vsync-wait) and to its use; the step's closes the
+;; step.
 (define (profile-close! d)
   (let ([now (now-ns)] [inner *profile-inner*])
     (do ([j (fx- *profile-depth* 1) (fx- j 1)]) ((fx<= j d))
@@ -320,7 +326,9 @@
           (profile-end-step! now ns self)
           (begin
             (profile-fx+! inner (fx- d 1) ns)
-            (profile-fx+! *profile-phase-ns* (if (eq? key 'gc) 7 phase) self)
+            (profile-fx+! *profile-phase-ns*
+                          (case key [(gc) 7] [(vsync-wait) 9] [else phase])
+                          self)
             (profile-tally! *profile-step-table*
                             (fx+ *profile-step-newest* 1) key
                             (vector-ref *profile-parts* d) phase self 1))))))
@@ -335,15 +343,17 @@
 
 ;;; ------------------------------------------------------------------ steps
 
-;; The step ended at now, ns long, idle of it its own. Its books are kept
-;; under one guard: an error turns the profiler off, and is said once.
+;; The step ended at now, ns long, idle of it its own (its input-wait).
+;; Its books are kept under one guard: an error turns the profiler off,
+;; and is said once.
 (define (profile-end-step! now ns idle)
   (guard (c [#t (profiling! #f) (report-error! 'profiler c)])
     (profile-fx+! *profile-phase-ns* 0 idle)
     (profile-second-at! now)
     (profile-step-done! now ns)
     (profile-clear-table! *profile-step-table*)
-    (do ([i 0 (fx+ i 1)]) ((fx= i 9)) (fxvector-set! *profile-phase-ns* i 0))
+    (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
+      (fxvector-set! *profile-phase-ns* i 0))
     (profile-trim-steps! now)))
 
 ;; The step's slot in the ring: its fields and phases, its uses into the
@@ -372,10 +382,12 @@
     (fxvector-set! m 0 gcs)
     (fxvector-set! m 1 allocated)
     (fxvector-set! m 2 *profile-gc-ns*)
-    (do ([i 0 (fx+ i 1)]) ((fx= i 9))
+    (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
       (let ([n (fxvector-ref *profile-phase-ns* i)])
-        (fxvector-set! (profile-ring-phases r) (fx+ (fx* slot 9) i) n)
-        (profile-fx+! (profile-ring-phases sr) (fx+ (fx* s 9) i) n)))
+        (fxvector-set! (profile-ring-phases r)
+                       (fx+ (fx* slot profile-phase-count) i) n)
+        (profile-fx+! (profile-ring-phases sr)
+                      (fx+ (fx* s profile-phase-count) i) n)))
     (do ([j 0 (fx+ j 1)]) ((fx= j count))
       (let* ([i (fxvector-ref (profile-table-used t) j)]
              [key (vector-ref (profile-table-keys t) i)]
@@ -452,8 +464,9 @@
         (for-each (lambda (name) (profile-ring-set! r names name slot 0))
                   names)
         (profile-ring-set! r names 'second slot second)
-        (do ([i 0 (fx+ i 1)]) ((fx= i 9))
-          (fxvector-set! (profile-ring-phases r) (fx+ (fx* slot 9) i) 0))
+        (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
+          (fxvector-set! (profile-ring-phases r)
+                         (fx+ (fx* slot profile-phase-count) i) 0))
         (set! *profile-second-now* seq)
         (set! *profile-second-oldest*
           (fxmax *profile-second-oldest*
@@ -491,7 +504,8 @@
     (set! *profile-depth* 0)
     (set! *profile-past* 0)
     (profile-clear-table! *profile-step-table*)
-    (do ([i 0 (fx+ i 1)]) ((fx= i 9)) (fxvector-set! *profile-phase-ns* i 0))
+    (do ([i 0 (fx+ i 1)]) ((fx= i profile-phase-count))
+      (fxvector-set! *profile-phase-ns* i 0))
     (fxvector-set! *profile-memory* 0 (collections))
     (fxvector-set! *profile-memory* 1 (+ (bytes-allocated)
                                          (bytes-deallocated)))
@@ -533,9 +547,12 @@
         acc
         (loop (fx+ seq 1) (cons seq acc)))))
 
-;; The newest step kept, or #f.
+;; The newest step kept, or the oldest; or #f.
 (define (profile-newest-step)
   (and (profile-step-kept? *profile-step-newest*) *profile-step-newest*))
+
+(define (profile-oldest-step)
+  (and (profile-step-kept? *profile-step-oldest*) *profile-step-oldest*))
 
 (define (profile-step-kept? seq)
   (and (fx>= seq *profile-step-oldest*) (fx<= seq *profile-step-newest*)))
@@ -555,6 +572,14 @@
                              (profile-slot-of r seq))])
     (if (memq name '(end ms longest gc-ms)) (profile-ms v) v)))
 
+;; A step's end, length or phase as kept: whole ns, by the clock (now-ns).
+(define (profile-step-ns seq name)   ; end or ns
+  (profile-ring-ref *profile-steps-ring* profile-step-fields name
+                    (profile-slot-of *profile-steps-ring* seq)))
+
+(define (profile-step-phase-ns seq phase)
+  (profile-phase-ns *profile-steps-ring* seq phase))
+
 (define (profile-step-end seq) (profile-step-ref seq 'end))
 (define (profile-step-ms seq) (profile-step-ref seq 'ms))
 
@@ -566,15 +591,48 @@
   (profile-phase-ms *profile-seconds-ring* seq phase))
 
 (define (profile-phase-ms r seq phase)
+  (profile-ms (profile-phase-ns r seq phase)))
+
+(define (profile-phase-ns r seq phase)
   (let loop ([i 0])
     (if (eq? (vector-ref profile-phase-names i) phase)
-        (profile-ms (fxvector-ref (profile-ring-phases r)
-                                  (fx+ (fx* (profile-slot-of r seq) 9) i)))
+        (fxvector-ref (profile-ring-phases r)
+                      (fx+ (fx* (profile-slot-of r seq) profile-phase-count)
+                           i))
         (loop (fx+ i 1)))))
 
-;; A step's time but idle.
+;; A step's time but its waits.
 (define (profile-busy seq)
-  (- (profile-step-ms seq) (profile-step-phase-ms seq 'idle)))
+  (- (profile-step-ms seq) (profile-step-phase-ms seq 'input-wait)
+     (profile-step-phase-ms seq 'vsync-wait)))
+
+;; Where step seq's time went: ((phase . ns) ...), every phase that took
+;; any (its waits too), the most first. They add up to the step's ns.
+(define (profile-step-phases seq)
+  (list-sort (lambda (a b) (fx> (cdr a) (cdr b)))
+             (filter (lambda (p) (fx> (cdr p) 0))
+                     (map (lambda (phase)
+                            (cons phase (profile-step-phase-ns seq phase)))
+                          (vector->list profile-phase-names)))))
+
+;; Was step seq a frame late: its time, its wait for input aside (input
+;; ends that at once, and after a frame it ends when the next is due),
+;; past one and a half frames of frame-ns? Half past, not just past: a
+;; step that draws ends about at a refresh, a little before or after it,
+;; and one that missed a refresh waited for the next.
+(define (profile-step-late? seq frame-ns)
+  (fx> (fx* 2 (fx- (profile-step-ns seq 'ns)
+                   (profile-step-phase-ns seq 'input-wait)))
+       (fx* 3 frame-ns)))
+
+;; The steps kept a frame late (frame-ns, by default the screen's:
+;; host-frame-ns), the newest first.
+(define profile-slow-steps
+  (case-lambda
+    [() (profile-slow-steps (host-frame-ns))]
+    [(frame-ns)
+     (filter (lambda (seq) (profile-step-late? seq frame-ns))
+             (profile-steps))]))
 
 ;; A use's subject as readers see it: (window . id), (process . id), or
 ;; the key itself; profile-subject-of gives a live window's or process's.
@@ -660,14 +718,14 @@
       (eqv? key subject)))
 
 ;; What a node spent in count entries of e from at, read in place: a
-;; subject's ms, or with use, (part phase), that use's.
-(define (profile-node-ms e at count held subject use)
+;; subject's ns, or with use, (part phase), that use's.
+(define (profile-node-ns e at count held subject use)
   (let ([n (vector-length (vector-ref e 0))])
     (if (fx< at (fx- held n))
-        0.0
+        0
         (let loop ([j 0] [ns 0])
           (if (fx= j count)
-              (profile-ms ns)
+              ns
               (let* ([i (fxmodulo (fx+ at j) n)]
                      [part (vector-ref (vector-ref e 1) i)])
                 (loop (fx+ j 1)
@@ -684,19 +742,23 @@
                           (fx+ ns (fxvector-ref (vector-ref e 3) i))
                           ns))))))))
 
-;; What node, a subject or (subject part phase), spent in a step, or a
-;; second of the last minute.
-(define (profile-step-node-ms seq node)
-  (profile-node-ms *profile-step-uses* (profile-step-ref seq 'start)
+;; What node, a subject or (subject part phase), spent in a step (ms, or
+;; whole ns), or a second of the last minute.
+(define (profile-step-node-ns seq node)
+  (profile-node-ns *profile-step-uses* (profile-step-ref seq 'start)
                    (profile-step-ref seq 'count) *profile-step-entries*
                    (if (and (pair? node) (pair? (cdr node))) (car node) node)
                    (and (pair? node) (pair? (cdr node)) (cdr node))))
 
+(define (profile-step-node-ms seq node)
+  (profile-ms (profile-step-node-ns seq node)))
+
 (define (profile-second-node-ms seq node)
-  (profile-node-ms *profile-second-uses* (profile-second-ref seq 'start)
-                   (profile-second-ref seq 'count) *profile-second-entries*
-                   (if (and (pair? node) (pair? (cdr node))) (car node) node)
-                   (and (pair? node) (pair? (cdr node)) (cdr node))))
+  (profile-ms
+   (profile-node-ns *profile-second-uses* (profile-second-ref seq 'start)
+                    (profile-second-ref seq 'count) *profile-second-entries*
+                    (if (and (pair? node) (pair? (cdr node))) (car node) node)
+                    (and (pair? node) (pair? (cdr node)) (cdr node)))))
 
 ;; What subject spent in uses.
 (define (profile-subject-ms uses subject)

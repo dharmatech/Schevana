@@ -4898,6 +4898,38 @@
                        (and (eqv? prev 2) (loop (cdr s) 'over (+ overs 1)))]
                       [else (loop (cdr s) (car s) overs)])))))))
 
+(check "a string among a column's flags is its heading's tooltip, sorted \
+        or not, and never one of its cells' flags"
+       (let* ([ui (make-ui)] [flags '()]
+              [table (lambda (on-sort)
+                       (lambda (win w h)
+                         (ui-begin! ui)
+                         (apply ui-table ui 't 0 0 w h
+                                '((a "A" 100 right "What A means") (b "B" 100))
+                                '(1 2) #f void
+                                (lambda (row k x y w h fl)
+                                  (set! flags (append fl flags)))
+                                (if on-sort (list 'on-sort on-sort) '()))
+                         (ui-end! ui w h)))]
+              [tip-of (lambda (key)
+                        (let ([r (ui-find ui (list 't 'header key))])
+                          (and r (ui-region-tip r))))]
+              [win (apply open-window "T" 'size '(300 . 200) 'pos '(100 . 100)
+                          'ui ui 'draw (table #f) (ui-handlers ui))])
+         (steps 2)
+         (let ([plain (list (tip-of 'a) (tip-of 'b))])
+           (window-on! win 'draw (table void))
+           (invalidate! win)
+           (steps 2)
+           (let ([sorted (list (tip-of 'a) (tip-of 'b))])
+             (close-window! win)
+             (steps 1)
+             (printf "  ~s ~s\n" plain sorted)
+             (and (equal? plain '("What A means" #f))
+                  (equal? sorted '("What A means" #f))
+                  (memq 'right flags)
+                  (not (exists string? flags)))))))
+
 (check "Tasks' marks and avatars are a style's: Genera leaves out a status's \
         mark (its word is beside it) and an avatar beside the name, else \
         the initials in a lozenge"
@@ -5934,7 +5966,10 @@
                    (printf "  ~s\n" (list plot (assq 'bar areas) hovered
                                           pressed given))
                    (and (= (car plot)
-                           (+ 10 12 (widest-text (map cdr rules) 'ui-small)))
+                           (exact (ceiling (+ 10 12 (widest-text (map cdr rules)
+                                                                 'ui-small)))))
+                        (for-all (lambda (v) (and (exact? v) (integer? v)))
+                                 plot)
                         (= (cadr (assq 'bar areas)) 6)
                         (= 1 (cadr (assq 'bar (ui-bar-chart-areas
                                                10 10 300 100 1000 rules))))
@@ -5945,6 +5980,35 @@
                                 '(marked #f #f #f #f))
                         (equal? (map cadr (cadr given)) '(#f #f 1 #f #f))
                         (equal? (cddr given) (list 20 rules))))))))))
+
+(check "the bar chart's tooltip: asked only for the bar under the pointer, \
+        by its index, and shown once the pointer rests"
+       (let* ([rules '((10 . "10 ms"))]
+              [bars (map (lambda (i) (cons (list (cons 'chart-1 5)) #f))
+                         (iota 5))]
+              [asked '()])
+         (let-values ([(win ui) (chart-test-window
+                                 (lambda (ui)
+                                   (ui-bar-chart ui 'chart 10 10 300 100 bars
+                                                 10 rules #f void
+                                                 'tip (lambda (i)
+                                                        (set! asked
+                                                          (cons i asked))
+                                                        (format "bar ~a" i)))))]
+                      [(bx bw) (ui-bar-chart-bar (ui-bar-chart-areas
+                                                  10 10 300 100 5 rules)
+                                                 5 1)])
+           (steps 2)
+           (let ([before asked])
+             (let-values ([(cx cy cw ch) (content-rect win)])
+               (inject! `(mouse-move ,(+ cx bx (/ bw 2)) ,(+ cy 60)))
+               (steps 2)
+               (let ([r (ui-find ui '(chart 1))] [o (ui-find ui '(chart 2))])
+                 (close-window! win)
+                 (and (null? before)
+                      (for-all (lambda (i) (= i 1)) asked)
+                      (equal? (ui-region-tip r) "bar 1")
+                      (not (ui-region-tip o)))))))))
 
 (check "the sparkline: values as a line, in chart-share when its row is \
         selected; its look is the ui-draw-sparkline part's"
@@ -6076,7 +6140,7 @@
                                (profile-test-busy 3)))))))]
               [use (lambda (k) (profile-use-ms
                                 (car (profile-test-uses s k))))])
-         (and (< 0.5 (profile-step-phase-ms s 'idle) 1.5)
+         (and (< 0.5 (profile-step-phase-ms s 'input-wait) 1.5)
               (< 1.5 (use 'render) 2.5)
               (< 2.5 (use 'profile-test-inner) 3.5)
               (eq? (profile-use-phase (car (profile-test-uses
@@ -6092,7 +6156,7 @@
 (let ([life-win (life)])
   (move-window! life-win 600 300)
   (check "every step of the world adds up: its phases to its time, its uses \
-          and idle too, no part below 0"
+          and its input-wait too, no part below 0"
          (let ([ss (profile-test-steps (lambda () (steps 20)))])
            (close-window! life-win)
            (and (= (length ss) 20)
@@ -6102,7 +6166,7 @@
                      (and (profile-test-near? (apply + (profile-test-phases s))
                                               (profile-step-ms s))
                           (profile-test-near?
-                           (+ (profile-step-phase-ms s 'idle)
+                           (+ (profile-step-phase-ms s 'input-wait)
                               (apply + (map profile-use-ms uses)))
                            (profile-step-ms s))
                           (for-all (lambda (u) (>= (profile-use-ms u) 0))
@@ -6343,13 +6407,118 @@
                  (profile-clear!)
                  (and long now later most)))))))
 
+(check "Monitor's Consumers fit their columns to the tree's room: the last \
+        (the minute's lines) ends clear of a scroll bar always shown"
+       (let* ([m (monitor)] [ui (window-ref m 'ui)])
+         (steps 3)
+         (let-values ([(cx cy cw ch) (content-rect m)])
+           (let* ([r (ui-find ui '(consumers header spark))]
+                  [end (and r (+ (ui-region-x r) (ui-region-w r)))]
+                  [room (- cw (ui-pad) (ui-scrollbar-inset 'right))])
+             (close-window! m)
+             (steps 1)
+             (printf "  ~s ~s\n" end room)
+             (and end (> (ui-scrollbar-inset 'right) 0) (<= end room))))))
+
+;;; The Steps: a bar a step, its waits too, against a frame.
+
+
+(check "a step's waits are phases of their own, the screen's too, so that \
+        its phases add up to it; profile-step-phases says where its time \
+        went, the most first, and profile-slow-steps the steps a frame \
+        late: past one and a half frames, its wait for input aside; \
+        Monitor stacks its bars' work the same way, its waits above, and \
+        its tooltip says the same"
+       (let* ([real now-ns] [fake (* 1000 1000000000)]
+              [clock (lambda (ns) (set! fake (+ fake ns)))]
+              [win (open-window "Grower" 'size '(120 . 80) 'pos '(600 . 400))])
+         ;; a step by hand, as the main loop's (a window's handlers run in
+         ;; an engine, where spans are untimed): 10 ms waiting for input
+         ;; (the step's own), 1 of ticks, 3 of the window's drawing, and 2
+         ;; waiting for the screen in present
+         (set! now-ns (lambda () fake))
+         (profile-clear!)
+         (with-profile-span 'step #f
+           (clock 10000000)
+           (with-profile-span 'tick #f (clock 1000000))
+           (with-profile-span 'render #f
+             (with-profile-span (window-id win) #f (clock 3000000)))
+           (with-profile-span 'present #f
+             (with-profile-span 'vsync-wait #f (clock 2000000))))
+         (set! now-ns real)
+         (let* ([seq (profile-newest-step)]
+                [phases (profile-step-phases seq)]
+                [index (lambda (p) (list-index (lambda (q) (eq? (car q) p))
+                                               monitor-phases))]
+                [order (monitor-bars-order (list seq))]
+                ;; the step ended at 12:00:03.400 of the day
+                [zero (- (+ (* 1000 (+ (* 12 3600) 3)) 400)
+                         (quotient (profile-step-ns seq 'end) 1000000))]
+                [tip (monitor-step-tip seq zero 16666666)]
+                [late (monitor-step-tip seq zero 3000000)]
+                [lines (list (format "step ~a, ended 12:00:03.400" seq)
+                             "16 ms, in time (a frame is 16.7 ms)"
+                             "waiting for input 10 ms" "render 3 ms"
+                             "waiting for the screen 2 ms" "ticks 1 ms"
+                             "Grower 3.00 ms")])
+           (close-window! win)
+           (printf "  ~s\n  ~s\n" phases tip)
+           (and (equal? phases '((input-wait . 10000000) (render . 3000000)
+                                 (vsync-wait . 2000000) (tick . 1000000)))
+                (= (profile-step-ns seq 'ns) (apply + (map cdr phases)))
+                ;; every phase of the profiler's a series of the bars'
+                (= (length monitor-phases) profile-phase-count)
+                (for-all (lambda (p) (assq p monitor-phases))
+                         (vector->list profile-phase-names))
+                ;; 6 ms without the input wait: late past frames of 4 ms
+                (member seq (profile-slow-steps 3999999))
+                (not (member seq (profile-slow-steps 4000000)))
+                (not (member seq (profile-slow-steps 5000000)))
+                (fixnum? (host-frame-ns))
+                ;; the work by what it spent, the waits above it
+                (equal? order (map index '(render tick input-wait vsync-wait)))
+                ;; the kit's tooltip shows it a line each, as it is
+                (equal? (ui-tooltip-lines tip) lines)
+                (equal? (cadr (ui-tooltip-lines late))
+                        "16 ms, a frame late (a frame is 3 ms)")
+                (= 9 (length (ui-tooltip-lines
+                              "1\n2\n3\n4\n5\n6\n7\n8\n9")))))))
+
+(check "a bar chart flags at its top the bars 'flagged says, in chart-flag"
+       (let* ([ui (make-ui)] [seen '()]
+              [win (apply open-window "F" 'size '(300 . 160) 'pos '(100 . 100)
+                          'ui ui
+                          'draw (lambda (win w h)
+                                  (ui-begin! ui)
+                                  (ui-bar-chart ui 'f 0 0 w h
+                                                (map (lambda (i)
+                                                       (cons '((chart-1 . 5))
+                                                             #f))
+                                                     (iota 4))
+                                                10 '() #f void
+                                                'flagged (lambda (i) (= i 2)))
+                                  (ui-end! ui w h))
+                          (ui-handlers ui))])
+         (with-test-styles
+          (lambda ()
+            (define-style test-flags "Test"
+              'ui-draw-bar-chart
+              (lambda (x y w h flags bars top rules)
+                (set! seen (map cadddr bars))))
+            (set-style! 'test-flags)
+            (invalidate! win)
+            (steps 2)))
+         (close-window! win)
+         (steps 1)
+         (equal? seen '(#f #f #t #f))))
+
 (check "the charts' colors are colors in every style; Settings' Colors tab \
         lists none of them, and its colors still go to hue and back"
        (let ([keys (filter (lambda (k)
                              (string-prefix? "chart-" (symbol->string k)))
                            color-keys)]
              [listed (apply append (map cdr (theme 'color-groups)))])
-         (and (= (length keys) 11)
+         (and (= (length keys) 14)
               (for-all
                (lambda (s)
                  (with-style (style-name s)

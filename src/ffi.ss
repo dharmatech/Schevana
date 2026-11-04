@@ -124,6 +124,10 @@
 (define-foreign sdl-render-texture "SDL_RenderTexture"
   (uptr uptr uptr uptr) bool)
 (define-foreign sdl-render-present "SDL_RenderPresent" (uptr) bool)
+(define-foreign sdl-get-display-for-window "SDL_GetDisplayForWindow"
+  (uptr) unsigned-32)
+(define-foreign sdl-get-current-display-mode "SDL_GetCurrentDisplayMode"
+  (unsigned-32) uptr)
 (define-foreign sdl-poll-event "SDL_PollEvent" (uptr) bool)
 (define-foreign sdl-wait-event-timeout "SDL_WaitEventTimeout" (uptr int) bool)
 (define-foreign sdl-start-text-input "SDL_StartTextInput" (uptr) bool)

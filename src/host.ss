@@ -269,7 +269,22 @@
 ;; Back buffers are undefined after a present: the whole texture each time.
 (define (host-show-texture!)
   (sdl-render-texture *sdl-renderer* *sdl-texture* 0 0)
-  (sdl-render-present *sdl-renderer*))
+  ;; with vsync on, this waits for the screen: a phase of the profiler's
+  (with-profile-span 'vsync-wait #f (sdl-render-present *sdl-renderer*)))
+
+;; How long the screen shows a frame, ns: by its display's refresh rate
+;; (SDL_DisplayMode's numerator and denominator, at 24 and 28), or 60 Hz
+;; when SDL does not say (headless, say).
+(define (host-frame-ns)
+  (let* ([m (if (eq? *host* 'sdl)
+                (sdl-get-current-display-mode
+                 (sdl-get-display-for-window *sdl-window*))
+                0)]
+         [hz (if (= m 0) 0 (foreign-ref 'int m 24))]
+         [per (if (= m 0) 0 (foreign-ref 'int m 28))])
+    (if (and (> hz 0) (> per 0))
+        (quotient (* 1000000000 per) hz)
+        (quotient 1000000000 60))))
 
 (define (host-present-damage!)
   (let ([runs (cond [(eqv? *canvas* 0) '()]

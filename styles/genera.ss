@@ -774,7 +774,10 @@
   'chart-6 (stipple 'text #f "#..." "...." "..#." "....")
   'chart-7 (stipple 'text #f "##" ".#")
   'chart-8 'text
+  'chart-muted-1 (stipple 'text #f "#..." "...." "...." "....")
+  'chart-muted-2 (stipple 'text #f "#" "." "." ".")
   'chart-mark 'genera-gray
+  'chart-flag 'text
   ;; the feel
   'title-double-click 'none
   'bell 'screen

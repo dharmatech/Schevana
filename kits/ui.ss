@@ -1557,9 +1557,16 @@
 
 ;;; ------------------------------------------------------------------ table
 
+;; The width a table or tree w wide gives its columns: w less the room
+;; its scroll bar keeps (ui-scrollbar-inset), so that columns fitted to
+;; it stay clear of the bar.
+(define (ui-table-room w)
+  (- w (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right)))
+
 ;; columns: ((key title width flag ...) ...), each width a default the
 ;; user may drag (ui-table-columns), the flags its heading's and its
-;; cells' (right: aligned at the right, as numbers); rows: the app's
+;; cells' (right: aligned at the right, as numbers), and a string among
+;; them its heading's tooltip, what the column means; rows: the app's
 ;; values, selected the one eq? to it; a left press calls on-select. cell
 ;; draws a cell: (lambda (row key x y w h flags) ...), flags its row's and
 ;; its column's. opts: 'sort ((key . up|down) or #f), 'on-sort (key) on a
@@ -1572,7 +1579,7 @@
       (let* (;; the scroll view's, its bar in a margin the content keeps
              [sx x] [sw w]
              [x (+ sx (ui-scrollbar-inset 'left))]
-             [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [w (ui-table-room sw)]
              [columns (ui-table-columns ui id columns)]
              [hh (ui-table-header-height)] [rh (ui-table-row-height)]
              [sort (plist-ref opts 'sort #f)]
@@ -1610,7 +1617,7 @@
                     (let cells ([cs columns] [cx x])
                       (unless (null? cs)
                         (cell row (caar cs) cx ry (caddr (car cs)) rh
-                              (append flags (cdddr (car cs))))
+                              (append flags (ui-column-flags (car cs))))
                         (cells (cdr cs) (+ cx (caddr (car cs))))))
                     (when (eq? row selected)
                       (ui-draw-highlight-over x ry w rh '()))))))
@@ -1697,11 +1704,17 @@
             (ui-draw-table-divider line y h flags)))
         (loop (cdr cs) line)))))
 
+;; A column's flags, its tooltip aside; its tooltip (the string among
+;; them), or #f.
+(define (ui-column-flags c) (filter symbol? (cdddr c)))
+(define (ui-column-tip c) (find string? (cdddr c)))
+
 ;; The headings of table or tree id over columns from x, h high, cut to
-;; its view sx sw, and their handles; a column's flags are its heading's.
-;; With on-sort a left press on a heading calls (on-sort key), and the
-;; one sort names ((key . up|down), or #f) shows its direction. The first
-;; title starts at title-x: a tree's over its roots' cells.
+;; its view sx sw, and their handles; a column's flags are its heading's,
+;; and its tooltip the heading's. With on-sort a left press on a heading
+;; calls (on-sort key), and the one sort names ((key . up|down), or #f)
+;; shows its direction. The first title starts at title-x: a tree's over
+;; its roots' cells.
 (define (ui-table-headings! ui id sx sw x y h columns sort on-sort title-x)
   (ui-table-call-with-clip ui sx y sw h
     (lambda ()
@@ -1709,16 +1722,21 @@
         (unless (null? cs)
           (let* ([key (caar cs)] [cw (caddr (car cs))]
                  [hid (list id 'header key)]
-                 [tx (if (eq? cs columns) title-x cx)])
-            (when on-sort
-              (ui-pressable! ui hid cx y cw h (lambda () (on-sort key))
-                             '() '(focus keep) '((L . "Sort"))))
+                 [tx (if (eq? cs columns) title-x cx)]
+                 [flags (ui-column-flags (car cs))]
+                 [tip (ui-column-tip (car cs))])
+            (cond
+              [on-sort
+               (ui-pressable! ui hid cx y cw h (lambda () (on-sort key))
+                              '() (list 'focus 'keep 'tip tip)
+                              '((L . "Sort")))]
+              [tip (ui-region! ui hid cx y cw h 'tip tip)])
             (unless (= tx cx)
               (ui-draw-table-header cx y (- tx cx) h '() "" #f))
             (ui-draw-table-header tx y (- (+ cx cw) tx) h
                                   (if on-sort
-                                      (apply ui-flags ui hid (cdddr (car cs)))
-                                      (cdddr (car cs)))
+                                      (apply ui-flags ui hid flags)
+                                      flags)
                                   (cadar cs)
                                   (and sort (eq? (car sort) key) (cdr sort)))
             (loop (cdr cs) (+ cx cw)))))
@@ -1894,7 +1912,7 @@
       (let* (;; the scroll view's, its bar in a margin the content keeps
              [sx x] [sw w]
              [x (+ sx (ui-scrollbar-inset 'left))]
-             [w (- sw (ui-scrollbar-inset 'left) (ui-scrollbar-inset 'right))]
+             [w (ui-table-room sw)]
              [columns (ui-table-columns ui id columns)]
              [hh (ui-table-header-height)] [rh (ui-tree-row-height)]
              [tip (plist-ref opts 'tip (lambda (node w) #f))]
@@ -1971,11 +1989,11 @@
                                            '())))])
                     (ui-draw-tree-row x ry w rh flags w0 (ui-tree-row-depth r))
                     (cell node (caar columns) (car c) ry (caddr c) rh
-                          (append flags (cdddr (car columns))))
+                          (append flags (ui-column-flags (car columns))))
                     (let cells ([cs (cdr columns)] [cx (+ x w0)])
                       (unless (null? cs)
                         (cell node (caar cs) cx ry (caddr (car cs)) rh
-                              (append flags (cdddr (car cs))))
+                              (append flags (ui-column-flags (car cs))))
                         (cells (cdr cs) (+ cx (caddr (car cs))))))
                     (when (memq 'selected flags)
                       (ui-draw-highlight-over x ry w rh '())))))
@@ -2188,9 +2206,11 @@
 ;;; charts: stacked bars, lines, a sparkline, a legend
 ;;; A series is drawn in the color the app gives it: the kit's chart-1 to
 ;;; chart-8 are settings from the palette's hues, so a style gives its own
-;;; (Genera, which has no color, stipples). A mark behind a bar, a share
-;;; of the bars and the reference lines are chart-mark, chart-share and
-;;; chart-rule.
+;;; (Genera, which has no color, stipples), and chart-muted-1 and -2 two
+;;; quiet ones, for what is not work (time waited, say): a flat gray and
+;;; a lined one, apart by their texture in any palette. A mark behind a
+;;; bar, a share of the bars, the reference lines and a flag over a bar
+;;; are chart-mark, chart-share, chart-rule and chart-flag.
 
 (color-default! 'chart-1 'yellow)
 (color-default! 'chart-2 'orange)
@@ -2200,26 +2220,49 @@
 (color-default! 'chart-6 'teal)
 (color-default! 'chart-7 'red)
 (color-default! 'chart-8 'accent-2)
+(color-default! 'chart-muted-1 (alpha 'text 0.2))
+(color-default! 'chart-muted-2
+                (stipple (alpha 'text 0.5) (alpha 'text 0.12) "#" "." "."))
 (color-default! 'chart-mark (alpha 'text 0.12))
 (color-default! 'chart-share 'accent)
 (color-default! 'chart-rule 'text-faint)
+(color-default! 'chart-flag 'red)
 
 ;; A stacked bar chart, a bar a value (a step, say), the newest at the
 ;; right. bars, the oldest first: (segments . share), segments ((color .
 ;; value) ...) bottom up, share how much of the bar to show in chart-share
-;; (#f: none). top: the value at the chart's top; rules: ((value . label)
-;; ...), reference lines labeled in a scale at the left. The bar marked
-;; (its index, or #f) and the one under the pointer show a mark; a left
-;; press on a bar calls (on-press index). => the index of the bar under
-;; the pointer, or #f
-(define (ui-bar-chart ui id x y w h bars top rules marked on-press)
+;; (#f: none). Values are exact integers (ns, say): the bars' pixels are
+;; worked out in integers. top: the value at the chart's top; rules:
+;; ((value . label) ...), reference lines labeled in a scale at the left.
+;; The bar marked (its index, or #f) and the one under the pointer show a
+;; mark; a left press on a bar calls (on-press index). opts: 'tip, a
+;; procedure of a bar's index giving its tooltip (asked only for the bar
+;; under the pointer), or #f; 'flagged, one of a bar's index, true for a
+;; bar to flag at the chart's top (a step late, say). => the index of the
+;; bar under the pointer, or #f
+(define (ui-bar-chart ui id x y w h bars top rules marked on-press . opts)
   (let* ([n (length bars)] [areas (ui-bar-chart-areas x y w h n rules)]
-         [plot (cdr (assq 'plot areas))] [win (current-window)])
+         [plot (cdr (assq 'plot areas))] [win (current-window)]
+         [tip-of (plist-ref opts 'tip #f)]
+         [flagged? (plist-ref opts 'flagged (lambda (i) #f))]
+         [mx (ui-state-mx ui)] [my (ui-state-my ui)]
+         ;; the bar the pointer is over, by where the bars are
+         [under (and tip-of win (eq? (window-hover win) 'content)
+                     (point-in? mx my (car plot) (cadr plot) (caddr plot)
+                                (cadddr plot))
+                     (let ([bw (cadr (assq 'bar areas))])
+                       (let ([i (- n 1 (exact (floor
+                                               (/ (- (+ (car plot)
+                                                        (caddr plot))
+                                                     mx)
+                                                  bw))))])
+                         (and (<= 0 i) i))))])
     (for-each (lambda (i)
                 (let-values ([(bx bw) (ui-bar-chart-bar areas n i)])
                   (when (>= bx (car plot))
                     (ui-region! ui (list id i) bx (cadr plot) bw (cadddr plot)
                       'doc '((L . "Select"))
+                      'tip (and (eqv? i under) (tip-of i))
                       'on (lambda (ev)
                             (and (eq? (car ev) 'press)
                                  (eq? (list-ref ev 3) 'left)
@@ -2234,19 +2277,23 @@
                                 (list (car b) (cdr b)
                                       (cond [(eqv? i hover) 'hover]
                                             [(eqv? i marked) 'marked]
-                                            [else #f])))
+                                            [else #f])
+                                      (and (flagged? i) #t)))
                               bars (iota n))
                          top rules)
       hover)))
 
 ;; Its pieces: the plot, right of the scale's labels and 4 clear of the
-;; other edges, and the bars' width: whole pixels, at most 6, at least 1,
-;; for n bars. ((plot x y w h) (bar w))
+;; other edges, on whole pixels, and the bars' width: whole pixels, at
+;; most 6, at least 1, for n bars. ((plot x y w h) (bar w))
 (define-part (ui-bar-chart-areas x y w h n rules)
-  (let* ([g (+ 12 (widest-text (map cdr rules) 'ui-small))]
-         [pw (- w g 4)])
-    (list (list 'plot (+ x g) (+ y 4) pw (- h 4))
-          (list 'bar (max 1 (min 6 (floor (/ pw (max n 1)))))))))
+  (let* ([px (exact (ceiling (+ x 12 (widest-text (map cdr rules)
+                                                   'ui-small))))]
+         [py (exact (ceiling (+ y 4)))]
+         [pw (max 0 (exact (floor (- (+ x w) 4 px))))]
+         [ph (max 0 (exact (floor (- (+ y h) py))))])
+    (list (list 'plot px py pw ph)
+          (list 'bar (max 1 (min 6 (quotient pw (max n 1))))))))
 
 ;; Bar i of n by the areas: the newest at the plot's right; one left of
 ;; the plot does not fit. => (values x w)
@@ -2254,18 +2301,21 @@
   (let ([plot (cdr (assq 'plot areas))] [bw (cadr (assq 'bar areas))])
     (values (+ (car plot) (- (caddr plot) (* bw (- n i)))) bw)))
 
-;; bars: (segments share mark) each, mark hover, marked or #f; the
-;; segments of a color filled at once.
+;; bars: (segments share mark flag) each, mark hover, marked or #f, and
+;; flag true for a strip at the plot's top over the bar; the segments of
+;; a color filled at once. A segment's top is where the sum
+;; up to it rounds down to, in whole pixels, so that a bar's segments
+;; meet.
 (define-part (ui-draw-bar-chart x y w h flags bars top rules)
   (let* ([n (length bars)] [areas (ui-bar-chart-areas x y w h n rules)]
          [plot (cdr (assq 'plot areas))] [px (car plot)] [py (cadr plot)]
          [pw (caddr plot)] [ph (cadddr plot)] [bottom (+ py ph)]
-         [high (lambda (v) (* ph (/ (min v top) top)))]
+         [high (lambda (v) (if (> top 0) (div (* ph (min v top)) top) 0))]
          [rects (make-eq-hashtable)]   ; color -> ((x y w h) ...)
          [colors '()])                 ; the series', as they come
     (define (rect! color r)
       (unless (or (hashtable-contains? rects color)
-                  (memq color '(chart-mark chart-share)))
+                  (memq color '(chart-mark chart-share chart-flag)))
         (set! colors (cons color colors)))
       (hashtable-update! rects color (lambda (rs) (cons r rs)) '()))
     (ui-draw-surface x y w h '(well))
@@ -2275,24 +2325,30 @@
          (when (>= bx px)
            (let ([gap (if (>= bw 3) 1 0)])
              (when (caddr bar) (rect! 'chart-mark (list bx py bw ph)))
-             (fold-left (lambda (top-y s)
-                          (let ([sh (high (cdr s))])
-                            (rect! (car s)
-                                   (list bx (- top-y sh) (- bw gap) sh))
-                            (- top-y sh)))
-                        bottom (car bar))
+             (fold-left (lambda (sum s)
+                          (let* ([below (high sum)]
+                                 [above (high (+ sum (cdr s)))])
+                            (when (> above below)
+                              (rect! (car s)
+                                     (list bx (- bottom above) (- bw gap)
+                                           (- above below))))
+                            (+ sum (cdr s))))
+                        0 (car bar))
              (when (cadr bar)
                (let ([sh (high (cadr bar))])
                  (rect! 'chart-share
-                        (list bx (- bottom sh) (- bw gap) sh))))))))
+                        (list bx (- bottom sh) (- bw gap) sh))))
+             (when (cadddr bar)
+               (rect! 'chart-flag (list bx py (- bw gap) 3)))))))
      bars (iota n))
-    ;; the marks under the series, the share over them
+    ;; the marks under the series, the share and the flags over them
     (for-each (lambda (c)
                 (let ([rs (hashtable-ref rects c '())])
                   (when (pair? rs) (fill-rects rs c))))
-              (append '(chart-mark) (reverse colors) '(chart-share)))
+              (append '(chart-mark) (reverse colors)
+                      '(chart-share chart-flag)))
     (for-each (lambda (r)
-                (let ([ly (+ (- bottom (round (high (car r)))) 0.5)])
+                (let ([ly (+ (- bottom (high (car r))) 0.5)])
                   (draw-line px ly (+ px pw) ly 'chart-rule)
                   (draw-text (+ x 6) (- ly (/ (font-line-height 'ui-small) 2))
                              (cdr r) 'text-faint 'ui-small)))
@@ -2406,8 +2462,13 @@
                        (if selected? 2 1))))
 
 ;; A tooltip's lines: wrapped at 280, at most 6.
+;; A tooltip's lines: its text wrapped at 280, each of its own lines (a
+;; newline ends one) starting one; at most 6, or as many as it has.
 (define (ui-tooltip-lines text)
-  (let-values ([(lines cut?) (ui-wrap-lines text 280 'ui-small 6)]) lines))
+  (let ([n (fold-left (lambda (n c) (if (char=? c #\newline) (+ n 1) n))
+                      1 (string->list text))])
+    (let-values ([(lines cut?) (ui-wrap-lines text 280 'ui-small (max 6 n))])
+      lines)))
 
 (define-part (ui-tooltip-size text)
   (let ([lines (ui-tooltip-lines text)])

@@ -23,9 +23,10 @@
 ;; (a symbol, or a window's or a process's id) and part (a window
 ;; handler's kind, or #f; #t for a process's turn); (end outer?) closes
 ;; the span open innermost, or with outer? true (the step's end) the
-;; outermost, and any a raise left open. Five places run their work in
+;; outermost, and any a raise left open. Six places run their work in
 ;; with-profile-span: the step, safely, a window's handler (window-call)
-;; and drawing (draw-window-clipped), and a process's turn (run-procs!).
+;; and drawing (draw-window-clipped), a process's turn (run-procs!), and
+;; the wait for the screen (host-show-texture!).
 ;; Off, each costs a variable read and a branch; key and part are
 ;; computed only while the hook is set; nothing is allocated either way,
 ;; and nothing is kept across the work (a value live across an engine's

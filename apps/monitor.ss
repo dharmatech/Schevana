@@ -1,23 +1,28 @@
 ;;; apps/monitor.ss — the world, live: where its time and memory go, from
 ;;; the profiler (desktop/profile.ss), and its windows and processes.
 ;;;
-;;; Steps: the last 10 seconds in columns of equal time, each the slowest
-;;; step in it, its time but idle stacked by phase, and a line at a frame's
-;;; 16.7 ms; hover a column for what its step spent, click it to pause
-;;; there. Consumers: each window, surface and process,
-;;; and the collector, by ms a second over the last 5 seconds, with the
+;;; Steps: a bar a step, all its time (its waits too: a wait delays the
+;;; next frame as much as work), stacked by phase, the work's at the
+;;; bottom (the one that spent the most over the graph lowest) and the
+;;; waits above, against a line at a frame of the screen's, a step a
+;;; frame late (profile-step-late?) flagged at the top; hover a bar for
+;;; where its time went, click it to pause there. The profiler's API
+;;; tells the same (profile-slow-steps, profile-step-phases), for a
+;;; reader without eyes. Consumers: each window, surface and process, and the
+;;; collector, by ms a second over the last 5 seconds, with the
 ;;; average and longest a step, calls a second and the last minute; a
 ;;; window's row opens to its handlers and frame; a row selected shows
 ;;; its share of every bar; a window's name focuses it, a process's Kill
 ;;; kills it. Memory: the heap, the bytes allocated and the collector's
 ;;; time a second, over the seconds kept. At the top: Profiling (on or
 ;;; off for the whole world), Pause (this view only), Clear, and how long
-;;; the history is. With profiling off: the windows, the processes, the
-;;; heap, and how to turn it on. All of it is drawn by the widget kit:
-;;; its charts, tree, tables and labels.
+;;; the history is. With profiling off: the windows,
+;;; the processes, the heap, and how to turn it on. All of it is drawn by
+;;; the widget kit: its charts, tree, tables and labels.
 
-;; A bar's phases, bottom up: (phase color . label), each a series of
-;; the kit's charts.
+;; A bar's phases, all the profiler's (profile-phase-names), so that they
+;; add up to the step: (phase color . label), each a series of the kit's
+;; charts, the two waits in its muted colors.
 (define monitor-phases
   '((event chart-1 . "events")
     (timers chart-2 . "timers")
@@ -25,14 +30,16 @@
     (tick chart-4 . "ticks")
     (render chart-5 . "render")
     (present chart-6 . "present")
-    (gc chart-7 . "collector")))
+    (gc chart-7 . "collector")
+    (other chart-8 . "other")
+    (input-wait chart-muted-1 . "waiting for input")
+    (vsync-wait chart-muted-2 . "waiting for the screen")))
 
-;; How long the Steps show, and the Consumers sum, in seconds; a frame's
-;; time at 60 Hz, in ms; the Steps' columns' width, in pixels.
-(define monitor-steps-seconds 10)
+;; How long the Consumers sum, in seconds.
 (define monitor-consumer-seconds 5)
-(define monitor-frame-ms (/ 50.0 3))
-(define monitor-column-px 3)
+
+;; A bar's width in the Steps, pixels.
+(define monitor-bar-px 3)
 
 ;; The history's lengths Monitor offers: (label . seconds of steps), and
 ;; (label . minutes of seconds).
@@ -47,19 +54,66 @@
 
 ;;; ------------------------------------------------------------------ data
 
-;; The steps kept, from the seq newest back (the newest first), that
-;; ended after since, at most n of them: what Monitor looks at is bounded.
-(define (monitor-steps-back newest since n)
-  (let loop ([seq newest] [acc '()] [k 0])
-    (if (and (< k n) (profile-step-kept? seq)
-             (> (profile-step-end seq) since))
-        (loop (- seq 1) (cons seq acc) (+ k 1))
-        (reverse acc))))
+;; ns as words: "250 ms", "1.6 ms", "3.2 s", rounded to a tenth, in
+;; integers.
+(define (monitor-ns-text ns)
+  (let* ([s? (>= ns 1000000000)]
+         [t (quotient (+ ns (if s? 50000000 50000)) (if s? 100000000 100000))])
+    (format "~a~a ~a" (quotient t 10)
+            (if (zero? (remainder t 10)) "" (format ".~a" (remainder t 10)))
+            (if s? "s" "ms"))))
 
-;; A step's segments, bottom up: ((color . ms) ...).
-(define (monitor-segments step)
-  (map (lambda (p) (cons (cadr p) (profile-step-phase-ms step (car p))))
-       monitor-phases))
+;;; The Steps: a bar a step kept, by its seq, read in place from the
+;;; profiler's ring, in whole ns.
+
+;; Step seq's ns in phase j (of monitor-phases).
+(define (monitor-step-phase-ns seq j)
+  (profile-step-phase-ns seq (car (list-ref monitor-phases j))))
+
+;; The fixnums from a to z, z included.
+(define (monitor-range a z)
+  (let loop ([z z] [acc '()]) (if (fx< z a) acc (loop (fx- z 1) (cons z acc)))))
+
+;; The phases in the order the bars stack them, seqs the steps shown: the
+;; work's, the one that spent the most over them all first (at the
+;; bottom), so that the bands run on from bar to bar; then the waits, as
+;; monitor-phases has them, so that a bar past the graph's top loses a
+;; wait, never work. One that spent nothing, none (nor in the legend).
+;; => indexes into monitor-phases
+(define (monitor-bars-order seqs)
+  (let* ([totals (filter (lambda (t) (fx> (cdr t) 0))
+                         (map (lambda (j)
+                                (cons j (fold-left
+                                         (lambda (ns seq)
+                                           (fx+ ns (monitor-step-phase-ns
+                                                    seq j)))
+                                         0 seqs)))
+                              (iota (length monitor-phases))))]
+         [wait? (lambda (t)
+                  (memq (car (list-ref monitor-phases (car t)))
+                        '(input-wait vsync-wait)))])
+    (map car (append (list-sort (lambda (x y) (fx> (cdr x) (cdr y)))
+                                (remp wait? totals))
+                     (filter wait? totals)))))
+
+;; A time of day from ms since midnight: "12:00:03.400".
+(define (monitor-clock-text ms)
+  (let ([two (lambda (n) (if (< n 10) (format "0~a" n) (format "~a" n)))]
+        [ms (mod ms 86400000)])
+    (format "~a:~a:~a.~a" (two (quotient ms 3600000))
+            (two (remainder (quotient ms 60000) 60))
+            (two (remainder (quotient ms 1000) 60))
+            (let ([m (remainder ms 1000)])
+              (cond [(< m 10) (format "00~a" m)]
+                    [(< m 100) (format "0~a" m)]
+                    [else (format "~a" m)])))))
+
+;; The ms of the day at the profiler's clock's 0, by the clock now.
+(define (monitor-clock-zero)
+  (let ([d (current-date)] [ns (now-ns)])
+    (- (+ (* 3600000 (date-hour d)) (* 60000 (date-minute d))
+          (* 1000 (date-second d)) (quotient (date-nanosecond d) 1000000))
+       (quotient ns 1000000))))
 
 ;; A subject is (window . id), (process . id), a surface's name or gc:
 ;; the subjects Monitor lists.
@@ -119,30 +173,37 @@
         [(eq? phase 'render) "draw"]
         [else (symbol->string phase)]))
 
-;; What a step spent, in a line: its time, its phases, its three largest
-;; consumers.
-(define (monitor-step-words step newest)
-  (let* ([phases (filter (lambda (p) (>= (cdr p) 0.005))
-                         (map (lambda (p)
-                                (cons (cddr p)
-                                      (profile-step-phase-ms step (car p))))
-                              monitor-phases))]
-         [top (filter (lambda (t) (monitor-subject? (profile-total-what t)))
-                      (profile-totals (list step) #t))]
+;; Where step seq's time went, a bar's tooltip, a line each: when it
+;; ended (zero, the ms of the day at the clock's 0), how long it took
+;; and whether it was a frame late (frame, ns), its phases
+;; (profile-step-phases) and its three largest consumers, the most first.
+(define (monitor-step-tip seq zero frame)
+  (let* ([ns (profile-step-ns seq 'ns)]
+         [phases (filter (lambda (p) (>= (cdr p) 50000))   ; 0.1 ms shown
+                         (profile-step-phases seq))]
+         [top (filter (lambda (t) (and (monitor-subject? (profile-total-what t))
+                                       (>= (profile-total-ms t) 0.05)))
+                      (profile-totals (list seq) #t))]
+         [top (list-head top (min 3 (length top)))]
          [labels (monitor-labels (map profile-total-what top))])
-    (format "~,1f s ago: ~a of ~a ms~a~a"
-            (/ (- newest (profile-step-end step)) 1000)
-            (monitor-ms (profile-busy step)) (monitor-ms (profile-step-ms step))
-            (apply string-append
-                   (map (lambda (p) (format ", ~a ~a" (car p)
-                                            (monitor-ms (cdr p))))
-                        phases))
-            (apply string-append
-                   (map (lambda (t)
-                          (format "; ~a ~a"
-                                  (cdr (assoc (profile-total-what t) labels))
-                                  (monitor-ms (profile-total-ms t))))
-                        (list-head top (min 3 (length top))))))))
+    (define (list-of items)   ; (name . words) a line each
+      (apply string-append
+             (map (lambda (x) (format "\n~a ~a" (car x) (cdr x))) items)))
+    (string-append
+     (format "step ~a, ended ~a\n" seq
+             (monitor-clock-text
+              (+ zero (quotient (profile-step-ns seq 'end) 1000000))))
+     (format "~a, ~a (a frame is ~a)" (monitor-ns-text ns)
+             (if (profile-step-late? seq frame) "a frame late" "in time")
+             (monitor-ns-text frame))
+     (list-of (map (lambda (p)
+                     (cons (cddr (assq (car p) monitor-phases))
+                           (monitor-ns-text (cdr p))))
+                   phases))
+     (list-of (map (lambda (t)
+                     (cons (cdr (assoc (profile-total-what t) labels))
+                           (format "~a ms" (monitor-ms (profile-total-ms t)))))
+                   top)))))
 
 ;;; ------------------------------------------------------------------ the app
 
@@ -168,8 +229,9 @@
          [y (section y "Windows" "a click focuses one")]
          [wh (table-h (length wins) 8)])
     (ui-table ui 'monitor-windows x y w wh
-              `((id "Id" ,(* w 0.1)) (title "Title" ,(* w 0.38))
-                (app "App" ,(* w 0.2)) (geometry "Geometry" ,(* w 0.32)))
+              (let ([w (ui-table-room w)])
+                `((id "Id" ,(* w 0.1)) (title "Title" ,(* w 0.38))
+                  (app "App" ,(* w 0.2)) (geometry "Geometry" ,(* w 0.32))))
               wins #f focus-window!
               (cell (lambda (win key)
                       (case key
@@ -191,9 +253,11 @@
                                     (let l () (l)))) in a REPL")
                   (let ([ph (table-h (length (procs)) 4)])
                     (ui-table ui 'monitor-procs x y w ph
-                              `((id "Id" ,(* w 0.1)) (name "Name" ,(* w 0.38))
-                                (ticks "Ticks" ,(* w 0.2))
-                                (age "Running" ,(* w 0.32)))
+                              (let ([w (ui-table-room w)])
+                                `((id "Id" ,(* w 0.1))
+                                  (name "Name" ,(* w 0.38))
+                                  (ticks "Ticks" ,(* w 0.2))
+                                  (age "Running" ,(* w 0.32))))
                               (procs) #f kill!
                               (cell (lambda (p key)
                                       (case key
@@ -221,15 +285,21 @@
         [view #f]          ; the history shown: (newest step . seconds)
         [last 0]           ; when it moved on (now-ms): twice a second
         [paused? #f]
-        [pinned #f]        ; the step clicked
+        [held #f]          ; paused: the newest step shown (its seq)
+        [pinned #f]        ; the bar clicked (its step's seq)
         [selected #f]      ; the row selected: a subject, or (subject part
                            ; phase)
         [order '(rate . down)]   ; the Consumers' sort: (key . up|down)
+        [shares (make-hashtable equal-hash equal?)]   ; (seq . selected): ns
+        [tips (make-eqv-hashtable)]                   ; seq: text
+        [drawn #f]         ; the Steps as last drawn: (newest hover)
         [memos (make-hashtable equal-hash equal?)]   ; the view's figures
         [memo-view #f])
     (define (move-on!)
       (set! view (cons (profile-newest-step) (profile-seconds)))
       (set! last (now-ms)))
+    ;; the newest step kept, or the one held
+    (define (newest-step) (or held (profile-newest-step)))
     ;; thunk's value, worked out once a view: Monitor is drawn again with
     ;; whatever frame holds it, far more often than its view moves on.
     (define (remember key thunk)
@@ -241,11 +311,13 @@
     (define (history)
       (unless view (move-on!))
       view)
-    (define (pause! step)
+    (define (pause! seq)
+      (set! held (newest-step))
       (set! paused? #t)
-      (set! pinned step))
+      (set! pinned seq))
     (define (resume!)
       (set! paused? #f)
+      (set! held #f)
       (set! pinned #f)
       (move-on!))
     (define (toolbar w)
@@ -276,7 +348,11 @@
              (list cw ch
                    (lambda (x y w h)
                      (ui-button ui 'clear x y w h "Clear"
-                                (lambda () (profile-clear!) (resume!))
+                                (lambda ()
+                                  (profile-clear!)
+                                  (hashtable-clear! shares)
+                                  (hashtable-clear! tips)
+                                  (resume!))
                                 'quiet #t 'disabled none?
                                 'tip "Forget the history")))
              (list dw dh
@@ -333,13 +409,30 @@
     (define (label-of s seconds)
       (let ([l (assoc s (caddr (consumers seconds)))])
         (if l (cdr l) (monitor-subject-label s))))
-    ;; The last seconds' steps in columns, the legend under them, and the
-    ;; breakdown of the step under the pointer, or paused on, or the
-    ;; newest.
-    (define (draw-steps x y w h step0 seconds newest)
+    ;; A bar for each step that fits, the newest at the right, in the
+    ;; phases' order by what they spent, up to two frames of the screen's
+    ;; (a longer step reaches the top), the frame's line at half, a step a
+    ;; frame late flagged at the top; the legend under them in the same
+    ;; order; a bar's tooltip says where its time went.
+    (define (draw-steps x y w h seconds)
       (let*-values
-          ([(lh) (font-line-height 'ui-small)]
-           [(keys) (append (map cdr monitor-phases)
+          ([(frame) (host-frame-ns)]
+           [(top) (* 2 frame)]
+           [(rules) (list (cons frame (monitor-ns-text frame))
+                          (cons top (monitor-ns-text top)))]
+           [(newest) (newest-step)]
+           ;; as many bars as fit right of the scale
+           [(n) (quotient (caddr (cdr (assq 'plot
+                                            (ui-bar-chart-areas
+                                             x y w h 1 rules))))
+                          monitor-bar-px)]
+           [(seqs) (if newest
+                       (filter profile-step-kept?
+                               (monitor-range (- newest n -1) newest))
+                       '())]
+           [(order) (monitor-bars-order seqs)]
+           [(keys) (append (map (lambda (j) (cdr (list-ref monitor-phases j)))
+                                order)
                            (if selected
                                (list (cons 'chart-share
                                            (if (monitor-part? selected)
@@ -348,70 +441,53 @@
                                                (label-of selected seconds))))
                                '()))]
            [(kw kh) (ui-legend-size keys)]
-           [(gh) (- h kh lh 12)]
-           [(shown bars top rules)
-            (apply values
-                   (remember (list 'steps w gh selected)
-                             (lambda () (steps-shown x y w gh step0 newest))))]
+           [(gh) (- h kh 4)]
+           [(zero) (monitor-clock-zero)]
            [(hover)
-            (ui-bar-chart ui 'monitor-steps x y w gh bars top rules
-                          (and pinned
-                               (list-index (lambda (s) (eqv? s pinned))
-                                           shown))
-                          (lambda (i)
-                            (let ([s (list-ref shown i)])
-                              (when s (pause! s)))))]
-           [(step) (or (and hover (list-ref shown hover))
-                       (and pinned (profile-step-kept? pinned) pinned)
-                       step0)])
-        (ui-draw-legend x (+ y gh 4) w kh '() keys)
-        (ui-draw-label x (+ y gh kh 8) w lh '(hint)
-                       (if step
-                           (monitor-step-words step newest)
-                           "Collecting…"))))
-    ;; (shown bars top rules): the last monitor-steps-seconds in columns of
-    ;; equal time, the oldest first, each the slowest step that ended in it
-    ;; (#f: none), so that the chart moves at one speed and keeps its shape
-    ;; whatever the steps' rate; its top a frame's time, doubled until the
-    ;; slowest fits; its rules, a frame's line and the top.
-    (define (steps-shown x y w gh step0 newest)
-      (let* ([span (* 1000 monitor-steps-seconds)]
-             [recent (if step0
-                         (monitor-steps-back step0 (- newest span) 100000)
-                         '())]
-             [slowest (apply max 0.0 (map profile-busy recent))]
-             [top (let double ([t (* 2 monitor-frame-ms)])
-                    (if (< t slowest) (double (* 2 t)) t))]
-             [rules (list (cons monitor-frame-ms
-                                (format "~a ms" (monitor-ms monitor-frame-ms)))
-                          (cons top (format "~a ms" (monitor-ms top))))]
-             [plot (cdr (assq 'plot (ui-bar-chart-areas x y w gh 1 rules)))]
-             [n (max 1 (exact (floor (/ (caddr plot) monitor-column-px))))]
-             [slot (/ span n)]
-             [columns (make-vector n #f)])
-        (for-each (lambda (s)
-                    ;; columns are fixed slices of time, so that a step
-                    ;; stays in its column as the view moves on
-                    (let ([j (- n 1 (- (exact (floor (/ newest slot)))
-                                       (exact (floor (/ (profile-step-end s)
-                                                        slot)))))])
-                      (when (and (<= 0 j) (< j n)
-                                 (let ([c (vector-ref columns j)])
-                                   (or (not c)
-                                       (> (profile-busy s)
-                                          (profile-busy c)))))
-                        (vector-set! columns j s))))
-                  recent)
-        (let ([shown (vector->list columns)])
-          (list shown
-                (map (lambda (s)
-                       (if s
-                           (cons (monitor-segments s)
-                                 (and selected
-                                      (profile-step-node-ms s selected)))
-                           (cons '() #f)))
-                     shown)
-                top rules))))
+            (ui-bar-chart ui 'monitor-steps x y w gh
+                          (map (lambda (seq)
+                                 (cons (map (lambda (j)
+                                              (cons (cadr (list-ref
+                                                           monitor-phases j))
+                                                    (monitor-step-phase-ns
+                                                     seq j)))
+                                            order)
+                                       (and selected (share-of seq))))
+                               seqs)
+                          top rules
+                          (and pinned (list-index (lambda (s) (eqv? s pinned))
+                                                  seqs))
+                          (lambda (i) (pause! (list-ref seqs i)))
+                          'tip (lambda (i)
+                                 (tip-of (list-ref seqs i) zero frame))
+                          'flagged (let ([v (list->vector seqs)])
+                                     (lambda (i)
+                                       (profile-step-late? (vector-ref v i)
+                                                           frame))))])
+        (set! drawn (list newest hover))
+        (ui-draw-legend x (+ y gh 4) w kh '() keys)))
+    ;; Step seq's tooltip, worked out once.
+    (define (tip-of seq zero frame)
+      (or (hashtable-ref tips seq #f)
+          (let ([text (monitor-step-tip seq zero frame)])
+            (when (> (hashtable-size tips) 64) (hashtable-clear! tips))
+            (hashtable-set! tips seq text)
+            text)))
+    ;; What the row selected spent in step seq, ns, worked out once.
+    (define (share-of seq)
+      (let ([key (cons seq selected)])
+        (or (hashtable-ref shares key #f)
+            (let ([ns (profile-step-node-ns seq selected)])
+              (when (> (hashtable-size shares) 4096)
+                (hashtable-clear! shares))
+              (hashtable-set! shares key ns)
+              ns))))
+    ;; Whether the Steps would look different now: a new step, or a bar
+    ;; under the pointer (its tip).
+    (define (steps-moved?)
+      (or (not drawn)
+          (not (eqv? (car drawn) (newest-step)))
+          (cadr drawn)))
     (define (draw-consumers x y w h seconds)
       (let* ([c (consumers seconds)]
              [totals (car c)] [roots (cadr c)] [span (cadddr c)]
@@ -422,10 +498,29 @@
              [cw (font-char-width 'ui)]
              [num (max (* 8 cw) (+ 28 (text-width "calls/s" 'ui-small)))]
              [spark (* 13 cw)]
-             [columns `((name "Consumer" ,(max 120 (- w (* 4 num) spark)))
-                        (rate "ms/s" ,num right) (avg "avg" ,num right)
-                        (max "max" ,num right) (calls "calls/s" ,num right)
-                        (spark "last minute" ,spark))])
+             ;; each heading's tooltip says what its column means
+             [columns
+              `((name "Consumer"
+                      ,(max 120 (- (ui-table-room w) (* 4 num) spark))
+                      "A window, surface or process, or the collector; a \
+                       window's row opens to its handlers and frame")
+                (rate "ms/s" ,num right
+                      ,(format "Milliseconds it spent a second, on average \
+                                over the last ~a s: its share of the main \
+                                loop's time" monitor-consumer-seconds))
+                (avg "avg" ,num right
+                     "Milliseconds it took in a step, on average over \
+                      the steps it ran in")
+                (max "max" ,num right
+                     ,(format "The most milliseconds it took in one step: \
+                               past a frame (~a), it alone held a frame back"
+                              (monitor-ns-text (host-frame-ns))))
+                (calls "calls/s" ,num right
+                       "How many times a second it ran: a handler called, \
+                        a frame drawn, a process's turn")
+                (spark "last minute" ,spark
+                       "Its milliseconds each second of the last minute, \
+                        the newest at the right"))])
         (define (total-of node)
           (let ([t (find (lambda (t)
                            (equal? (profile-total-what t)
@@ -582,8 +677,7 @@
       (ui-draw-surface 0 0 w h '(page))
       (let ([y (toolbar w)] [pad (ui-pad)])
         (if (profiling?)
-            (let* ([h* (history)] [step0 (car h*)] [seconds (cdr h*)]
-                   [newest (if step0 (profile-step-end step0) 0)]
+            (let* ([h* (history)] [seconds (cdr h*)]
                    [x pad] [cw (- w pad pad)]
                    [lh (font-line-height 'ui-small)]
                    [steps-h (round (* 9 lh))]
@@ -592,10 +686,10 @@
                              (profile-second-ref (car seconds) 'steps)
                              0)]
                    [y (section x (+ y 4) cw "Steps"
-                               (format "the last ~a s, ~a steps/s~a"
-                                       monitor-steps-seconds rate
-                                       (if paused? ", paused" "")))]
-                   [y (begin (draw-steps x y cw steps-h step0 seconds newest)
+                               (format "a bar a step, flagged a frame \
+                                        late; ~a steps/s~a"
+                                       rate (if paused? ", paused" "")))]
+                   [y (begin (draw-steps x y cw steps-h seconds)
                              (+ y steps-h 8))]
                    [y (section x y cw "Consumers"
                                (format "a second's average over the \
@@ -628,9 +722,12 @@
            'draw (lambda (win w h) (draw win w h))
            (append
             (ui-handlers ui)
+            ;; the Steps at every new step, the rest twice a second
             (list 'tick (lambda (win)
                           (ui-tick ui win)
-                          (when (and (not paused?)
-                                     (> (- (now-ms) last) 500))
-                            (move-on!)
-                            (invalidate! win))))))))
+                          (unless paused?
+                            (when (> (- (now-ms) last) 500)
+                              (move-on!)
+                              (invalidate! win))
+                            (when (and (profiling?) (steps-moved?))
+                              (invalidate! win)))))))))

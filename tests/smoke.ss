@@ -3040,6 +3040,27 @@
                       (equal? (reverse by-name) by-name-down)
                       (equal? (order by-rate) (order by-name))
                       (equal? (order by-rate) (order (roots)))))))))
+  (check "a Consumers heading says what its column means"
+         (let ([r (ui-find ui '(consumers header avg))])
+           (and r (string? (ui-region-tip r))
+                (string-contains-ci? (ui-region-tip r) "average"))))
+  ;; the pointer resting on the newest bar: its tooltip, what it spent
+  (let* ([newest (apply max (map (lambda (r) (cadr (ui-region-id r)))
+                                 (bars)))]
+         [id (list 'monitor-steps newest)])
+    (let-values ([(x y) (ui-point m id 0.5)])
+      (inject! `(mouse-move ,x ,y))
+      (let ([until (+ (real-time) 800)])
+        (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
+      (screenshot (string-append out-dir "/monitor-tip.png"))
+      (let ([tip (let ([r (ui-find ui id)]) (and r (ui-region-tip r)))])
+        (printf "  ~s\n" tip)
+        (check "hovering a bar of Monitor's Steps shows its tooltip: its \
+                step, whether it was a frame late, and its phases"
+               (and (string? tip)
+                    (string-contains-ci? tip "step ")
+                    (string-contains-ci? tip "(a frame is ")
+                    (< (+ (car (ui-state-rest ui)) ui-tip-ms) (now-ms)))))))
   (click-ui! m (list 'monitor-focus (window-id target)))
   (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
   (focus-window! m)
