@@ -15,8 +15,9 @@
 ;;; Root is the world (*world-env*), the superuser. A child has a base,
 ;;; chez (all of Chez) or worklet (the worklets'), and of its parent's
 ;;; names only those the parent shares, as read-only forwarders
-;;; (forwarder-to, src/proc.ss): live, at no cost a call, and Chez refuses
-;;; set! of them, as R6RS refuses set! of an import. The child's define of
+;;; (forwarder-to, src/proc.ss): live, at no cost a call, and refusing a
+;;; set! as it expands ("attempt to assign read-only variable"), as R6RS
+;;; refuses set! of an import. The child's define of
 ;;; a name makes its own. A name not shared is unbound there, and the
 ;;; child's set! of it makes a variable of the child's. So a child changes
 ;;; its parent's state only through what the parent shares with it.

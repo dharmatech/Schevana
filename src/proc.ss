@@ -227,7 +227,7 @@
 ;;; anything else is refused when it is defined, so all it touches is what
 ;;; it is handed. Of that, it can open only pairs, vectors and boxes. The
 ;;; clock and the worklets are there as forwarders to the world's own
-;;; bindings, so Chez refuses a worklet's set! of them; one that sets any
+;;; bindings, which refuse a worklet's set! of them; one that sets any
 ;;; other top-level name is refused too, since that name would be state
 ;;; that worker threads write at once.
 ;;;
@@ -236,13 +236,16 @@
 
 ;; A read-only forwarder to the identifier id's binding: a macro that,
 ;; installed in another environment, makes code there refer to that
-;; binding itself (live, and at no cost a call), and that Chez keeps from
-;; set!, as R6RS keeps an imported variable.
+;; binding itself (live, and at no cost a call). A set! of it is refused
+;; as it expands, in the words Chez uses for an R6RS import's.
 (define (forwarder-to id)
-  (lambda (x)
-    (syntax-case x ()
-      [_ (identifier? x) id]
-      [(_ . rest) #`(#,id . rest)])))
+  (make-variable-transformer
+   (lambda (x)
+     (syntax-case x (set!)
+       [(set! name . _)
+        (syntax-error #'name "attempt to assign read-only variable")]
+       [_ (identifier? x) id]
+       [(_ . rest) #`(#,id . rest)]))))
 
 (define (worklet-base-environment)
   (let ([e (copy-environment

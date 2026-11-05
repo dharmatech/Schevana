@@ -116,8 +116,9 @@ others each in a child environment of it (`services/env.ss`):
 
 A private REPL has all of Chez and, of the world, what reads it (the
 REPL's list: `(windows)`, `(theme 'accent)`, `(procs)` and the like),
-shared live: it sees the world as it is now. Chez refuses `set!` of a
-shared name, and redefining one, or `draw-window`, makes the REPL's own
+shared live: it sees the world as it is now. A `set!` of a shared name
+is refused ("attempt to assign read-only variable"), and redefining one,
+or `draw-window`, makes the REPL's own
 and breaks nothing. A whole-world REPL is shared every name of the
 world's, those the world gains later too, so there calling the world's
 procedures, such as `(set-theme! ...)`, `(open-window ...)` or
@@ -424,18 +425,19 @@ Decisions worth keeping in mind for the real design:
   code around it, or sets a top-level name, is refused when it is
   defined, so a worklet touches only what it is handed, by construction;
   worklets call each other by name and see each other redefined, through
-  read-only forwarders to the world's bindings, so Chez itself refuses a
-  worklet's `set!` of another. Of what
-  it is handed, a worklet opens only pairs, vectors and boxes, and the
-  crew refuses any procedure there that is no worklet.
+  read-only forwarders to the world's bindings, which refuse a worklet's
+  `set!` of another as it expands. Of what it is handed, a worklet opens
+  only pairs, vectors and boxes, and the crew refuses any procedure there
+  that is no worklet.
 - **Environments are a tree.** The world is its root (`services/env.ss`).
   A child is made on a base, all of Chez or the worklets', and is shared
   only the names its parent lists, as in
   `(env-share! e '(windows (clock . now-ms)))`. Each is a read-only
   forwarder, a macro that makes code in the child refer to the parent's
-  binding itself: live, at no cost a call, and Chez refuses `set!` of it,
-  as R6RS refuses `set!` of an import. A setter may take the `set!` instead (`env-share-setter!`), and
-  the child's `define` makes its own. So a child changes its parent's
+  binding itself: live, at no cost a call. A `set!` of it is refused as
+  it expands, in the words Chez uses for an R6RS import's: "attempt to
+  assign read-only variable farewell". A setter may take the `set!`
+  instead (`env-share-setter!`), and the child's `define` makes its own. So a child changes its parent's
   state only through what it was shared. Every name of the world's,
   followed, is for the Whole-World REPL alone. A child on Chez's base
   still reaches the world through Chez, so it organizes state and

@@ -6469,8 +6469,8 @@
 (check "a worklet reaches only its environment: one that names a world \
         procedure, SDL, eval, a primitive, a condition's reader or a world \
         local, or sets a top-level name, is refused when defined; worklets \
-        call worklets by name and see them redefined, and Chez refuses a \
-        worklet's set! of another"
+        call worklets by name and see them redefined, and a worklet's set! \
+        of another is refused"
        (let ([refused
               (map (lambda (form)
                      (guard (c [#t (and (pair? (condition-irritants c))
@@ -6725,9 +6725,13 @@
            (set! units-env-get (lambda () units-env-value))
            (and (equal? before '(1 1)) (equal? after '(20 2))))))
 
-(check "Chez refuses a child's set! of a shared name; a name not shared \
-        is unbound there, and the child's set! of it makes its own"
-       (and (guard (c [#t (syntax-violation? c)])
+(check "a child's set! of a shared name is refused as an R6RS import's \
+        is; a name not shared is unbound there, and the child's set! of it \
+        makes its own"
+       (and (guard (c [#t (and (syntax-violation? c)
+                               (equal? (condition->string c)
+                                       "Exception: attempt to assign \
+                                        read-only variable value"))])
               (env-eval units-env '(set! value 5))
               #f)
             (guard (c [#t #t]) (env-eval units-env 'units-env-secret) #f)
