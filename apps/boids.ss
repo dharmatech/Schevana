@@ -11,10 +11,15 @@
 ;;;
 ;;; The simulation is pure: a flock is a list of boids, and a step makes a
 ;;; new one. The window keeps the flock and its rules, as plain data:
-;;; (window-ref win 'flock) => (#<boid at 451.2 87.0 moving 1.6 -3.1> ...)
+;;; (boid-position (car (window-ref win 'flock))) => a vec
 ;;; (window-set! win 'rules (boids-random-rules))
 ;;; R: random rules · D: the defaults · S: scatter · Space: pause
 ;;; H: the rules window, beside the flock (it closes with the flock)
+;;;
+;;; It runs in a sandbox (services/grant.ss), where the names above are: a
+;;; REPL in /apps/boids has them.
+
+(app-requests window draw ui timers)
 
 ;;; ------------------------------------------------------------------ vectors
 
@@ -22,9 +27,6 @@
 (define-record-type vec
   (nongenerative schevana-boids-vec)
   (fields x y))
-
-(record-writer (record-type-descriptor vec)
-  (lambda (v port wr) (fprintf port "#<vec ~a ~a>" (vec-x v) (vec-y v))))
 
 (define vec-zero (make-vec 0.0 0.0))
 
@@ -52,12 +54,6 @@
 (define-record-type boid
   (nongenerative schevana-boids-boid)
   (fields position velocity))
-
-(record-writer (record-type-descriptor boid)
-  (lambda (b port wr)
-    (let ([p (boid-position b)] [v (boid-velocity b)])
-      (fprintf port "#<boid at ~a ~a moving ~a ~a>"
-               (vec-x p) (vec-y p) (vec-x v) (vec-y v)))))
 
 ;; Other is in b's field of view: fov degrees wide, centered on b's
 ;; heading. A boid standing still sees everything.
@@ -156,7 +152,8 @@
     min-speed 1.0     max-speed 4.0))
 
 (define (boids-rule rules key)
-  (or (plist-ref rules key #f) (errorf 'boids-rule "no rule ~s" key)))
+  (let ([at (memq key rules)])
+    (if at (cadr at) (errorf 'boids-rule "no rule ~s" key))))
 
 ;; Each rule's range, in the order the rules window shows them. A weight
 ;; starts at 0, and its useful values span orders of magnitude.
@@ -334,12 +331,13 @@
         [rules-win #f])    ; the rules window, while it is open
     (define (step! win)
       (let-values ([(w h) (boids-field-size win)])
-        (let ([t0 (current-time 'time-monotonic)])
+        (let ([t0 (now-ns)])
           (window-set! win 'flock
             (boids-step-on (window-ref win 'flock) (window-ref win 'rules)
                            w h))
           ;; one step's time jumps around (collections): over about 20
-          (set! step-ms (+ (* step-ms 0.95) (* (ms-since t0) 0.05))))))
+          (set! step-ms (+ (* step-ms 0.95)
+                           (* (/ (- (now-ns) t0) 1e6) 0.05))))))
     (define (toggle-rules! win)
       (if rules-win
           (close-window! rules-win)
@@ -502,30 +500,33 @@
       (cons (window-ref flock-win 'rules)
             (length (window-ref flock-win 'flock))))
     (let-values ([(w h) (boids-rules-size)])
-      (parameterize ([new-window-position
-                      (cons (+ (window-x flock-win) (window-w flock-win) 12)
-                            (window-y flock-win))])
-        (apply open-window "Boids — Rules"
-               'size (cons w h)
-               'app #f
-               'draw (lambda (win w h)
-                       (set! shown (now-shown))
-                       (ui-begin! ui)
-                       (boids-draw-rules ui flock-win w)
-                       (ui-end! ui w h))
-               'close (lambda (win) (on-close))
-               (append
-                (ui-handlers ui 'key (lambda (win key mods)
-                                       (window-call flock-win 'key key mods)
-                                       #t))
-                ;; the kit's tick, then: a change from elsewhere shows, and
-                ;; fonts grown in Settings get room for the rows
-                (list 'tick (lambda (win)
-                              (ui-tick ui win)
-                              (let-values ([(w h) (boids-rules-size)])
-                                (boids-grow-to! win w h))
-                              (unless (equal? shown (now-shown))
-                                (invalidate! win))))))))))
+      (let ([win
+             (apply open-window "Boids — Rules"
+                    'size (cons w h)
+                    'pos (cons (+ (window-x flock-win) (window-w flock-win) 12)
+                               (window-y flock-win))
+                    'app #f
+                    'draw (lambda (win w h)
+                            (set! shown (now-shown))
+                            (ui-begin! ui)
+                            (boids-draw-rules ui flock-win w)
+                            (ui-end! ui w h))
+                    'close (lambda (win) (on-close))
+                    (append
+                     (ui-handlers ui 'key (lambda (win key mods)
+                                            (window-call flock-win 'key key
+                                                         mods)
+                                            #t))
+                     ;; the kit's tick, then: a change from elsewhere shows,
+                     ;; and fonts grown in Settings get room for the rows
+                     (list 'tick (lambda (win)
+                                   (ui-tick ui win)
+                                   (let-values ([(w h) (boids-rules-size)])
+                                     (boids-grow-to! win w h))
+                                   (unless (equal? shown (now-shown))
+                                     (invalidate! win))))))])
+        (boids-keep-on-desktop! win)
+        win))))
 
 ;; Grows win's content to at least w × h, moved left or up as far as it
 ;; takes to stay on the desktop. It never shrinks: a size set by hand
@@ -534,7 +535,11 @@
   (let-values ([(cw ch) (window-content-size win)])
     (when (and (or (> w cw) (> h ch)) (not (shaded? win)))
       (resize-window! win (max w cw) (max h ch))
-      (let-values ([(dx dy dw dh) (desktop-rect)])
-        (move-window! win
-          (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
-          (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))))
+      (boids-keep-on-desktop! win))))
+
+;; Moves win left or up as far as it takes to stay on the desktop.
+(define (boids-keep-on-desktop! win)
+  (let-values ([(dx dy dw dh) (desktop-rect)])
+    (move-window! win
+      (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
+      (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))

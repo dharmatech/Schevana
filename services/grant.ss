@@ -19,9 +19,9 @@
 ;;;
 ;;; Every app holds define-app, which registers only the app named after
 ;;; its file, app-requests, which does nothing (the loader read it), and
-;;; defvar, which asks its own sandbox; its windows are its own
-;;; (window-app), whatever it says. The world's (clock) still opens Clock:
-;;; it forwards to the sandbox's launcher.
+;;; defvar, which asks its own sandbox; a window it opens is its own
+;;; (window-app) or no app's, never another's. The world's (clock) still
+;;; opens Clock: it forwards to the sandbox's launcher.
 
 ;;; ------------------------------------------------------------------ bundles
 
@@ -33,9 +33,19 @@
      close-window!
      invalidate!
      resize-window!
+     move-window!
+     focus-window!
+     desktop-rect
      content-rect
+     window-content-size
+     window-x
+     window-y
+     window-w
+     window-h
+     shaded?
      window-ref
      window-set!
+     window-call
      window-title
      window-title-set!)
     (draw "Draw in its windows"
@@ -88,6 +98,26 @@
      pixmap-load!
      pixmap-swap-bytes!
      pixmap-draw)
+    (ui "Use buttons, sliders and fields"
+     make-ui
+     ui-begin!
+     ui-end!
+     ui-handlers
+     ui-tick
+     ui-pad
+     ui-gap
+     ui-control-height
+     ui-slider-height
+     ui-draw-surface
+     ui-draw-label
+     ui-label-size
+     ui-button
+     ui-button-size
+     ui-slider
+     ui-checkbox
+     ui-checkbox-size
+     ui-toggle
+     ui-text-field)
     (timers "Run on a timer"
      after
      now-ms
@@ -115,7 +145,8 @@
 ;; tree app's requests against it, so a new request is a reviewed change.
 ;; Sketch is not here: the person approves it, as an app of their own.
 (define grant-tree-apps
-  '((clock window draw timers)
+  '((boids window draw ui timers)
+    (clock window draw timers)
     (life window draw timers)))
 
 ;;; ------------------------------------------------------------------ decisions
@@ -328,11 +359,15 @@
                           "asks this sandbox"))
       e)))
 
-;; The world's name n, made for app, or #f: its windows are its own.
+;; The world's name n, made for app, or #f: a window it opens is its own,
+;; or no app's where it says so (a secondary one), never another's.
 (define (grant-narrow app n)
   (case n
     [(open-window)
-     (lambda (title . opts) (apply open-window title 'app app opts))]
+     (lambda (title . opts)
+       (if (plist-ref opts 'app app)
+           (apply open-window title 'app app opts)
+           (apply open-window title opts)))]
     [else #f]))
 
 (define (grant-define-app x app)

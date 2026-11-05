@@ -872,6 +872,41 @@
 ;;; The Niva version's tests (tests/flockTest.niva in boids-niva), and the
 ;;; screen's rules.
 
+;; Boids runs in its sandbox (services/grant.ss): its names, forwarded here.
+(define boids-box (grant-env 'boids))
+
+(check "Boids runs in its sandbox, holding its bundles, allowed by the table, \
+        and its names stay there: vec is none of the world's; its rules \
+        window is no app's"
+       (let* ([held (environment-symbols (env-environment boids-box))]
+              [world (environment-symbols *world-env*)]
+              [win (boids)]
+              [rw (find-window "Boids — Rules")]
+              [ok (and (equal? (env-path boids-box) "/apps/boids")
+                       (equal? (grant-requested 'boids)
+                               '(window draw ui timers))
+                       (null? (grant-undecided 'boids))
+                       (memq 'ui-slider held) (not (memq 'notify held))
+                       (memq 'vec held) (memq 'boids-step held)
+                       (not (memq 'vec world)) (not (memq 'vec+ world))
+                       (not (memq 'boids-step world))
+                       (eq? (window-app win) 'boids)
+                       (not (window-app rw)))])
+         (close-window! win)
+         ok))
+
+;; For the checks below, here and not in the world they test: this suite's
+;; own view of the sandbox.
+(for-each (lambda (n)
+            (define-top-level-syntax n
+              (forwarder-to (datum->syntax (env-anchor boids-box) n))))
+          '(make-vec vec? vec-x vec-y vec-dot make-boid boid? boid-position
+            boid-velocity boid-neighbors boid-sees? boid-step-aside
+            boid-back-off boids-step boids-demo boids-default-rules boids-rule
+            boids-resize boids-scatter boids-step-on boids-random-rules
+            boids-ranges boids-set-rule boids-slider-value boids-slider-t
+            boids-draw-rules boids-max-count))
+
 (define (test-boid x y vx vy) (make-boid (make-vec x y) (make-vec vx vy)))
 
 (define (test-boid-numbers b)
@@ -926,11 +961,10 @@
        (let ([b (test-boid 0.0 0.0 1.0 0.0)]
              [climbing (test-boid 0.0 0.0 1.0 0.2)]
              [ahead (list (test-boid 10.0 0.0 1.0 0.0))])
-         (and (equal? (format "~s" (boid-step-aside b ahead))
-                      "#<vec 0.0 -1.0>")
-              (equal? (format "~s" (boid-back-off b ahead))
-                      "#<vec -1.0 0.0>")
-              (> (vec-y (boid-step-aside climbing ahead)) 0.0))))
+         (let ([numbers (lambda (v) (list (vec-x v) (vec-y v)))])
+           (and (equal? (numbers (boid-step-aside b ahead)) '(0.0 -1.0))
+                (equal? (numbers (boid-back-off b ahead)) '(-1.0 0.0))
+                (> (vec-y (boid-step-aside climbing ahead)) 0.0)))))
 
 (check "Boids: resizing a flock keeps the boids already there"
        (let ([fewer (boids-resize boids-demo 2 100 100)]
@@ -1084,8 +1118,12 @@
          (let-values ([(w h) (window-content-size (rules-win))]
                       [(dx dy dw dh) (desktop-rect)])
            (define (grown-by! dw)
-             (fluid-let ([boids-rules-size (lambda () (values (+ w dw) h))])
-               (steps 1))
+             (let* ([env (env-environment boids-box)]
+                    [real (top-level-value 'boids-rules-size env)])
+               (set-top-level-value! 'boids-rules-size
+                                     (lambda () (values (+ w dw) h)) env)
+               (steps 1)
+               (set-top-level-value! 'boids-rules-size real env))
              (let-values ([(w2 h2) (window-content-size (rules-win))])
                (and (= w2 (+ w dw)) (= h2 h))))
            (and (grown-by! 40)
@@ -7420,24 +7458,28 @@
          (env-drop! e)
          ok))
 
-(check "a confined sandbox's record types are its own: a uid, which could \
-        name the world's, is refused"
+(check "a confined sandbox's record types are its own: one named by a uid \
+        stays one type as it is defined again, and is never the world's"
        (let* ([e (env-child (env-root) 'units-records 'confined)]
-              [ok (and (= 1 (env-eval e '(begin
-                                           (define-record-type units-pt
-                                             (fields x))
-                                           (units-pt-x (make-units-pt 1)))))
-                       (raises? (lambda ()
-                                  (env-eval e '(define-record-type units-w
-                                                 (nongenerative
-                                                  schevana-env-3)
-                                                 (fields a)))))
-                       (raises? (lambda ()
-                                  (env-eval e '(make-record-type-descriptor
-                                                'q #f 'schevana-env-3 #f #f
-                                                '#())))))])
-         (env-drop! e)
-         ok))
+              [named '(define-record-type env
+                        (nongenerative schevana-env-3)
+                        (fields a))])
+         (env-eval e named)
+         (let ([kept (env-eval e '(make-env 1))])
+           (env-eval e named)
+           (let ([ok (and (= 1 (env-eval e '(begin
+                                              (define-record-type units-pt
+                                                (fields x))
+                                              (units-pt-x (make-units-pt 1)))))
+                          ((env-eval e 'env?) kept)
+                          (not ((env-eval e 'env?) (env-root)))
+                          (eq? (record-type-uid
+                                (env-eval e '(make-record-type-descriptor
+                                              'q #f 'schevana-grant-app-1 #f
+                                              #f '#())))
+                               '/units-records:schevana-grant-app-1))])
+             (env-drop! e)
+             ok))))
 
 (check "what a confined sandbox writes to the console goes to its log, and \
         to the caller's output too while root evaluates there (a REPL's)"
@@ -7477,16 +7519,18 @@
          (close-window! w)
          ok))
 
-(check "an app's define-app registers its own app alone, its windows are \
-        its own whatever it says, and its defvar keeps a value as it loads \
-        again, in its sandbox"
+(check "an app's define-app registers its own app alone, a window it opens \
+        is its own or no app's, never another's, and its defvar keeps a value \
+        as it loads again, in its sandbox"
        (let* ([c (grant-env 'clock)]
               [w (env-eval c '(open-window "Units" 'app 'settings))]
+              [none (env-eval c '(open-window "Units" 'app #f))]
               [ok (and (raises? (lambda ()
                                   (env-eval c '(define-app (units-not-clock)
                                                  "No" #f))))
                        (not (memq 'units-not-clock (apps)))
                        (eq? (window-app w) 'clock)
+                       (not (window-app none))
                        (begin (env-eval c '(defvar units-kept 1))
                               (env-eval c '(set! units-kept 2))
                               (env-eval c '(defvar units-kept 1))
@@ -7494,6 +7538,7 @@
                        (not (memq 'units-kept
                                   (environment-symbols *world-env*))))])
          (close-window! w)
+         (close-window! none)
          ok))
 
 (check "an app the person approves: what it requests and no one decided \

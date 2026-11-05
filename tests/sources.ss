@@ -132,6 +132,18 @@
 
 (define world-files (append (source-files) '("load.ss")))
 
+;; An app in a sandbox (services/grant.ss): what its file defines is the
+;; sandbox's, but for the app itself, so it collides with nothing.
+(define (sandboxed-file? f)
+  (and (equal? (file-folder f) "apps")
+       (grant-env (string->symbol (file-stem f)))
+       #t))
+
+(define (world-definitions f)
+  (if (sandboxed-file? f)
+      (remp (lambda (d) (eq? (car d) 'name)) (definitions f))
+      (definitions f)))
+
 (check (format "no top-level name is defined in two of the world's ~a files"
                (length world-files))
        (let ([where (make-hashtable equal-hash equal?)])
@@ -141,7 +153,7 @@
                                    (lambda (fs) (if (member f fs) fs
                                                     (cons f fs)))
                                    '()))
-                               (definitions f)))
+                               (world-definitions f)))
                    world-files)
          (none? (filter-map
                  (lambda (d)
@@ -219,7 +231,7 @@
          (for-each (lambda (f)
                      (for-each (lambda (n) (hashtable-set! owner n f))
                                (top-level-names f)))
-                   world-files)
+                   (remp sandboxed-file? world-files))
          (none?
           (apply append
                  (map (lambda (f)
@@ -527,6 +539,32 @@
 ;;; of theirs asks.
 
 (define apps-the-person-approves '(sketch))
+
+;; Names the world has for itself: Chez's, and what its own files define.
+(define world-own-names
+  (let ([t (make-eq-hashtable)])
+    (for-each (lambda (s) (hashtable-set! t s #t))
+              (environment-symbols (scheme-environment)))
+    (for-each (lambda (f)
+                (for-each (lambda (d) (hashtable-set! t (cdr d) #t))
+                          (world-definitions f)))
+              world-files)
+    t))
+
+(check "an app in a sandbox keeps its names there: the world holds only its \
+        launcher"
+       (none?
+        (apply append
+               (map (lambda (f)
+                      (filter-map
+                       (lambda (d)
+                         (and (eq? (car d) 'name)
+                              (memq (cdr d) world-symbols)
+                              (not (hashtable-contains? world-own-names
+                                                        (cdr d)))
+                              (format "~a puts ~a in the world" f (cdr d))))
+                       (definitions f)))
+                    (filter sandboxed-file? world-files)))))
 
 (check "every bundle names what the world has, each name in one bundle, \
         and every tree app that requests bundles requests what the table \

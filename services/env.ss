@@ -145,7 +145,9 @@
                       [else (errorf 'env-child "no base ~s (expected ~a)"
                                     base env-bases)])
                     #f '())])
-    (when (eq? base 'confined) (env-give-console! e))
+    (when (eq? base 'confined)
+      (env-give-records! e)
+      (env-give-console! e))
     (env-children-set! parent (append (env-children parent) (list e)))
     (set! *env-generation* (+ *env-generation* 1))
     e))
@@ -362,10 +364,12 @@
 ;;; Chez's pure extras; strings' ports; and, narrowed, records and the
 ;;; console. Left out on purpose: syntax-case (datum->syntax on an
 ;;; identifier a world macro hands in would name any of the world's
-;;; bindings), the clock (an app's timers bundle), eval and environments,
-;;; C, threads and sleep, the inspector, Chez's own parameters, files and
-;;; the console's ports, exit. One name per line: adding one is a reviewed
-;;; change, and tests/units.ss refuses the dangerous ones.
+;;; bindings), record-writer (it would change how the world prints the
+;;; conditions' types), the clock (an app's timers bundle), eval and
+;;; environments, C, threads and sleep, the inspector, Chez's own
+;;; parameters, files and the console's ports, exit. One name per line:
+;;; adding one is a reviewed change, and tests/units.ss refuses the
+;;; dangerous ones.
 
 (define env-confined-libraries
   '((rnrs base)
@@ -518,32 +522,39 @@
                            (list `(only (chezscheme)
                                         ,@env-confined-extras))))
             #t)])
-    (define-top-level-syntax 'define-record-type
-      (lambda (x) (env-confined-record-type x)) e)
-    (define-top-level-value 'make-record-type-descriptor
-      (lambda args (apply env-confined-rtd args)) e)
     e))
 
-;; A sandbox's record types are its own: one named by a uid (nongenerative
-;; uid) could be another's, the world's too, and open its records.
-(define (env-confined-record-type x)
+;; e's records: a type named by a uid (nongenerative uid) stays one type as
+;; a file loads again, so what is kept across a reload still opens. Its uid
+;; is taken under e's path, so it cannot be another's, the world's too,
+;; and open its records.
+(define (env-give-records! e)
+  (define-top-level-syntax 'define-record-type
+    (lambda (x) (env-confined-record-type e x))
+    (env-environment e))
+  (define-top-level-value 'make-record-type-descriptor
+    (lambda (name parent uid . rest)
+      (apply make-record-type-descriptor name parent
+             (and uid (env-own-uid e uid)) rest))
+    (env-environment e)))
+
+(define (env-own-uid e uid)
+  (string->symbol (format "~a:~a" (env-path e) uid)))
+
+(define (env-confined-record-type e x)
   (syntax-case x ()
     [(_ name clause ...)
-     (let loop ([cs #'(clause ...)])
+     (let loop ([cs #'(clause ...)] [done '()])
        (syntax-case cs ()
-         [() #'(define-record-type name clause ...)]
-         [((k uid) . _) (and (identifier? #'k)
-                             (eq? (syntax->datum #'k) 'nongenerative))
-          (syntax-violation 'define-record-type
-                            "a sandbox's record types are its own: no uid"
-                            x #'uid)]
-         [(_ . rest) (loop #'rest)]))]))
-
-(define (env-confined-rtd name parent uid . rest)
-  (when uid
-    (errorf 'make-record-type-descriptor
-            "a sandbox's record types are its own: no uid, not ~s" uid))
-  (apply make-record-type-descriptor name parent #f rest))
+         [() #`(define-record-type name #,@(reverse done))]
+         [((k uid) . rest) (and (identifier? #'k)
+                                (eq? (syntax->datum #'k) 'nongenerative)
+                                (identifier? #'uid))
+          (loop #'rest
+                (cons #`(k #,(datum->syntax
+                              #'uid (env-own-uid e (syntax->datum #'uid))))
+                      done))]
+         [(c . rest) (loop #'rest (cons #'c done))]))]))
 
 ;;; The console comes wrapped: what a confined environment writes to it
 ;;; goes to its log (env-log), the last env-log-max characters, and, while

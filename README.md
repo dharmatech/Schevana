@@ -206,7 +206,7 @@ afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 ; in a task's description, Ctrl+E opens it in a window of its own
 (tasks-list 'status 'doing 'assignee "Pavel")
 (boids)                                    ; a flock, its rules beside it
-(window-set! (find-window 'boids) 'rules (boids-random-rules))
+(repl "/apps/boids")                       ; a REPL in its sandbox; there,
 (define (boid-sees? b other fov) #t)       ; eyes all around; (reload!) undoes
 (define (draw-wallpaper w h) (fill-gradient 0 0 w h #x102030 #x301020))
 ; every window looks focused; (reload!) undoes it
@@ -491,19 +491,21 @@ Decisions worth keeping in mind for the real design:
   A child on Chez's base still reaches the world through Chez, so it
   organizes state and confines nothing. The confined base is what is
   always safe, for apps: R6RS's libraries and Chez's pure extras, but no
-  files, eval, C, threads, clock or inspector, records of its own types
-  only, and its console writes to its log (`env-log`).
+  files, eval, C, threads, clock or inspector. Its record types are its
+  own: a uid is taken under its path, so a type stays one across a reload
+  and is never the world's. Its console writes to its log (`env-log`).
 - **Apps run in sandboxes.** An app's file that starts with
   `(app-requests window draw timers)` loads into `/apps/<name>`
   (`services/grant.ss`), on the confined base, holding of the world's
   names only its bundles: titled lists ("Draw in its windows": `fill-rect`
-  and 48 more). The tree's Clock and Life are approved by a table; Sketch,
+  and 48 more). The tree's Boids, Clock and Life are approved by a table; Sketch,
   and every app of yours, asks the person, whose answers are kept in
   `~/.schevana.d/permissions.ss`. A bundle not allowed is there as stubs
   that raise, naming it ("Sketch needs Draw in its windows (fill-rect):
   denied"); a name in no bundle it requests is unbound. Its `define-app`
-  registers that app alone, and `(clock)` at the world's REPL still opens
-  Clock. Settings, Monitor, Tasks, the REPL and Environments request
+  registers that app alone, and what it defines stays in its sandbox
+  (Boids' `vec` is no name of the world's): only `(clock)` at the world's
+  REPL reaches in, to open Clock. Settings, Monitor, Tasks, the REPL and Environments request
   nothing and run in the world, which they tune.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
   (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
@@ -879,7 +881,7 @@ This tests the drawing layer piece by piece: the measuring context,
 text cut to fit measuring no more of a long text than its width could
 show, cached shadows against the stacked ones, pixmaps, Life's
 generations against a plain reference (a step allocates nothing), its
-grid against one rectangle per cell, Boids' flocking (the Niva
+grid against one rectangle per cell, Boids in its sandbox, its flocking (the Niva
 version's tests, its first step to the last digit, the speed limits, a
 flock carried over a reload) and its rules window (where it opens, its
 sliders, buttons and keys), and the invalidation calls; and, with no
