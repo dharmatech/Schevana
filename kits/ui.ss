@@ -473,6 +473,7 @@
         (ui-state-later-set! ui '())
         (for-each (lambda (p) (p w h)) later)
         (loop))))
+  (ui-wait-on-modal! ui w h)
   (ui-state-reveal-set! ui #f)
   (let ([f (ui-state-focus ui)])
     (when (and f (not (ui-find ui f)))
@@ -530,6 +531,54 @@
                  (lambda (f) (wrap (entries f)))
                  (wrap entries))
              opts))))
+
+;;; ------------------------------------------------------------------
+;;; modal windows
+;;; A window that waits on another, its modal child (a file dialog, an
+;;; editor): while the child is open the parent takes no input, under a
+;;; scrim, and the child stays above it, taking its keyboard (the window
+;;; manager's window-modal-child); closing the parent closes the child.
+;;; The parent's ui does its part as it ends its draw, so an app needs
+;;; nothing of its own for it.
+
+;; Opens a window as ui-open-modal's child of parent, w × h, centered over
+;; it; opts are open-window's. => the child
+(define (ui-open-modal parent title w h . opts)
+  (let* ([close (plist-ref opts 'close #f)] [tick (plist-ref opts 'tick #f)]
+         [at (let-values ([(x y pw ph) (content-rect parent)])
+               (cons (exact (round (+ x (/ (- pw w) 2))))
+                     (exact (round (+ y (/ (- ph h) 2))))))]
+         [child
+          (parameterize ([new-window-position at])
+            (apply open-window title
+                   'size (cons w h)
+                   'close (lambda (win)
+                            (when close (close win))
+                            (when (memq parent (windows))
+                              (invalidate! parent)))
+                   ;; its parent gone, it goes too
+                   'tick (lambda (win)
+                           (if (memq parent (windows))
+                               (when tick (tick win))
+                               (close-window! win)))
+                   (plist-remove (plist-remove opts 'close) 'tick)))])
+    (window-set! parent 'modal-child child)
+    child))
+
+;; While the window waits: nothing of it keeps the keyboard, a scrim over
+;; it, and a region over all that takes every press (bringing the child
+;; to the front), key, text and turn of the wheel.
+(define (ui-wait-on-modal! ui w h)
+  (let ([child (and (current-window) (window-modal-child (current-window)))])
+    (when child
+      (when (ui-focused ui) (ui-focus! ui #f))
+      (ui-draw-scrim 0 0 w h '())
+      (ui-region! ui '(ui modal-child) 0 0 w h 'modal #t 'focus 'keep
+        'on (lambda (ev)
+              (case (car ev)
+                [(press) (focus-window! child) #t]
+                [(key text wheel) #t]
+                [else #f]))))))
 
 ;;; ------------------------------------------------------------------
 ;;; sizes and layout
@@ -697,7 +746,8 @@
 ;; marks, scroll arrows, submenus; sort-up and sort-down, their old names),
 ;; centered in the box; pin and undo (Settings' rows); minus (a
 ;; stepper's); globe folder box gear, in outline, and prompt, a REPL's
-;; (the environments); and a window's
+;; (the environments); home file drive and chevron-up (the file dialog);
+;; and a window's
 ;; buttons, close minimize maximize restore shade, filling a square box
 ;; in lines of 1 pixel. flags may hold (ink . color) and (width . w),
 ;; the line's.
@@ -730,6 +780,18 @@
        (line (p 0.18 0.28) (p 0.44 0.5) (p 0.18 0.72))
        (line (p 0.52 0.74) (p 0.86 0.74))]
       [(chevron-down) (line (p 0.25 0.38) (p 0.5 0.63) (p 0.75 0.38))]
+      [(chevron-up) (line (p 0.25 0.62) (p 0.5 0.37) (p 0.75 0.62))]
+      [(home)   ; a roof over a house with a door
+       (line (p 0.1 0.5) (p 0.5 0.14) (p 0.9 0.5))
+       (line (p 0.22 0.4) (p 0.22 0.86) (p 0.78 0.86) (p 0.78 0.4))
+       (line (p 0.42 0.86) (p 0.42 0.62) (p 0.58 0.62) (p 0.58 0.86))]
+      [(file)   ; a page, its corner folded
+       (line (p 0.22 0.1) (p 0.6 0.1) (p 0.8 0.3) (p 0.8 0.9) (p 0.22 0.9)
+             (p 0.22 0.1))
+       (line (p 0.6 0.1) (p 0.6 0.3) (p 0.8 0.3))]
+      [(drive)   ; a disk's box, its light
+       (line (p 0.1 0.32) (p 0.9 0.32) (p 0.9 0.72) (p 0.1 0.72) (p 0.1 0.32))
+       (line (p 0.66 0.52) (p 0.76 0.52))]
       [(chevron-left) (line (p 0.62 0.25) (p 0.37 0.5) (p 0.62 0.75))]
       [(chevron-right) (line (p 0.38 0.25) (p 0.63 0.5) (p 0.38 0.75))]
       [(up sort-up) (triangle '(0.5 0.3) '(0.8 0.7) '(0.2 0.7))]
@@ -891,6 +953,88 @@
   (let ([b (ui-control-height)])
     (values (+ b b 16 (text-widest (map number->string (list lo hi)) 'ui))
             b)))
+
+;; A path as crumbs: labels, the oldest first, each a quiet button that
+;; calls (on-select i), a chevron between them, the last the one you are
+;; in. What does not fit in w goes from the oldest on, into a … that
+;; selects the newest of those it hides.
+(define (ui-breadcrumbs ui id x y w h labels on-select)
+  (let* ([g (ui-small-glyph-size)] [sep (+ g 6)]
+         [widths (map (lambda (l) (let-values ([(bw bh) (ui-button-size l #f)])
+                                    (- bw 8)))
+                      labels)]
+         [n (length labels)]
+         [dots (let-values ([(bw bh) (ui-button-size "…" #f)]) (- bw 8))]
+         ;; how many of the oldest go into the …
+         [hidden (let loop ([k 0])
+                   (let ([need (+ (apply + (list-tail widths k))
+                                  (* sep (- n k 1))
+                                  (if (> k 0) (+ dots sep) 0))])
+                     (if (or (<= need w) (>= k (- n 1))) k (loop (+ k 1)))))])
+    (let loop ([i hidden] [cx (if (> hidden 0)
+                                  (begin
+                                    (ui-button ui (list id 'more) x y dots h "…"
+                                               (lambda () (on-select
+                                                           (- hidden 1)))
+                                               'quiet #t 'focus 'keep
+                                               'tip (list-ref labels
+                                                              (- hidden 1)))
+                                    (ui-draw-glyph (+ x dots 3)
+                                                   (+ y (/ (- h g) 2)) g g
+                                                   '(quiet) 'chevron-right)
+                                    (+ x dots sep))
+                                  x)])
+      (when (< i n)
+        (let ([bw (min (list-ref widths i) (max 0 (- (+ x w) cx)))])
+          (ui-button ui (list id i) cx y bw h (list-ref labels i)
+                     (lambda () (on-select i))
+                     'quiet (< i (- n 1)) 'focus 'keep)
+          (when (< i (- n 1))
+            (ui-draw-glyph (+ cx bw 3) (+ y (/ (- h g) 2)) g g '(quiet)
+                           'chevron-right))
+          (loop (+ i 1) (+ cx bw sep)))))))
+
+;;; ------------------------------------------------------------------ nav
+;;; A column of places to go, one of them where you are: Settings' tabs, a
+;;; file dialog's places.
+
+;; items: ((value label icon) ...), icon #f or (lambda (x y s flags) ...)
+;; drawing one s square; the one equal? to current is selected; a press,
+;; or Space or Return on one focused, calls (on-select value). Rows of
+;; ui-nav-row-height, 6 apart, from y. => the y below the last
+(define (ui-nav ui id x y w items current on-select)
+  (let ([rh (ui-nav-row-height)])
+    (fold-left
+     (lambda (ry item)
+       (let ([rid (list id (car item))])
+         (ui-pressable! ui rid x ry w rh (lambda () (on-select (car item)))
+                        '(#\space return) '() (list (cons 'L (cadr item))))
+         (ui-draw-nav-row x ry w rh
+                          (apply ui-flags ui rid
+                                 (if (equal? (car item) current)
+                                     '(selected)
+                                     '()))
+                          (cadr item) (caddr item))
+         (+ ry rh 6)))
+     y items)))
+
+(define (ui-nav-row-height) (max 32 (round (+ (font-line-height 'ui) 12))))
+
+;; flags selected, hover, focused: the chosen one highlighted, a mark at
+;; its left; the label after the icon, if any.
+(define-part (ui-draw-nav-row x y w h flags label icon)
+  (let* ([selected? (memq 'selected flags)] [g (ui-glyph-size)]
+         [lx (if icon (+ x 14 g 8) (+ x 14))])
+    (cond [selected? (ui-draw-highlight x y w h '())]
+          [(memq 'hover flags) (ui-draw-highlight x y w h '(hover))])
+    (when icon (icon (+ x 14) (+ y (/ (- h g) 2)) g flags))
+    (ui-draw-label lx y (- (+ x w) lx 6) h (if selected? '() '(dim)) label)
+    (when selected?
+      (ui-draw-highlight-over x y w h '())
+      ;; its mark after that, so a style that inverts the row keeps it
+      ;; whole (in ink on ink)
+      (fill-round-rect x (+ y (/ h 2) -8) 3 16 1.5 'accent))
+    (when (memq 'focused flags) (ui-draw-focus x y w h flags 5))))
 
 ;;; ------------------------------------------------------------------ slider
 

@@ -5174,9 +5174,9 @@
          (and (equal? (genera-pixels 100 24 1 '((2 12) (90 3))
                                      (lambda ()
                                        (fill-rect 0 0 100 24 #xffffff)
-                                       (settings-draw-tab 0 0 100 24
-                                                          '(selected)
-                                                          "Theme")))
+                                       (ui-draw-nav-row 0 0 100 24
+                                                        '(selected)
+                                                        "Theme" #f)))
                       (list ink ink))
               (equal? (genera-pixels 200 28 1 '((150 4))
                                      (lambda ()
@@ -6955,6 +6955,35 @@
            (env-drop! c)
            ok)))
 
+(check "the file dialog's paths: crumbs from Home or the computer, names \
+        resolved against the folder, whole and without . or .., sizes and \
+        dates as people read them"
+       (and (equal? (file-dialog-crumbs "/home/u/code/x" "/home/u")
+                    '(("Home" . "/home/u") ("code" . "/home/u/code")
+                      ("x" . "/home/u/code/x")))
+            (equal? (file-dialog-crumbs "/etc" "/home/u")
+                    '(("Computer" . "/") ("etc" . "/etc")))
+            (equal? (file-dialog-crumbs "/" "/home/u") '(("Computer" . "/")))
+            (equal? (file-dialog-resolve "/a/b" "c") "/a/b/c")
+            (equal? (file-dialog-resolve "/a/b" "/x/") "/x")
+            (equal? (file-dialog-resolve "/" "c") "/c")
+            (equal? (file-dialog-resolve "/a/b" "../c/./d/") "/a/c/d")
+            (equal? (file-dialog-resolve "/a" "..") "/")
+            (equal? (file-dialog-resolve "." ".")
+                    (file-dialog-clean (current-directory)))
+            (equal? (file-dialog-crumbs (file-dialog-resolve "/" "/x/./y")
+                                        "/home/u")
+                    '(("Computer" . "/") ("x" . "/x") ("y" . "/x/y")))
+            (equal? (file-dialog-above "/a/b") "/a")
+            (equal? (file-dialog-above "/a") "/")
+            (equal? (file-dialog-size-label 512) "512 bytes")
+            (equal? (file-dialog-size-label 4200) "4.2 KB")
+            (equal? (file-dialog-size-label 1300000) "1.3 MB")
+            (let ([now (time-second (current-time))])
+              (and (= 5 (string-length (file-dialog-date-label now now)))
+                   (string-contains-ci? (file-dialog-date-label 86400 now)
+                                        ", 1970")))))
+
 (check "the world forks every kind, in the order registered; a bare child \
         forks nothing and is titled by its base"
        (let ([c (env-child (env-root) 'units-bare 'worklet)])
@@ -6993,6 +7022,22 @@
          (close-window! b)
          (set-style! 'mac)
          ok))
+
+(check "a dialog stays above the window that waits on it and takes its \
+        keyboard, where the style says so (modal-above); else the window \
+        comes above it; closing the window closes the dialog"
+       (let* ([p (open-window "Parent" 'size '(300 . 200))]
+              [c (ui-open-modal p "Child" 200 100)])
+         (focus-window! p)
+         (let ([kept (and (eq? (focused-window) c) (eq? (car (windows)) c)
+                          (eq? (cadr (windows)) p))])
+           (override! 'modal-above #f)
+           (focus-window! p)
+           (let ([up (and (eq? (focused-window) p) (eq? (car (windows)) p))])
+             (override! 'modal-above)
+             (close-window! p)
+             (steps 1)
+             (and kept up (not (memq c (windows))))))))
 
 (check "a window's title icon is drawn by the Mac and Windows styles' \
         frames, left of the title; Genera's busy mark is a terminal's \

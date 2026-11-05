@@ -2315,8 +2315,7 @@
                                           #t))))))
     (let ([t (tasks-view-confirm v)]) (when t (tasks-dialog v t)))
     (let ([e (tasks-view-editor v)])   ; closed in any way, it lets go
-      (cond [(and e (memq e (windows))) (tasks-waiting v e)]
-            [e (tasks-view-editor-set! v #f)]))
+      (when (and e (not (memq e (windows)))) (tasks-view-editor-set! v #f)))
     (ui-due! ui (ui-next-midnight))
     (tasks-view-reveal?-set! v #f)
     (ui-end! ui w h)))
@@ -2325,9 +2324,9 @@
 ;;; the description's editor
 ;;; A long description in a window of its own: a text area filling it, a
 ;;; status line, Save (Ctrl+S) and Cancel (Escape, which asks first when
-;;; there are changes). Tasks waits on it: a scrim covers Tasks, and a
-;;; press there brings the editor to the front; closing it in any way
-;;; ends that. An Editor app would add undo and redo, find and replace,
+;;; there are changes). Tasks waits on it (ui-open-modal): a scrim covers
+;;; Tasks, and a press there brings the editor to the front; closing it in
+;;; any way ends that. An Editor app would add undo and redo, find and replace,
 ;;; files, and a choice of font next.
 
 (define-record-type tasks-editor
@@ -2338,24 +2337,6 @@
           (mutable confirm)    ; the caret while the dialog asks to
                                ; discard, or #f
           (mutable lines)))    ; (text caret line column), the last count
-
-;; While the editor win is open, Tasks waits under a scrim: a press brings
-;; the editor to the front, keys and text are taken, and no field of
-;; Tasks keeps the keyboard.
-(define (tasks-waiting v win)
-  (let ([ui (tasks-view-ui v)])
-    (ui-later! ui
-      (lambda (w h)
-        (when (ui-focused ui)
-          (ui-focus! ui #f)
-          (invalidate! (current-window)))
-        (ui-draw-scrim 0 0 w h '())
-        (ui-region! ui 'waiting 0 0 w h 'modal #t 'focus 'keep
-          'on (lambda (ev)
-                (case (car ev)
-                  [(press) (focus-window! win) #t]
-                  [(key text wheel) #t]
-                  [else #f])))))))
 
 (define (tasks-editor-size)
   (let ([lh (font-line-height 'ui)])
@@ -2371,29 +2352,20 @@
                       [(ed) (make-tasks-editor v t ui (task-description t)
                                                (task-description t) #f #f)]
                       [(w h) (tasks-editor-size)]
-                      [(lh) (font-line-height 'ui)]
-                      [(tasks-win) (find-window 'tasks)]
-                      [(at) (and tasks-win   ; centered over Tasks
-                                 (let-values ([(x y tw th)
-                                               (content-rect tasks-win)])
-                                   (cons (exact (round (+ x (/ (- tw w) 2))))
-                                         (exact (round
-                                                 (+ y (/ (- th h) 2)))))))])
-          (let ([win (parameterize ([new-window-position at])
-                       (apply open-window
-                              (format "~a — Description" (task-label t))
-                              'size (cons w h)
-                              'min-size (cons (* 24 lh) (* 14 lh))
-                              'app #f 'state ed
-                              'draw (lambda (win w h)
-                                      (tasks-editor-draw ed w h))
-                              'close (lambda (win) (tasks-editor-closed! ed))
-                              (ui-handlers ui
-                                'key (lambda (win key mods)
-                                       (tasks-editor-key ed key mods)))))])
+                      [(lh) (font-line-height 'ui)])
+          ;; over Tasks, which waits on it
+          (let ([win (apply ui-open-modal (find-window 'tasks)
+                            (format "~a — Description" (task-label t)) w h
+                            'min-size (cons (* 24 lh) (* 14 lh))
+                            'app #f 'state ed
+                            'draw (lambda (win w h)
+                                    (tasks-editor-draw ed w h))
+                            'close (lambda (win) (tasks-editor-closed! ed))
+                            (ui-handlers ui
+                              'key (lambda (win key mods)
+                                     (tasks-editor-key ed key mods))))])
             (tasks-view-editor-set! v win)
             (ui-focus! ui 'text caret)
-            (invalidate!)   ; Tasks' scrim
             win)))))
 
 ;; Closes the editor, if open, without saving.

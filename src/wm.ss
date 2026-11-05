@@ -432,8 +432,27 @@
   (*window-gone* win)
   (invalidate!))
 
-;; Gives win the keyboard and brings it to the front (raise? #f: not).
+;; The window win waits on, its 'modal-child while that is open (a
+;; dialog: ui-open-modal), or #f. Where win's style keeps it above
+;; (modal-above), it takes win's keyboard: focusing win focuses it, and
+;; raising win raises it above.
+(define (window-modal-child win)
+  (let ([c (window-ref win 'modal-child)]) (and c (memq c *windows*) c)))
+
+(define (window-modal-above win)
+  (and (window-setting win 'modal-above) (window-modal-child win)))
+
+;; Gives win the keyboard and brings it to the front (raise? #f: not); a
+;; window that waits on another above it gives it the keyboard.
 (define (focus-window! win . raise?)
+  (let ([c (and win (window-modal-above win))])
+    (if c
+        (begin (unless (and (pair? raise?) (not (car raise?)))
+                 (raise-window! win))
+               (focus-window! c #f))
+        (apply focus-window-itself! win raise?))))
+
+(define (focus-window-itself! win . raise?)
   (unless (eq? win *focus*)
     (let ([old *focus*])
       (set! *focus* win)
@@ -447,6 +466,7 @@
 
 (define (raise-window! win)
   (set! *windows* (cons win (remq win *windows*)))
+  (let ([c (window-modal-above win)]) (when c (raise-window! c)))
   (request-frame!))
 
 (define (focus-topmost!)

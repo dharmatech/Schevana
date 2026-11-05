@@ -107,7 +107,9 @@
             button-double-click ()
             title-wheel none
             drag-feedback live
-            raise-on-click #t)
+            raise-on-click #t
+            ;; a dialog stays above the window that waits on it
+            modal-above #t)
           *added-defaults*))
 
 (define color-keys

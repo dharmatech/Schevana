@@ -12,14 +12,15 @@
 ;;;   Fork…    a child of a kind its fork makes, named, shared names
 ;;;   REPL     a REPL in it (Return, a double click)
 ;;;   Share…   more of its parent's names
-;;;   Load…    a file evaluated in it (env-load)
+;;;   Load…    a file evaluated in it (env-load), picked in the desktop's
+;;;            file dialog, which Environments waits on
 ;;;   Drop…    it, its children and their threads
 ;;; The pool's threads, /worklets', are set here too. Keys, with no field
 ;;; focused: arrows move in the tree, Return opens a REPL, F forks, /
 ;;; filters, Delete drops.
 
 (define-record-type envs-view
-  (nongenerative schevana-envs-view-1)
+  (nongenerative schevana-envs-view-2)
   (fields ui
           (mutable selected)     ; the environment shown
           (mutable query)        ; the tree's filter
@@ -30,7 +31,7 @@
           (mutable name)         ; its name, as typed
           (mutable shares)       ; the fork's or share's chips
           (mutable draft)        ; the chip being typed
-          (mutable path)         ; the file to load
+          (mutable folder)       ; where Load… last picked a file, or #f
           (mutable repl?)        ; a REPL in the child, once forked (off
                                  ; each time the sheet opens)
           (mutable error)        ; what the sheet's last try raised, or #f
@@ -130,7 +131,21 @@
       (case what
         [(repl) (repl e)]
         [(fork) (envs-open-fork! v (car (env-forks e)))]
+        [(load) (envs-open-load! v)]
         [else (envs-open-sheet! v what)]))))
+
+;; The file dialog, over Environments, for a file to load into the one
+;; selected, where the last was picked.
+(define (envs-open-load! v)
+  (let ([e (envs-view-selected v)])
+    (open-file-dialog (current-window) (format "Load into ~a" (env-path e))
+                      "Load"
+                      (lambda (path)
+                        (envs-view-folder-set! v (path-parent path))
+                        (envs-load! v e path))
+                      'folder (or (envs-view-folder v) (current-directory))
+                      'types '(("Scheme files" "ss" "sls" "scm")
+                               ("All files")))))
 
 (define (envs-open-sheet! v what)
   (envs-view-sheet-set! v what)
@@ -140,7 +155,6 @@
   (ui-focus! (envs-view-ui v)
              (case what
                [(share) (list '(envs-sheet shares) 'field)]
-               [(load) '(envs-sheet path)]
                [else #f])))
 
 (define (envs-open-fork! v kind)
@@ -232,22 +246,16 @@
 
 ;; The file's forms evaluated in e, in a process; a toast says how it
 ;; went.
-(define (envs-load! v)
-  (let* ([e (envs-view-selected v)]
-         [path (envs-expand-path (envs-trim (envs-view-path v)))])
-    (if (not (file-exists? path))
-        (envs-view-error-set! v (format "There is no file ~a" path))
-        (begin
-          (envs-view-sheet-set! v #f)
-          (spawn "load"
-                 (lambda () (env-load e path))
-                 (lambda (status value)
-                   (hashtable-delete! (envs-view-facts v) e)
-                   (case status
-                     [(error) (report-error! 'env-load value)]
-                     [(killed) (notify (format "Loading ~a stopped" path))]
-                     [else (notify (format "Loaded ~a into ~a" path
-                                           (env-path e)))])))))))
+(define (envs-load! v e path)
+  (spawn "load"
+         (lambda () (env-load e path))
+         (lambda (status value)
+           (hashtable-delete! (envs-view-facts v) e)
+           (case status
+             [(error) (report-error! 'env-load value)]
+             [(killed) (notify (format "Loading ~a stopped" path))]
+             [else (notify (format "Loaded ~a into ~a" path
+                                   (env-path e)))]))))
 
 (define (envs-drop! v)
   (let ([e (envs-view-selected v)])
@@ -261,41 +269,6 @@
           [(and (< a b) (char-whitespace? (string-ref s (- b 1))))
            (loop a (- b 1))]
           [else (substring s a b)])))
-
-(define (envs-expand-path p)
-  (if (and (> (string-length p) 1) (string=? (substring p 0 2) "~/"))
-      (string-append (or (getenv "HOME") "") (substring p 1
-                                                        (string-length p)))
-      p))
-
-;; What a path typed so far may go on to: the entries of its folder that
-;; start with its last part, folders with a / after them, then Scheme
-;; files.
-(define (envs-path-choices typed)
-  (let* ([p (envs-expand-path typed)]
-         [cut (let loop ([i (string-length p)])
-                (cond [(= i 0) 0]
-                      [(char=? (string-ref p (- i 1)) #\/) i]
-                      [else (loop (- i 1))]))]
-         [dir (substring p 0 cut)] [part (substring p cut (string-length p))]
-         [shown (substring typed 0 (- (string-length typed)
-                                      (string-length part)))])
-    (guard (c [#t '()])
-      (let* ([names (sort string<? (directory-list
-                                    (if (string=? dir "") "." dir)))]
-             [fits (filter (lambda (n)
-                             (and (string-prefix? part n)
-                                  (not (string-prefix? "." n))))
-                           names)]
-             [folder? (lambda (n) (file-directory? (string-append dir n)))])
-        (map (lambda (n)
-               (string-append shown n (if (folder? n) "/" "")))
-             (append (filter folder? fits)
-                     (filter (lambda (n)
-                               (and (not (folder? n))
-                                    (exists (lambda (x) (string-suffix? x n))
-                                            '(".ss" ".scm" ".sls"))))
-                             fits)))))))
 
 ;;; ------------------------------------------------------------------
 ;;; drawing: the icons and the tree's cells
@@ -775,40 +748,6 @@
                                '())))
               (lambda () (envs-close-sheet! v)))))
 
-;; Load: a file, suggested from its folder.
-(define (envs-load-sheet v)
-  (let* ([ui (envs-view-ui v)] [e (envs-view-selected v)]
-         [bw (envs-sheet-width)] [ch (ui-control-height)]
-         [rows (cons (list "File" ch
-                           (lambda (x y w)
-                             (ui-text-field ui '(envs-sheet path) x y w ch
-                                            (envs-view-path v)
-                                            (lambda (s)
-                                              (envs-view-path-set! v s))
-                                            'placeholder "~/code/thing.ss"
-                                            'suggest
-                                            (lambda (typed)
-                                              (envs-memo v (list 'path typed)
-                                                (lambda ()
-                                                  (let ([l (envs-path-choices
-                                                            typed)])
-                                                    (list-head
-                                                     l (min 8 (length l)))))))))
-                           'hint (format "Its forms are evaluated in ~a, as \
-                                          (env-load e path) does."
-                                         (env-path e)))
-                     (envs-error-rows v))])
-    (ui-sheet ui 'envs-sheet (format "Load into ~a" (env-path e)) bw
-              (ui-form-height rows bw)
-              (lambda (x y w) (ui-form ui '(envs-sheet form) x y w rows))
-              (list (list "Cancel" (lambda () (envs-close-sheet! v)))
-                    (cons* "Load" (lambda () (envs-load! v))
-                           'primary
-                           (if (string=? (envs-trim (envs-view-path v)) "")
-                               '(disabled)
-                               '())))
-              (lambda () (envs-close-sheet! v)))))
-
 (define (envs-drop-dialog v)
   (let* ([e (envs-view-selected v)]
          [under (let walk ([e e])
@@ -889,7 +828,6 @@
     (case (envs-view-sheet v)
       [(fork) (envs-fork-sheet v)]
       [(share) (envs-share-sheet v)]
-      [(load) (envs-load-sheet v)]
       [(drop) (envs-drop-dialog v)])
     (ui-due! ui (+ (now-ms) 1000))   ; jobs and names come and go
     (ui-end! ui w h)))
@@ -923,7 +861,7 @@
         (begin (focus-window! existing) existing)
         (let* ([ui (make-ui)]
                [v (make-envs-view ui (env-root) "" 'shared "" #f 'sandbox ""
-                                  '() "" "" #f #f (cons #f #f)
+                                  '() "" #f #f #f (cons #f #f)
                                   (make-weak-eq-hashtable))])
           ;; one opened by code from before a (reload!) that changed
           ;; envs-view can't draw any more: replace it

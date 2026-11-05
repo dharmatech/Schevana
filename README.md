@@ -144,7 +144,9 @@ own. Its toolbar and a row's right-press menu act on it:
   size-set!` goes through a setter), optionally with a REPL in it.
 - **REPL** (Return): a REPL in it.
 - **Share…**: more of its parent's names (not into a thread's sandbox).
-- **Load…**: a file evaluated in it (`env-load`).
+- **Load…**: a file evaluated in it (`env-load`), picked in the
+  desktop's file dialog, which stays above Environments while it waits
+  (a style's `modal-above`).
 - **Drop…**: it, what is under it and their threads.
 
 On `/worklets` it sets the pool's threads. A world namespace gets the
@@ -360,7 +362,8 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
              interlisp  lambda  mac  reticle  slab  spine  windows
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
-             default keys, the commands that arrange the windows
+             default keys, the commands that arrange the windows, the
+             file dialog (`open-file-dialog`)
 services/    long-lived state behind an API, no surface: crew, worker
              threads for data-parallel loops; env, the tree of
              environments; profile, the profiler; theme-file, the saved

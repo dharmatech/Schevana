@@ -794,6 +794,96 @@
     (envs-select! v (env-root))
     (vat-drop-env! lab)
     (steps 2))
+  ;; Load…: the desktop's file dialog, Environments waiting on it
+  (let* ([dir (string-append out-dir "/smoke-load")]
+         [sub (string-append dir "/sub")]
+         [file (string-append dir "/smoke-load.ss")]
+         [lab (env-fork (env-root) 'pure 'name 'smoke-load)])
+    (unless (file-exists? dir) (mkdir dir))
+    (unless (file-exists? sub) (mkdir sub))
+    (call-with-output-file file
+      (lambda (p) (write '(define smoke-loaded 7) p)) 'replace)
+    (call-with-output-file (string-append dir "/notes.txt")
+      (lambda (p) (display "notes" p)) 'replace)
+    (envs-select! v lab)
+    (envs-view-folder-set! v dir)   ; where Load… last picked from
+    (invalidate! w)
+    (steps 2)
+    (click-ui! w '(envs load))
+    (let* ([fd (focused-window)] [d (window-ref fd 'state)]
+           [names (lambda () (map file-dialog-entry-name
+                                  (or (file-dialog-shown d) '())))]
+           [row (lambda (i) (list '(file-dialog list) 'row i))]
+           ;; the dialog keeps its folders' whole paths
+           [dir (file-dialog-resolve (current-directory) dir)]
+           [sub (file-dialog-resolve (current-directory) sub)])
+      (check "Load… opens the file dialog over Environments, which waits on \
+              it, where the last file was picked: folders, then Scheme files"
+             (and (file-dialog? d)
+                  (equal? (window-title fd) "Load into /smoke-load")
+                  (eq? (window-modal-child w) fd)
+                  (ui-find ui '(ui modal-child))
+                  (equal? (names) '("sub" "smoke-load.ss"))))
+      (focus-window! w)
+      (let ([kept (and (eq? (focused-window) fd) (eq? (car (windows)) fd))])
+        (let-values ([(x y) (ui-point w '(envs fork) 0.5)])
+          (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                   `(mouse-up ,x ,y left))
+          (steps 2))
+        (let ([pressed (and (eq? (focused-window) fd) (eq? (car (windows)) fd)
+                            (not (envs-view-sheet v)))]
+              [tx (+ (window-x w) (quotient (window-w w) 2))]
+              [ty (+ (window-y w) 6)])
+          ;; on its title bar, as to move it
+          (inject! `(mouse-move ,tx ,ty) `(mouse-down ,tx ,ty left 1)
+                   `(mouse-up ,tx ,ty left))
+          (steps 2)
+          (check "the dialog stays above Environments, with its keyboard: \
+                  focused from code, pressed in its content, which does \
+                  nothing there, and on its title bar"
+                 (and kept pressed (eq? (window-region w tx ty) 'title)
+                      (eq? (focused-window) fd)
+                      (eq? (car (windows)) fd)
+                      (eq? (cadr (windows)) w)))))
+      (let-values ([(x y) (ui-point fd (row 0) 0.5)])
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                 `(mouse-up ,x ,y left) `(mouse-down ,x ,y left 2)
+                 `(mouse-up ,x ,y left))
+        (steps 2))
+      (check "a double click goes into a folder"
+             (equal? (file-dialog-folder d) sub))
+      (press! 'backspace)
+      (steps 2)
+      (let ([up (file-dialog-folder d)])
+        (press! 'left 'alt)
+        (steps 2)
+        (let ([back (file-dialog-folder d)])
+          (press! 'right 'alt)
+          (steps 2)
+          (check "Backspace goes up, Alt+Left back, Alt+Right forward"
+                 (and (equal? up dir) (equal? back sub)
+                      (equal? (file-dialog-folder d) dir)))))
+      (click-ui! fd (row 1))
+      (check "a click selects a file and names it"
+             (equal? (file-dialog-name d) "smoke-load.ss"))
+      (click-ui! fd '(file-dialog pick))
+      (check "Load picks it: the dialog closes, Environments goes on, and \
+              the file is loaded into the environment"
+             (and (not (memq fd (windows))) (not (window-modal-child w))
+                  (wait-for (lambda ()
+                              (guard (c [#t #f])
+                                (eqv? 7 (env-eval lab 'smoke-loaded))))))))
+    (focus-window! w)
+    (click-ui! w '(envs load))
+    (let ([fd (focused-window)])
+      (press! 'escape)
+      (steps 2)
+      (check "Escape closes it, loading nothing"
+             (and (not (memq fd (windows))) (not (window-modal-child w)))))
+    (envs-select! v (env-root))
+    (vat-drop-env! lab)
+    (invalidate! w)
+    (steps 2))
   (let* ([line (lambda () (+ 3 (ui-region-x (ui-find ui 'split))))]
          [before (line)])
     (define (drag! x0 x1 y clicks)
@@ -3038,7 +3128,7 @@
 ;; closed in any way, Tasks goes on.
 (define (editor) (tasks-view-editor tv))
 (define (editor-text) (tasks-editor-text (window-ref (editor) 'state)))
-(define (waiting?) (and (ui-find tui 'waiting) #t))
+(define (waiting?) (and (ui-find tui '(ui modal-child)) #t))
 (press! 'escape)
 (steps 1)
 (click-ui! tw 'edit-description)
@@ -3056,8 +3146,13 @@
 (let-values ([(cx cy cw ch) (content-rect tw)])
   (let ([x (+ cx 30)] [y (+ cy 80)] [n (length *tasks*)])
     (focus-window! tw)
-    (type! "n")
-    (press! 'delete)
+    (steps 1)
+    (check "focusing Tasks gives the editor the keyboard, above Tasks"
+           (and (eq? (editor) (focused-window))
+                (eq? (editor) (car (windows))) (eq? tw (cadr (windows)))))
+    ;; handed to it, as a style that keeps no dialog above would
+    (window-call tw 'text "n")
+    (window-call tw 'key 'delete '())
     (steps 2)
     (check "Tasks takes no key while it waits"
            (and (= n (length *tasks*)) (not (tasks-view-confirm tv))))

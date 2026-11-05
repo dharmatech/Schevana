@@ -265,7 +265,6 @@
        (+ 48 (text-widest (map cdr settings-tabs) 'ui))
        (+ 56 (text-width "Reset to defaults" 'ui))))
 
-(define (settings-tab-height) (max 32 (round (+ (font-line-height 'ui) 12))))
 (define (settings-color-row-height)
   (max 26 (round (+ (font-line-height 'ui) 11))))
 
@@ -1013,44 +1012,21 @@
 ;;; ------------------------------------------------------------------
 ;;; the app
 
-;; A tab in the sidebar: flags selected, hover, focused.
-(define (settings-draw-tab x y w h flags label)
-  (let ([selected? (memq 'selected flags)])
-    (cond [selected? (ui-draw-highlight x y w h '())]
-          [(memq 'hover flags) (ui-draw-highlight x y w h '(hover))])
-    (ui-draw-label (+ x 14) y (- w 20) h (if selected? '() '(dim)) label)
-    (when selected?
-      (ui-draw-highlight-over x y w h '())
-      ;; its mark after that, so a style that inverts the tab keeps it
-      ;; whole (in ink on ink)
-      (fill-round-rect x (+ y (/ h 2) -8) 3 16 1.5 'accent))
-    (when (memq 'focused flags) (ui-draw-focus x y w h flags 5))))
-
 (define (settings-sidebar ui st sw h)
   (ui-draw-surface 0 0 sw h '(nav))
   (ui-draw-label 20 18 (- sw 40) (font-line-height 'heading) '(heading)
                  "Settings")
-  (let* ([tab-h (settings-tab-height)]
-         [tabs-bottom
-          (let loop ([ts settings-tabs]
-                     [ty (round (+ 18 (font-line-height 'heading) 27))])
-            (if (null? ts)
-                (- ty 6)
-                (let ([t (caar ts)] [id (list 'tab (caar ts))])
-                  (ui-pressable! ui id 10 ty (- sw 20) tab-h
-                                 (lambda ()
-                                   (settings-press-focus! ui id)
-                                   (settings-st-tab-set! st t)
-                                   (settings-st-hex-set! st #f)
-                                   (settings-st-pane-scroll-set! st 0))
-                                 '(#\space return) '())
-                  (settings-draw-tab 10 ty (- sw 20) tab-h
-                                     (apply ui-flags ui id
-                                            (if (eq? t (settings-st-tab st))
-                                                '(selected)
-                                                '()))
-                                     (cdar ts))
-                  (loop (cdr ts) (+ ty tab-h 6)))))]
+  (let* ([tabs-bottom
+          (- (ui-nav ui 'tab 10 (round (+ 18 (font-line-height 'heading) 27))
+                     (- sw 20)
+                     (map (lambda (t) (list (car t) (cdr t) #f)) settings-tabs)
+                     (settings-st-tab st)
+                     (lambda (t)
+                       (settings-press-focus! ui (list 'tab t))
+                       (settings-st-tab-set! st t)
+                       (settings-st-hex-set! st #f)
+                       (settings-st-pane-scroll-set! st 0)))
+             6)]
          ;; The hint at the bottom, wrapped to the sidebar, and the button
          ;; above it; both move down rather than cover the tabs.
          [hint "Changes apply live and are saved automatically."]
