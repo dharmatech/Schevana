@@ -1658,6 +1658,63 @@
                       list)
                     '(((0 . 5) (15 . 0) (0 . 25)) 35))))
 
+(check "ui-form puts a label beside its control, or over it where the \
+        control would be narrower than its least; a hint goes under the \
+        control, and a row without a label spans the form"
+       (let* ([gap (ui-gap)] [lh (font-line-height 'ui)]
+              [lw (+ (text-widest '("Name" "Kind") 'ui) gap gap)]
+              [none (lambda (x y w) #f)]
+              [rows (list (list "Name" 20 none)
+                          (list "Kind" 30 none 'hint "Why")
+                          (list #f (lambda (w) (quotient w 10)) none))]
+              [walk (lambda (w)
+                      (let* ([placed '()]
+                             [bottom (ui-form-walk
+                                      rows 0 0 w
+                                      (lambda (row inline? lx ly lw lh cx cy
+                                               cw ch hint hh)
+                                        (set! placed
+                                          (cons (list inline? cx cy cw ch)
+                                                placed)))
+                                      (lambda a #f))])
+                        (cons bottom (reverse placed))))]
+              [hh (let-values ([(w h) (ui-label-size '(hint wrap) "Why"
+                                                     (- 400 lw))])
+                    h)]
+              [wide (walk 400)]
+              [y2 (+ (max 20 lh) gap)]
+              [y3 (+ (max (+ y2 30 4 hh) (+ y2 lh)) gap)]
+              [narrow (walk (+ lw 100))])
+         (and (equal? (cdr wide)
+                      (list (list #t lw 0 (- 400 lw) 20)
+                            (list #t lw y2 (- 400 lw) 30)
+                            (list #f 0 y3 400 40)))
+              (= (car wide) (+ y3 40) (ui-form-height rows 400))
+              (equal? (cadr narrow) (list #f 0 (+ lh 4) (+ lw 100) 20)))))
+
+(check "ui-suggestions ranks by segments, an exact name first, at most n; \
+        none for nothing typed, nor the one that is what was typed"
+       (and (equal? (ui-suggestions "abc" '("abcd" "abc" "xyz") 5)
+                    '("abc" "abcd"))
+            (member "draw-text-centered"
+                    (ui-suggestions "dtc" '("draw-text-centered" "x") 5))
+            (= (length (ui-suggestions "d" '("da" "db" "dc") 2)) 2)
+            (null? (ui-suggestions "" '("a") 5))
+            (null? (ui-suggestions "abc" '("abc") 5))))
+
+(check "ui-table-fit gives the flexible column the rest, dropping \
+        columns in order while it would be narrower than the least, the \
+        others' flags kept"
+       (let ([cols '((a "A" 50) (name "Name" #f) (b "B" 40 right)
+                     (c "C" 30))])
+         (and (equal? (ui-table-fit 300 cols '(c b a) 100)
+                      '((a "A" 50) (name "Name" 180) (b "B" 40 right)
+                        (c "C" 30)))
+              (equal? (ui-table-fit 200 cols '(c b a) 100)
+                      '((a "A" 50) (name "Name" 110) (b "B" 40 right)))
+              (equal? (ui-table-fit 120 cols '(c b a) 100)
+                      '((name "Name" 120))))))
+
 (check "ui-table-step at both ends, by pages, from no row, with no rows"
        (equal? (map (lambda (a) (apply ui-table-step a))
                     '((0 5 2 up) (4 5 2 down) (#f 5 2 down) (#f 5 2 up)
@@ -2069,7 +2126,7 @@
               [long (text-width "↑ under TASK-13" 'ui-small)]
               [short (text-width "↑ TASK-13" 'ui-small)]
               [w (lambda (room)   ; the cell's width for that room
-                   (+ room (* 2 (tasks-cell-inset)) 8
+                   (+ room (* 2 (ui-table-cell-inset)) 8
                       (text-width "TASK-100" 'mono-small)))]   ; the seed's
               [shown (lambda (room)   ; => (title-shown note ...)
                        (cdr (strings-drawn
@@ -6694,14 +6751,14 @@
   (unless (fixnum? v) (errorf 'units-env-size-set! "no fixnum: ~s" v))
   (set! units-env-size v))
 
-(define units-env (env-fork (env-root) 'units 'chez))
+(define units-env (env-child (env-root) 'units 'chez))
 (env-share! units-env '(units-env-get (value . units-env-value)))
 (env-share-setter! units-env '(size . units-env-size) 'units-env-size-set!)
 
 (check "a child's path is its name under its parent's, and finds it; a \
         sibling of the same name is numbered"
-       (let* ([twin (env-fork (env-root) 'units 'chez)]
-              [inner (env-fork units-env 'inner 'worklet)]
+       (let* ([twin (env-child (env-root) 'units 'chez)]
+              [inner (env-child units-env 'inner 'worklet)]
               [ok (and (equal? (env-path (env-root)) "/")
                        (equal? (env-path units-env) "/units")
                        (equal? (env-path twin) "/units-2")
@@ -6742,7 +6799,7 @@
 
 (check "a child's define of a shared name makes its own; the world's is \
         unchanged"
-       (let ([e (env-fork (env-root) 'units-own 'chez)])
+       (let ([e (env-child (env-root) 'units-own 'chez)])
          (env-share! e '(units-env-get))
          (env-eval e '(define (units-env-get) 'mine))
          (let ([ok (and (eq? (env-eval e '(units-env-get)) 'mine)
@@ -6762,7 +6819,7 @@
 
 (check "a grandchild shares its parent's own names, and its parent's \
         shares, still read-only and live"
-       (let ([g (env-fork units-env 'grand 'chez)])
+       (let ([g (env-child units-env 'grand 'chez)])
          (env-eval units-env '(define units-env-mine 'child))
          (env-share! g '(units-env-mine value))
          (set! units-env-value 3)
@@ -6795,14 +6852,14 @@
          (and (= (env-eval units-env 'units-env-loaded) 3)
               (not (top-level-bound? 'units-env-loaded)))))
 
-(define units-env-world (env-fork (env-root) 'units-world 'chez))
+(define units-env-world (env-child (env-root) 'units-world 'chez))
 (env-share-world! units-env-world)
 (env-eval units-env-world '(define units-env-later 'mine))
 (define units-env-later 'world)
 (define units-env-newer 'world)
 
-(check "a whole-world child has every name of the world's, and gains \
-        those the world defines later, but for those it defined itself"
+(check "a world namespace has every name of the world's, and gains those \
+        the world defines later, but for those it defined itself"
        (and (eqv? (env-eval units-env-world '(length (windows)))
                   (length (windows)))
             (eq? (env-eval units-env-world 'units-env-newer) 'world)
@@ -6811,8 +6868,9 @@
               (env-eval units-env-world '(set! units-env-newer 0))
               #f)))
 
-(check "a private REPL sees its list of the world's, live, and only it"
-       (let ([e (make-repl-environment 'private)])
+(check "a private namespace sees its list of the world's, live, and only \
+        it"
+       (let ([e (env-fork (env-root) 'private)])
          (let ([ok (and (eq? (env-eval e '(windows)) (windows))
                         (guard (c [#t #t]) (env-eval e 'set-theme!) #f)
                         (guard (c [#t (syntax-violation? c)])
@@ -6821,11 +6879,183 @@
            (env-drop! e)
            ok)))
 
-(check "dropping a child takes it, and its children, out of the tree"
-       (let ([g (env-fork units-env-world 'grand 'chez)])
+(check "a sandbox's children are sandboxes on its base, shared what it \
+        holds, its own names and its shares, read-only"
+       (let ([box (env-child (env-root) 'units-box 'worklet)])
+         (env-share! box '(units-env-get))
+         (env-eval box '(define units-box-own 7))
+         (let ([inner (env-child box 'inner 'worklet)])
+           (env-share! inner '(units-box-own units-env-get))
+           (let ([ok (and (raises? (lambda () (env-child box 'ns 'chez)))
+                          (equal? (env-eval inner
+                                            '(list units-box-own
+                                                   (units-env-get)))
+                                  (list 7 (units-env-get)))
+                          (guard (c [#t (syntax-violation? c)])
+                            (env-eval inner '(set! units-box-own 1))
+                            #f))])
+             (env-drop! box)
+             ok))))
+
+(check "an environment forks only the kinds its own allows, refuses \
+        what is not its to share and options it does not take, and hands \
+        forks down: a world namespace's makes all, a sandbox's sandboxes \
+        and threads, a pure one holds none"
+       (let* ([w (env-fork (env-root) 'world)]
+              [wf (env-eval w 'fork)]
+              [s (env-find (wf 'sandbox))]
+              [sf (env-eval s 'fork)]
+              [p (env-find (wf 'pure))])
+         (env-eval s '(define units-fork-own 3))
+         (let* ([inner (env-find (sf 'sandbox 'share '(units-fork-own)))]
+                [named (env-find (sf 'sandbox 'name 'units-named))]
+                [t (env-find (sf 'thread))]
+                [ok (and (equal? (wf) (env-kinds))
+                         (equal? (sf) '(sandbox thread))
+                         (raises? (lambda () (sf 'private)))
+                         (raises? (lambda ()
+                                    (sf 'sandbox 'share '(units-env-value))))
+                         (raises? (lambda () (sf 'sandbox 'colour 1)))
+                         (raises? (lambda () (sf 'sandbox 'name 'a/b)))
+                         (raises? (lambda () (env-fork p 'pure)))
+                         (= (env-eval inner 'units-fork-own) 3)
+                         (eq? (env-parent inner) s)
+                         (equal? (env-path named)
+                                 (string-append (env-path s) "/units-named"))
+                         (equal? ((env-eval inner 'fork)) '(sandbox thread))
+                         (vat-of t)
+                         (eq? (env-kind t) 'thread)
+                         (null? (env-forks t))
+                         (null? (env-forks p))
+                         (not (top-level-bound? 'fork (env-environment p))))])
+           (vat-drop-env! w)
+           ok)))
+
+(check "a fork shares what it is given, renamed and through setters, after \
+        its kind's own; what a child holds is its shares and its own names"
+       (let ([c (env-fork (env-root) 'pure 'name 'units-given
+                          'share '(units-env-get (v . units-env-value))
+                          'setters '(((sz . units-env-size)
+                                      . units-env-size-set!)))])
+         (env-eval c '(set! sz 6))
+         (env-eval c '(define units-given-own 1))
+         (let ([ok (and (equal? (env-path c) "/units-given")
+                        (eq? (env-kind c) 'pure)
+                        (= units-env-size 6)
+                        (equal? (env-eval c '(list (units-env-get) v))
+                                (list (units-env-get) units-env-value))
+                        (equal? (env-shared-names c)
+                                '((sz units-env-size units-env-size-set!)
+                                  (units-env-get units-env-get #f)
+                                  (v units-env-value #f)))
+                        (equal? (env-own-names c) '(units-given-own))
+                        (raises? (lambda ()
+                                   (env-fork (env-root) 'pure
+                                             'share '(units-not-a-name)))))])
+           (env-drop! c)
+           ok)))
+
+(check "the world forks every kind, in the order registered; a bare child \
+        forks nothing and is titled by its base"
+       (let ([c (env-child (env-root) 'units-bare 'worklet)])
+         (let ([ok (and (equal? (env-forks (env-root))
+                                '(private world pure sandbox thread))
+                        (null? (env-forks (env-worklets)))
+                        (string=? (env-title (env-root)) "The world")
+                        (string=? (env-title (env-worklets)) "Worklets")
+                        (null? (env-forks c)) (not (env-kind c))
+                        (string=? (env-title c) "Sandbox"))])
+           (env-drop! c)
+           ok)))
+
+(check "a share as typed in Environments: a name, renamed with as, set \
+        through a setter with via"
+       (let ([read (lambda (s) (call-with-values
+                                 (lambda () (envs-share-words s))
+                                 list))])
+         (and (equal? (read "now-ms") '(now-ms #f))
+              (equal? (read "now-ms as clock") '((clock . now-ms) #f))
+              (equal? (read "size via size-set!") '(size size-set!))
+              (equal? (read " a  as b via c ") '((b . a) c))
+              (equal? (read "a b") '(#f #f)))))
+
+(check "a REPL's tinted background follows the style: one opened in Mac \
+        and shown in Genera has Genera's, as one opened there"
+       (let* ([rgb (lambda (w) (call-with-values
+                                 (lambda () (color-rgba (window-bg w)))
+                                 list))]
+              [a (begin (set-style! 'mac) (repl 'private))]
+              [in-mac (rgb a)]
+              [b (begin (set-style! 'genera) (repl 'private))]
+              [ok (and (not (equal? in-mac (rgb a)))
+                       (equal? (rgb a) (rgb b)))])
+         (close-window! a)
+         (close-window! b)
+         (set-style! 'mac)
+         ok))
+
+(check "a window's title icon is drawn by the Mac and Windows styles' \
+        frames, left of the title; Genera's busy mark is a terminal's \
+        spinner in a character's cell, and its who line says Run"
+       (let* ([at #f]
+              [w (open-window "Iconic" 'size '(400 . 200)
+                              'title-icon (lambda (x y s flags)
+                                            (set! at (list x s flags))))]
+              [drawn (lambda (style)
+                       (set-style! style)
+                       (set! at #f)
+                       (invalidate!)
+                       (steps 1)
+                       at)])
+         (let* ([mac (drawn 'mac)] [windows (drawn 'windows)])
+           (set-style! 'genera)
+           (focus-window! w)
+           (window-set! w 'busy "Running")
+           (let* ([state (genera-who-state)]
+                  [idle (begin (window-set! w 'busy #f)
+                               (genera-who-state))]
+                  [size (call-with-values ui-busy-size list)]
+                  [cell (list (font-char-width 'mono)
+                              (font-line-height 'mono))])
+             (set-style! 'mac)
+             (close-window! w)
+             (and mac (< (car mac) (+ (window-x w) (/ (window-w w) 2)))
+                  (= (cadr mac) (ui-glyph-size)) (null? (caddr mac))
+                  windows (< (car windows) (+ (window-x w) 40))
+                  (equal? state "Run") (equal? idle "")
+                  (assq 'windows (genera-who-line-areas))
+                  (equal? size cell)
+                  (equal? (call-with-values ui-busy-size list)
+                          (list (ui-glyph-size) (ui-glyph-size))))))))
+
+(check "a world namespace's next sync brings the names the world gained \
+        since, but those it defined itself; env-sync! shares them now"
+       (let ([w (env-fork (env-root) 'world 'name 'units-sync)])
+         (eval '(define units-sync-later 1) *world-env*)
+         (eval '(define units-sync-mine 2) *world-env*)
+         ;; not by env-eval, which syncs first
+         (eval '(define units-sync-mine 'its-own) (env-environment w))
+         (let* ([before (env-unsynced w)]
+                [ok (and (memq 'units-sync-later before)
+                         (not (memq 'units-sync-mine before))
+                         (begin (env-sync! w) (null? (env-unsynced w)))
+                         (assq 'units-sync-later (env-shared-names w))
+                         (eq? (env-eval w 'units-sync-mine) 'its-own)
+                         (null? (env-unsynced units-env)))])
+           (env-drop! w)
+           ok)))
+
+(check "dropping a child takes it, and its children, out of the tree and \
+        marks them dropped; not the world, nor /worklets"
+       (let ([g (env-child units-env-world 'grand 'chez)])
          (env-drop! units-env-world)
          (env-drop! units-env)
-         (and (not (env-find "/units-world/grand"))
+         (and (env-dropped? g)
+              (env-dropped? units-env)
+              (raises? (lambda () (env-child g 'more 'chez)))
+              (raises? (lambda () (env-drop! (env-root))))
+              (raises? (lambda () (env-drop! (env-worklets))))
+              (not (env-find "/units-world/grand"))
               (not (env-find "/units"))
               (not (memq units-env (env-children (env-root))))
               (equal? (map env-name (env-children (env-root)))
@@ -6847,7 +7077,7 @@
 (define-worklet (vat-test-spin) (let loop () (loop)))
 (define-worklet (vat-test-fail) (error 'vat-test "failed on purpose"))
 
-(define vat-test (vat-start! (env-fork (env-root) 'vat-test 'worklet)))
+(define vat-test (vat-start! (env-child (env-root) 'vat-test 'worklet)))
 
 (check "a vat runs a worklet on its own thread, and the job's then runs on \
         main at a later step, once"
@@ -6889,7 +7119,7 @@
                                                    "no procedure but")])
                   (thunk)
                   #f))]
-             [chez (env-fork (env-root) 'vat-chez 'chez)])
+             [chez (env-child (env-root) 'vat-chez 'chez)])
          (let ([ok (and (refused? (lambda () (vat-send! vat-test car '() #f)))
                         (refused? (lambda ()
                                     (vat-send! vat-test vat-test-add
@@ -7004,8 +7234,37 @@
                (vat-pool-size-set! size)
                (and ok (= (length (vat-threads (vat-pool))) size)))))))
 
+(check "vat-repl! evaluates forms on the vat's thread and prints there \
+        what they return, procedures too, and an error as its text"
+       (let* ([e (env-child (env-root) 'vat-repl 'worklet)]
+              [v (vat-start! e)] [got #f] [err #f])
+         (vat-repl! v '((define x 2) (* x 21) (lambda () x)) 60
+                    (lambda (texts) (set! got texts))
+                    (lambda (text) (set! err text)))
+         (vat-repl! v '((car 1)) 60
+                    (lambda (texts) (set! got 'no))
+                    (lambda (text) (set! err text)))
+         (let ([ok (and (vat-test-until (lambda () err))
+                        (eq? (vat-of e) v)
+                        (equal? (car got) "42")
+                        (string-prefix? "#<procedure" (cadr got))
+                        (string-contains-ci? err "car"))])
+           (vat-drop-env! e)
+           (and ok (not (vat-of e)) (not (env-find "/vat-repl"))))))
+
+(check "a job sent with a fail gives it the condition, and its window \
+        stays up"
+       (let ([w (open-window "Fail" 'size '(200 . 100))] [got #f])
+         (parameterize ([current-window w])
+           (vat-send! vat-test vat-test-fail '() #f (lambda (c) (set! got c))))
+         (let ([ok (and (vat-test-until (lambda () got))
+                        (condition? got)
+                        (not (window-error w)))])
+           (close-window! w)
+           ok)))
+
 (check "dropping a vat kills its jobs and refuses new ones"
-       (let* ([e (env-fork (env-root) 'vat-drop 'worklet)]
+       (let* ([e (env-child (env-root) 'vat-drop 'worklet)]
               [v (vat-start! e)]
               [j (vat-send! v vat-test-spin '() #f)])
          (vat-drop! v)

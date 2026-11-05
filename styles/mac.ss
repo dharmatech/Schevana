@@ -49,10 +49,19 @@
                                    (mix color #x000000 0.6)))))
                   '(18 38 58) '(button-close button-min button-max)
                   '(close minimize maximize))
-        (text-draw-centered (+ x 70) y (- w 140) th
-                            (text-fit (window-title win) (- w 160) 'title)
-                            (if focused? 'title-text 'title-text-dim)
-                            'title)))))
+        (mac-title win x y w th focused?)))))
+
+;; The title, centered between the buttons and their mirror, after the
+;; window's icon if its app gave one, the two centered together.
+(define (mac-title win x y w th focused?)
+  (let* ([icon (ui-title-icon win)] [s (ui-glyph-size)]
+         [room (if icon (+ s 6) 0)]
+         [title (text-fit (window-title win) (- w 160 room) 'title)]
+         [tw (text-width title 'title)]
+         [tx (+ x 70 (/ (- w 140 tw room) 2))])
+    (when icon (icon tx (+ y (/ (- th s) 2)) s (if focused? '() '(dim))))
+    (text-draw-centered (+ tx room) y tw th title
+                        (if focused? 'title-text 'title-text-dim) 'title)))
 
 (define (mac-draw-over win x y w h focused? hover pressed)
   (stroke-round-rect x y w h (mac-radius win)

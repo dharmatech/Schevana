@@ -277,8 +277,7 @@
                     (+ (ui-table-header-height) (* rh (max 1 (min n most)))))]
          [cell (lambda (text-of)   ; a cell: its row's text for its key
                  (lambda (row key cx cy cw ch flags)
-                   (ui-draw-label (+ cx 10) cy (- cw 20) ch '()
-                                  (text-of row key))))]
+                   (ui-draw-cell cx cy cw ch '() (text-of row key))))]
          [wins (sort (lambda (a b) (< (window-id a) (window-id b))) (windows))]
          [ps (procs)])
     ;; the World: a label and its words a row, in two columns where they
@@ -420,8 +419,7 @@
       (move-on!))
     (define (toolbar w)
       (let*-values
-          ([(pad gap) (values (ui-pad) (ui-gap))]
-           [(ticks-label) (format "Ticks: ~a s" *profile-tick-seconds*)]
+          ([(ticks-label) (format "Ticks: ~a s" *profile-tick-seconds*)]
            [(minutes-label) (format "Seconds: ~a min" *profile-minutes*)]
            [(kw kh) (ui-checkbox-size "Profiling")]
            [(pw ph) (ui-button-size "Resume" #f)]
@@ -478,14 +476,8 @@
                                   'label minutes-label
                                   'tip "How long each second's sums are \
                                         kept"))))]
-           [(items) (if (eq? tab 'overview) (list (car items)) items)]
-           [(at height) (ui-flow pad gap (- w pad pad) gap
-                                 (map (lambda (i) (cons (car i) (cadr i)))
-                                      items))])
-        (ui-draw-surface 0 0 w (+ height gap gap) '(toolbar))
-        (for-each (lambda (i p) ((caddr i) (car p) (cdr p) (car i) (cadr i)))
-                  items at)
-        (+ height gap gap)))
+           [(items) (if (eq? tab 'overview) (list (car items)) items)])
+        (ui-toolbar 0 0 w items)))
     ;; A group's heading at y, and words at its right; the y below.
     (define (section x y w title words)
       (let-values ([(gw gh) (ui-label-size '(group) title w)])
@@ -678,9 +670,8 @@
                              (profile-total-parts t)))
                 '())))
         (define (cell node key cx cy cw ch flags)
-          (let ([t (total-of node)] [in 10])
-            (define (number v)
-              (ui-draw-label cx cy (- cw in) ch '(right) v))
+          (let ([t (total-of node)] [in (ui-table-cell-inset)])
+            (define (number v) (ui-draw-cell cx cy cw ch '(right) v))
             (case key
               [(name)
                (let* ([s (if (monitor-part? node) (car node) node)]

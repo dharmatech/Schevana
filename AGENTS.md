@@ -87,9 +87,11 @@ before it:
 - **S5. Names.** A global is earmuffed and carries its owner's prefix
   (`*status-segments*`, `*repl-inputs*`).
 - **S6. Environments.** Code that makes an environment shares it a list
-  of names (`env-share!`), each read-only, or through a setter that may
-  refuse. Every name of the world's is the Whole-World REPL's alone
-  (`tests/sources.ss`).
+  of names (`env-share!`, `env-fork`'s `'share`), each read-only, or
+  through a setter that may refuse. Every name of the world's is a world
+  namespace's alone, which a person asks for at a REPL or in Environments
+  (`tests/sources.ss`). An environment forks only the kinds its own
+  allows (`env-forks`).
 
 ## Names
 
@@ -114,9 +116,9 @@ before it:
 ## Drawing and the look
 
 - Only drawing procedures draw or name a color: in kits, services, the
-  desktop, Tasks and Settings, code that is not a draw procedure, a part or
-  a theme default names no color and calls no drawing primitive
-  (`tests/sources.ss`).
+  desktop, Tasks, Settings and Environments, code that is not a draw
+  procedure, a part or a theme default names no color and calls no
+  drawing primitive (`tests/sources.ss`).
 - A color is a theme key (`'accent`, `'text-dim`) or a mix of them; a look
   that differs by style is a part or a setting a style gives, never a test
   of which style is on.

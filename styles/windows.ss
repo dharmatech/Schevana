@@ -40,12 +40,19 @@
     (call-with-round-clip x y w h r
       (lambda ()
         (fill-rect x y w th (if focused? 'title-bg-focus 'title-bg))
-        (fill-round-rect (+ x 12) (+ y (quotient (- th is) 2)) is is 4 icon)
-        (text-draw-centered (+ x 12) (+ y (quotient (- th is) 2)) is is
-                            (if (string=? title "")
-                                "·"
-                                (string (char-upcase (string-ref title 0))))
-                            (color-readable-on icon) 'ui-small)
+        ;; the window's own icon, or its app's color and initial
+        (if (ui-title-icon win)
+            ((ui-title-icon win) (+ x 12) (+ y (quotient (- th is) 2)) is
+                                 (if focused? '() '(dim)))
+            (begin
+              (fill-round-rect (+ x 12) (+ y (quotient (- th is) 2)) is is 4
+                               icon)
+              (text-draw-centered (+ x 12) (+ y (quotient (- th is) 2)) is is
+                                  (if (string=? title "")
+                                      "·"
+                                      (string (char-upcase
+                                               (string-ref title 0))))
+                                  (color-readable-on icon) 'ui-small)))
         (draw-text (+ x is 22) (+ y (/ (- th (font-line-height 'ui)) 2))
                    (text-fit title (- w is 22 (* 3 windows-button-width) 12)
                              'ui)

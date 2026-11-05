@@ -4,14 +4,14 @@
 ;;;
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; outside
-;;; src/ nothing calls C; only the REPL shares the whole world with an
-;;; environment; every file in a folder registers what it defines
+;;; src/ nothing calls C; only a world namespace shares the whole world
+;;; with an environment; every file in a folder registers what it defines
 ;;; (a kit's names keep its prefix; desktop/, like src/, defines plain
 ;;; names); a style sets only settings that exist (built in, its options'
-;;; or its own); in the kits, the desktop layer, Tasks and Settings only
-;;; the drawing procedures draw or name a color, and the edit kit never
-;;; does; and only styles call a part's built-in body. Fast: it loads the
-;;; world but does not boot it.
+;;; or its own); in the kits, the desktop layer, Tasks, Settings and
+;;; Environments only the drawing procedures draw or name a color, and the
+;;; edit kit never does; and only styles call a part's built-in body.
+;;; Fast: it loads the world but does not boot it.
 
 (define *schevana-root*
   (let ([dir (path-parent (path-parent (car (command-line))))])
@@ -277,13 +277,14 @@
 ;;; ------------------------------------------------------------------
 ;;; sharing the whole world
 ;;; Code shares a list of names with an environment it makes; every name
-;;; of the world's, followed, is for the person at the REPL, who asks for
-;;; it on purpose (services/env.ss). So only the REPL calls for it.
+;;; of the world's, followed, is a world namespace's, which a person asks
+;;; for on purpose (a REPL's, the Environments app's fork). So only the
+;;; kind does (services/env.ss).
 
-(check "only the REPL shares the whole world with an environment"
+(check "only a world namespace shares the whole world with an environment"
        (none? (filter-map
                (lambda (f)
-                 (and (not (member f '("services/env.ss" "apps/repl.ss")))
+                 (and (not (member f '("services/env.ss")))
                       (memq 'env-share-world! (symbols-in (file-forms f)))
                       (format "~a calls env-share-world!" f)))
                world-files)))
@@ -383,14 +384,14 @@
 
 ;;; ------------------------------------------------------------------
 ;;; the seam
-;;; In the kits, the desktop layer, Tasks and Settings only the drawing
-;;; procedures draw or choose a color: parts (define-part), procedures
-;;; named like a drawing primitive (draw-…, fill-…) or ui-draw-…,
-;;; complete-draw-…, tasks-draw-… and settings-draw-…, and the settings
-;;; they give (theme-default!: a style may give its own). No other
-;;; top-level form calls a drawing primitive or quotes a theme color key
-;;; ('text, also an event's name, aside), so a style restyles all they
-;;; draw. The edit kit never draws. And outside
+;;; In the kits, the desktop layer, Tasks, Settings and Environments only
+;;; the drawing procedures draw or choose a color: parts (define-part),
+;;; procedures named like a drawing primitive (draw-…, fill-…) or
+;;; ui-draw-…, complete-draw-…, tasks-draw-…, settings-draw-… and
+;;; envs-draw-…, and the settings they give (theme-default!: a style may
+;;; give its own). No other top-level form calls a drawing primitive or
+;;; quotes a theme color key ('text, also an event's name, aside), so a
+;;; style restyles all they draw. The edit kit never draws. And outside
 ;;; styles/ nothing calls a part's built-in body (name*): a style's own
 ;;; part would be passed by.
 
@@ -398,7 +399,7 @@
   (append (filter (lambda (f) (member (file-folder f)
                                             '("kits" "services" "desktop")))
                   (folder-files))
-          '("apps/tasks.ss" "apps/settings.ss")))
+          '("apps/tasks.ss" "apps/settings.ss" "apps/envs.ss")))
 
 ;; The parts: the keys whose built-in is name*, a body of their own.
 (define parts
@@ -459,7 +460,7 @@
              (or (drawing-primitive? name)
                  (exists (lambda (p) (string-prefix? p (symbol->string name)))
                          '("ui-draw-" "complete-draw-" "tasks-draw-"
-                           "settings-draw-" "text-draw-"))))
+                           "settings-draw-" "envs-draw-" "text-draw-"))))
         (and (pair? form)
              (memq (car form) '(define-part theme-default! color-default!))
              #t))))

@@ -1,13 +1,22 @@
 ;;; services/vat.ss — vats: threads, each with a mailbox and a sandbox,
 ;;; that run jobs and hand their results back to the main thread.
 ;;;
-;;;   (define v (vat-start! (env-fork (env-root) 'tally 'worklet)))
+;;;   (define v (vat-of (env-fork (env-root) 'thread 'name 'tally)))
 ;;;   (vat-eval! v '(define n 0) #f)       a form, run in v's sandbox
 ;;;   (vat-eval! v '(define (add! k) (set! n (+ n k)) n) #f)
 ;;;   (vat-send! v 'add! '(5) show)        v's add!; (show 5) on main
 ;;;   (vat-send! (vat-pool) step! (list grid) show)   a worklet, on the
 ;;;                                        pool's threads
+;;;   (vat-repl! v forms 72 show-lines show-error)   forms as a REPL
+;;;                                        takes them: values printed
 ;;;   (vat-job-pending? j)   (vat-job-kill! j)   (vat-drop! v)
+;;;   (vat-of e)                           the vat whose sandbox e is
+;;;   (vat-drop-env! e)                    e and its children dropped,
+;;;                                        and their vats
+;;;   (vat-threads-of v)   (vat-jobs-of v)   how many threads, which jobs
+;;;
+;;; A thread, the kind of environment (env-fork), is a sandbox and a vat
+;;; started on it once it is shared what it is given.
 ;;;
 ;;; A vat is a thread, its mailbox and a sandbox (services/env.ss) that
 ;;; only its thread evaluates in, so the sandbox's globals are written by
@@ -21,7 +30,10 @@
 ;;; returns, (then v ...) runs on main at its next step, as a handler of
 ;;; the window it was sent from: (current-window) bound, under the
 ;;; watchdog, an error crashing the window. A job that raises crashes its
-;;; window too; with no window (sent from a REPL), it is a red toast.
+;;; window too (with no window, a red toast), unless it was sent with a
+;;; fail, which is then given the condition as then is the results.
+;;; vat-repl! prints the values on the vat's thread, where they live, so
+;;; its then gets their texts, and its fail an error's.
 ;;;
 ;;; A job is pending until its then has run, or until it is killed: by
 ;;; vat-job-kill!, by its window's closing or crashing, or by its vat's
@@ -47,14 +59,16 @@
 (record-writer (record-type-descriptor vat)
   (lambda (v p wr) (fprintf p "#<vat ~a>" (env-path (vat-env v)))))
 
-;; A job: its vat; what it runs: a worklet, a name in the vat's sandbox,
-;; or #f for a form, then its args; its then (or #f) and window (or #f);
+;; A job: its vat; its kind: call (proc, a worklet or a name in the
+;; vat's sandbox, applied to args), eval (args a form) or show (args the
+;; width and forms of vat-repl!); its then, window and fail (or #f);
 ;; whether it was killed, a box main sets and the vat's thread reads.
 (define-record-type vat-job
-  (nongenerative schevana-vat-job-1)
-  (fields vat proc args then window killed))
+  (nongenerative schevana-vat-job-2)
+  (fields vat kind proc args then window fail killed))
 
 (defvar *vat-jobs* '())     ; the pending jobs, on main
+(defvar *vat-all* '())      ; the vats not dropped, the pool too
 (defvar *vat-pool* #f)
 (defvar *vat-pool-size* 4)
 ;; on a vat's thread: the job it runs and the way out of it, or #f
@@ -73,7 +87,24 @@
   (let ([v (make-vat e (box '()) (make-mutex) (make-condition) '()
                      (box #f))])
     (vat-resize! v n)
+    (set! *vat-all* (cons v *vat-all*))
     v))
+
+(define (vat-of e) (find (lambda (v) (eq? (vat-env v) e)) *vat-all*))
+
+(define (vat-threads-of v) (length (vat-threads v)))
+
+;; The kind e shows as: its own, or a bare one's by whether a vat runs on
+;; it and by its base (a sandbox, or a namespace).
+(define (vat-env-kind e)
+  (cond [(env-kind e)]
+        [(vat-of e) 'thread]
+        [(eq? (env-base e) 'worklet) 'sandbox]
+        [else 'namespace]))
+
+;; v's pending jobs, the oldest first.
+(define (vat-jobs-of v)
+  (reverse (filter (lambda (j) (eq? (vat-job-vat j) v)) *vat-jobs*)))
 
 ;; v's threads: more start, or those past n stop once done with their
 ;; turn.
@@ -105,9 +136,18 @@
 ;; Ends v's threads, once each is done with its turn, and kills its jobs.
 (define (vat-drop! v)
   (box-cas! (vat-dropped v) #f #t)
+  (set! *vat-all* (remq v *vat-all*))
   (for-each (lambda (j) (when (eq? (vat-job-vat j) v) (vat-job-kill! j)))
             *vat-jobs*)
   (vat-wake! v))
+
+;; Drops e and its children (env-drop!, which may refuse), and the vats
+;; whose sandboxes they are.
+(define (vat-drop-env! e)
+  (env-drop! e)
+  (let walk ([e e])
+    (let ([v (vat-of e)]) (when v (vat-drop! v)))
+    (for-each walk (env-children e))))
 
 ;; A thread of v: its own timer, then turns, each by name, so a reload
 ;; changes them, until v is dropped or the thread stopped. => the box
@@ -162,25 +202,31 @@
 ;;; ------------------------------------------------------------------ jobs
 
 ;; Sends v the job (proc arg ...): proc a worklet, or the name of a
-;; procedure in v's sandbox. => the job.
-(define (vat-send! v proc args then)
+;; procedure in v's sandbox; and, optionally, a fail. => the job.
+(define (vat-send! v proc args then . fail)
   (when (and (symbol? proc) (eq? v *vat-pool*))
     (errorf 'vat-send! "the pool runs worklets only: ~s" proc))
-  (vat-post! 'vat-send! v proc args then))
+  (vat-post! 'vat-send! v 'call proc args then fail))
 
 ;; Sends v a form to evaluate in its sandbox. => the job.
-(define (vat-eval! v form then)
-  (when (eq? v *vat-pool*)
-    (errorf 'vat-eval! "the pool runs worklets only, not forms"))
-  (vat-post! 'vat-eval! v #f form then))
+(define (vat-eval! v form then . fail)
+  (vat-post! 'vat-eval! v 'eval #f form then fail))
 
-(define (vat-post! who v proc args then)
+;; Sends v forms to evaluate in turn, as a REPL does: (then texts), each
+;; value but (void) printed width wide, or (fail text) for an error.
+(define (vat-repl! v forms width then fail)
+  (vat-post! 'vat-repl! v 'show #f (cons width forms) then (list fail)))
+
+(define (vat-post! who v kind proc args then fail)
   (cond
     [(unbox (vat-dropped v)) (errorf who "~s was dropped" v)]
+    [(and (eq? v *vat-pool*) (not (eq? kind 'call)))
+     (errorf who "the pool runs worklets only, not forms")]
     [(crew-stray (cons proc args))
      => (lambda (p)
           (errorf who "a job carries no procedure but worklets: ~s" p))])
-  (let ([j (make-vat-job v proc args then (current-window) (box #f))])
+  (let ([j (make-vat-job v kind proc args then (current-window)
+                         (and (pair? fail) (car fail)) (box #f))])
     (set! *vat-jobs* (cons j *vat-jobs*))
     (vat-put! v j)
     (vat-wake! v)
@@ -208,7 +254,10 @@
               (lambda (k)
                 (vat-current (cons j k))
                 (set-timer vat-fuel)
-                (let ([r (guard (c [#t (cons 'error c)])
+                (let ([r (guard (c [#t (cons 'error
+                                             (if (eq? (vat-job-kind j) 'show)
+                                                 (vat-condition-text c)
+                                                 c))])
                            (call-with-values (lambda () (vat-call j))
                              (lambda vals (cons 'ok vals))))])
                   (vat-current #f)
@@ -218,11 +267,43 @@
         (post-main! (lambda () (vat-deliver! j (car r) (cdr r))))))))
 
 (define (vat-call j)
-  (let ([p (vat-job-proc j)]
-        [e (env-environment (vat-env (vat-job-vat j)))])
-    (cond [(not p) (eval (vat-job-args j) e)]
-          [(symbol? p) (apply (top-level-value p e) (vat-job-args j))]
-          [else (apply p (vat-job-args j))])))
+  (let ([e (env-environment (vat-env (vat-job-vat j)))]
+        [args (vat-job-args j)])
+    (case (vat-job-kind j)
+      [(eval) (eval args e)]
+      [(show) (vat-show e (car args) (cdr args))]
+      [else (let ([p (vat-job-proc j)])
+              (apply (if (symbol? p) (top-level-value p e) p) args))])))
+
+;; forms evaluated in e in turn, and their values but (void) printed width
+;; wide, by Chez's printer, on the vat's thread: => the texts.
+(define (vat-show e width forms)
+  (parameterize ([pretty-line-length width])
+    (let loop ([forms forms] [texts '()])
+      (if (null? forms)
+          (reverse texts)
+          (call-with-values (lambda () (eval (car forms) e))
+            (lambda vals
+              (loop (cdr forms)
+                    (fold-left (lambda (texts v)
+                                 (if (eq? v (void))
+                                     texts
+                                     (cons (vat-text v) texts)))
+                               texts vals))))))))
+
+(define (vat-text v)
+  (let ([s (with-output-to-string (lambda () (pretty-print v)))])
+    (if (and (> (string-length s) 0)
+             (char=? (string-ref s (- (string-length s) 1)) #\newline))
+        (substring s 0 (- (string-length s) 1))
+        s)))
+
+(define (vat-condition-text c)
+  (call-with-string-output-port
+   (lambda (p)
+     (if (condition? c)
+         (display-condition c p)
+         (fprintf p "non-condition raised: ~s" c)))))
 
 ;; A vat's thread's timer: out of its job once the job is killed.
 (define (vat-timer!)
@@ -232,29 +313,44 @@
           (begin (vat-current #f) ((cdr now) #f))
           (set-timer vat-fuel)))))
 
-;; On main: j's then, given its results, unless j was killed meanwhile.
-;; The results are walked here, on main, where the worklets' table is.
+;; On main: j's then, given its results, or its fail, given the error,
+;; unless j was killed meanwhile. The results are walked here, on main,
+;; where the worklets' table is.
 (define (vat-deliver! j status value)
   (when (memq j *vat-jobs*)
     (set! *vat-jobs* (remq j *vat-jobs*))
     (let* ([w (vat-job-window j)]
-           [stray (and (eq? status 'ok) (crew-stray value))]
-           [fail (lambda (c) (if w (window-crash! w 'job c)
-                                 (report-error! 'job c)))])
+           [crash (lambda (c) (if w (window-crash! w 'job c)
+                                  (report-error! 'job c)))]
+           [stray (and (eq? status 'ok) (crew-stray value))])
       (cond
-        [(eq? status 'error) (fail value)]
-        [stray
-         (fail (guard (c [#t c])
-                 (errorf 'vat-job "a job returns no procedure but \
-                                   worklets: ~s" stray)))]
-        [(vat-job-then j)
-         => (lambda (then)
-              (safe-call 'job
-                         (lambda ()
-                           (if w
-                               (parameterize ([current-window w])
-                                 (in-window-theme
-                                  w (lambda () (apply then value))))
-                               (apply then value)))
-                         fail)
-              (when w (invalidate! w)))]))))
+        [(and (eq? status 'ok) (not stray))
+         (when (vat-job-then j) (vat-handle w (vat-job-then j) value crash))]
+        [else
+         (let ([c (if stray
+                      (guard (c [#t c])
+                        (errorf 'vat-job "a job returns no procedure but \
+                                          worklets: ~s" stray))
+                      value)])
+           (if (vat-job-fail j)
+               (vat-handle w (vat-job-fail j) (list c) crash)
+               (crash c)))]))))
+
+;; (proc arg ...) on main, as a handler of win (or of none): its theme and
+;; (current-window) bound, under the watchdog, an error going to crash.
+(define (vat-handle win proc args crash)
+  (safe-call 'job
+             (lambda ()
+               (if win
+                   (parameterize ([current-window win])
+                     (in-window-theme win (lambda () (apply proc args))))
+                   (apply proc args)))
+             crash)
+  (when win (invalidate! win)))
+
+(env-register-kind! 'thread
+  'title "Thread"
+  'base 'worklet
+  'forks '()
+  'doc "A sandbox in a vat of its own: its thread runs what is sent to it"
+  'start (lambda (e) (vat-start! e)))

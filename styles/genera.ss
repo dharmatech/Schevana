@@ -69,14 +69,16 @@
 
 ;; Its fields, at character columns as the CADR's (lispm.md 2.1): what
 ;; the mouse buttons do across the top line; below, the selected window,
-;; a field that lists the windows, and the status.
+;; a field that counts the windows, the run state (as the CADR's, after
+;; the package) and the status.
 (define (genera-who-line-areas)
   (let ([lh (genera-line)] [y (- (screen-h) (taskbar-height))]
         [cw (font-char-width 'mono)])
     (list (list 'mouse-doc 0 y (screen-w) lh)
           (list 'title cw (+ y lh) (* 24 cw) lh)
           (list 'windows (* 26 cw) (+ y lh) (* 11 cw) lh)
-          (list 'status (* 38 cw) (+ y lh) (max 0 (- (screen-w) (* 39 cw)))
+          (list 'state (* 38 cw) (+ y lh) (* 12 cw) lh)
+          (list 'status (* 51 cw) (+ y lh) (max 0 (- (screen-w) (* 52 cw)))
                 lh))))
 
 (define (genera-draw-who-line)
@@ -96,7 +98,25 @@
     (field 'title (if *focus* (window-title *focus*) "No selected window"))
     (field 'windows (let ([n (length *windows*)])
                       (format "~a window~a" n (if (= n 1) "" "s"))))
+    (field 'state (genera-who-state))
     (field 'status (string-join (shown-status-strings) "  "))))
+
+;; The run state: Run while the selected window is at work (its 'busy), as
+;; the who line tells a process's; else nothing.
+(define (genera-who-state)
+  (if (and *focus* (window-ref *focus* 'busy)) "Run" ""))
+
+;; The busy mark where the work shows (a REPL's prompt): a terminal's
+;; spinner, | / - \ turning in the code font, a character's cell; the
+;; mouse over it boxes it, as over anything that tells more.
+(define (genera-busy-size)
+  (values (font-char-width 'mono) (font-line-height 'mono)))
+
+(define (genera-busy x y w h flags ms)
+  (draw-text x y (string (string-ref "|/-\\"
+                                     (mod (quotient ms (ui-busy-frame-ms)) 4)))
+             'text 'mono)
+  (when (memq 'hover flags) (genera-hover x y w h)))
 
 ;; It shows the mouse documentation and the status (the clock).
 (define (genera-who-line-tick)
@@ -401,7 +421,7 @@
          [label (text-fit label (max 0 (- w 14 (text-width arrow f))) f)]
          [s (string-append label arrow)]
          [ty (genera-text-y y h f)]
-         [tx (+ x 10)]
+         [tx (+ x (ui-table-cell-inset))]
          [end (draw-text tx ty s 'text f)])
     (when (and (theme 'genera-heading-underline) (> (string-length s) 0))
       (px-fill tx (+ ty (font-ascent f) 1) (- end tx) 1 'text))
@@ -670,6 +690,8 @@
   'draw-taskbar 'genera-draw-who-line
   'taskbar-areas 'genera-who-line-areas
   'taskbar-tick 'genera-who-line-tick
+  'ui-busy-size 'genera-busy-size
+  'ui-draw-busy 'genera-busy
   'mouse-doc-text 'genera-mouse-doc-text
   ;; the fonts: what an app shows in the code font (FIX, cptfont), its
   ;; command words in the sans (JESS), titles in sans bold (SWISS), menus

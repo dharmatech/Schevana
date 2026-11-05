@@ -1143,10 +1143,6 @@
   (let-values ([(side first between edge) (tasks-column-insets)])
     (values (max side (ui-scrollbar-inset 'left))
             (max side (ui-scrollbar-inset 'right)))))
-(define (tasks-label-width)
-  (max 72 (+ 16 (text-widest '("Status" "Priority" "Kind" "Assignee" "Due"
-                               "Tags" "Blocked by" "Blocks")
-                             'ui))))
 (define (tasks-list-min-width) (* 36 (font-line-height 'ui)))
 (define (tasks-page-width) (* 40 (font-line-height 'ui)))   ; at most
 (define (tasks-avatar-size) (round (+ (font-line-height 'ui-small) 7)))
@@ -1225,8 +1221,6 @@
                             0)
                         (tasks-card-pad))))))
 
-;; How far a List cell's text is from either side of the cell.
-(define-part (tasks-cell-inset) 10)
 
 ;; Is t's title wider than room? Its row's tooltip shows it.
 (define (tasks-title-cut? t room)
@@ -1242,11 +1236,11 @@
 
 ;; The room for t's title in a List's Title cell w wide.
 (define (tasks-title-room t w)
-  (- w (* 2 (tasks-cell-inset)) (tasks-mark-room t)))
+  (- w (* 2 (ui-table-cell-inset)) (tasks-mark-room t)))
 
 ;; The room for t's title in the Tree's first cell w wide, after its id.
 (define (tasks-node-room t w)
-  (- w (* 2 (tasks-cell-inset)) (tasks-id-width) 8 (tasks-mark-room t)))
+  (- w (* 2 (ui-table-cell-inset)) (tasks-id-width) 8 (tasks-mark-room t)))
 
 ;; Columns at width w, ((key title width) ...): those of keys, flex (key
 ;; title) at index at taking the rest. drops leave, in that order, while
@@ -1254,7 +1248,7 @@
 (define (tasks-fit-columns w keys drops flex at)
   (let* ([lh (font-line-height 'ui)] [m (tasks-mark-size)]
          ;; a cell's text inset at either side (20 at the built-in's)
-         [in2 (* 2 (tasks-cell-inset))]
+         [in2 (* 2 (ui-table-cell-inset))]
          [names (filter-map task-assignee *tasks*)]
          [all `((id "ID" ,(+ in2 (tasks-id-width)))
                 (status "Status"
@@ -1272,13 +1266,11 @@
                 (due "Due" ,(+ in2 (text-width "Nov 15, 2026" 'ui)))
                 (updated "Updated"
                          ,(+ in2 (text-width "Oct 31, 14:02" 'ui-small))))])
-    (let loop ([cols (map (lambda (k) (assq k all)) keys)] [drops drops])
-      (let ([fixed (apply + (map caddr cols))])
-        (if (or (null? drops) (<= (+ fixed (* 13 lh)) w))
-            (append (list-head cols at) (list (append flex (list (- w fixed))))
-                    (list-tail cols at))
-            (loop (remp (lambda (c) (eq? (car c) (car drops))) cols)
-                  (cdr drops)))))))
+    (let ([cols (map (lambda (k) (assq k all)) keys)])
+      (ui-table-fit w
+                    (append (list-head cols at) (list (append flex '(#f)))
+                            (list-tail cols at))
+                    drops (* 13 lh)))))
 
 ;; The List's columns at width w. Updated, Kind, Due, Assignee, Priority
 ;; and Status drop, in that order, as the width runs out; the title takes
@@ -1479,7 +1471,7 @@
 ;; title).
 (define (tasks-draw-cell x y w h flags t key today)
   (let* ([lh (font-line-height 'ui)] [sh (font-line-height 'ui-small)]
-         [m (tasks-mark-size)] [in (tasks-cell-inset)] [px (+ x in)]
+         [m (tasks-mark-size)] [in (ui-table-cell-inset)] [px (+ x in)]
          [ty (+ y (/ (- h lh) 2))] [my (+ y (/ (- h m) 2))] [cw (- w in in)]
          [text (lambda (x s color) (draw-text x ty (text-fit s (- (+ px cw) x)
                                                              'ui)
@@ -1544,7 +1536,7 @@
 ;; whole width). flags as a cell's.
 (define (tasks-draw-node x y w h flags t where)
   (let* ([lh (font-line-height 'ui)] [sh (font-line-height 'ui-small)]
-         [m (tasks-mark-size)] [in (tasks-cell-inset)] [px (+ x in)]
+         [m (tasks-mark-size)] [in (ui-table-cell-inset)] [px (+ x in)]
          [right (- (+ x w) in)] [ty (+ y (/ (- h lh) 2))]
          [tx (+ px (tasks-id-width) 8)]
          [tx (if (memq 'blocked flags) (+ tx m 6) tx)]
@@ -1690,38 +1682,25 @@
                                'quiet #t 'disabled (not (tasks-filtered? v))
                                'tip "Clear the search and filters")))))))
 
-;; The toolbar across the top; returns its height. The count has room for
-;; any count of this many tasks, and the search takes what the other items
-;; leave of the row, within 150 to 300 (150: Tasks' natural width holds
-;; the toolbar in one row).
+;; The toolbar across the top (the kit's: the search takes what the other
+;; items leave of the row, within 150 to 300, so Tasks' natural width holds
+;; it in one row); returns its height. The count at its right has room
+;; for any count of this many tasks.
 (define (tasks-toolbar v w visible)
-  (let*-values
-      ([(pad gap) (values (ui-pad) (ui-gap))]
-       [(total) (length *tasks*)]
-       [(count) (if (and (= (length visible) total) (not (tasks-filtered? v)))
+  (let* ([total (length *tasks*)]
+         [count (if (and (= (length visible) total) (not (tasks-filtered? v)))
                     (format "~a tasks" total)
                     (format "~a of ~a" (length visible) total))]
-       [(count-w) (apply max (map (lambda (s)
+         [count-w (apply max (map (lambda (s)
                                     (let-values ([(lw lh) (ui-label-size '(dim)
                                                                          s 0)])
                                       lw))
                                   (list (format "~a tasks" total)
-                                        (format "~a of ~a" total total))))]
-       [(room) (- w pad pad count-w gap)]
-       [(items) (tasks-toolbar-items v visible)]
-       ;; whole pixels, so the row it fills exactly still fits
-       [(sw) (floor (clamp (- room (apply + (filter-map car items))
-                              (* gap (- (length items) 1)))
-                           150 300))]
-       [(sizes) (map (lambda (i) (cons (or (car i) sw) (cadr i))) items)]
-       [(at height) (ui-flow pad gap room gap sizes)])
-    (ui-draw-surface 0 0 w (+ height gap gap) '(toolbar))
-    (for-each (lambda (i s p) ((caddr i) (car p) (cdr p) (car s) (cdr s)))
-              items sizes at)
-    ;; on the first row, level with New task
-    (ui-draw-label (- w pad count-w) (cdar at) count-w (cdar sizes) '(dim right)
-                   count)
-    (+ height gap gap)))
+                                        (format "~a of ~a" total total))))])
+    (ui-toolbar 0 0 w (tasks-toolbar-items v visible)
+                'end (list count-w 0
+                           (lambda (x y w h)
+                             (ui-draw-label x y w h '(dim right) count))))))
 
 ;; The columns of the board in x y w h.
 (define (tasks-board v visible today x y w h)
@@ -2012,112 +1991,100 @@
                    (cdr (assq (task-kind t) tasks-kinds)))
     (+ y bh (ui-gap))))
 
-;; Status, priority, kind, assignee, due date and tags, each beside its
-;; label. Returns the y below them.
-(define (tasks-details-fields v t today x y cw)
-  (let*-values ([(ui) (tasks-view-ui v)] [(gap) (ui-gap)]
-                [(lw) (tasks-label-width)] [(fx) (+ x lw)] [(fw) (- cw lw)]
+;; The details' form: status, priority, kind, assignee (suggested from the
+;; names the tasks have), due date and tags (from theirs), then what the
+;; task waits for, chips a × removes, and Add, a menu of the tasks it may
+;; wait for (typing filters it, and it shows only what fits); and what
+;; waits for it. A chip of a task selects it. Returns the y below them.
+(define (tasks-details-form v t today x y cw)
+  (let*-values ([(ui) (tasks-view-ui v)]
                 [(dw dh) (ui-dropdown-size '())]
-                [(ew eh) (ui-text-box-size '() fw 1)])
-    ;; the label beside a control h high at (fx, y), whose bottom is bottom
-    ;; (a chip input's first row is h high)
-    (define (row y label h bottom)
-      (ui-draw-label x y lw h '(dim) label)
-      (+ gap bottom))
+                [(eh) (ui-control-height)])
     ;; A status picked here keeps the task open, even in a column the
     ;; board hides: the details are where it is being edited.
-    (define (dropdown y id alist value)
-      (ui-dropdown ui id fx y fw dh (tasks-choices alist) value
-                   (lambda (new) (task-set! v t id new)))
-      (+ y dh))
-    (let* ([y (row y "Status" dh
-                   (dropdown y 'status tasks-statuses (task-status t)))]
-           [y (row y "Priority" dh
-                   (dropdown y 'priority tasks-priorities (task-priority t)))]
-           [y (row y "Kind" dh (dropdown y 'kind tasks-kinds (task-kind t)))]
-           [y (row y "Assignee" eh
-                   (begin
-                     (ui-text-field ui 'assignee fx y fw eh
-                                    (or (task-assignee t) "")
-                                    (lambda (s) (task-set! v t 'assignee s))
-                                    'placeholder "Nobody"
-                                    'on-enter (lambda () (ui-focus! ui #f)))
-                     (+ y eh)))]
-           [y (row y "Due" dh
-                   (begin
-                     (ui-date-field ui 'due fx y fw dh (task-due t)
-                                    (lambda (d) (task-set! v t 'due d))
-                                    'label (lambda (d)
-                                             (tasks-due-label d today)))
-                     (+ y dh)))])
-      (row y "Tags" (ui-chip-input-size fw '())
-           (ui-chip-input ui 'tags fx y fw (task-tags t)
-                          (tasks-view-tag-draft v)
-                          (lambda (s) (tasks-view-tag-draft-set! v s))
-                          (lambda (ss)
-                            (when (exists tasks-tag ss)
-                              (task-set! v t 'tags (append (task-tags t) ss))))
-                          (lambda (i)
-                            (task-set! v t 'tags
-                                       (tasks-without (task-tags t) i)))
-                          'placeholder "Add a tag…")))))
-
-;; A chip's top in its row of the details, its place p (x . y) and size
-;; s (w . h) in a row ch high.
-(define (tasks-chip-y p s ch) (+ (cdr p) (floor (/ (- ch (cdr s)) 2))))
-
-;; A row of the details: label beside chips for the tasks ts, which a
-;; click selects; with on-remove, a chip's × calls (on-remove task); with
-;; add, a button after them calls it (an empty row says none). key names
-;; the regions. Returns the y below it.
-(define (tasks-details-chips v key x y cw label ts on-remove add)
-  (let*-values ([(ui) (tasks-view-ui v)] [(lw) (tasks-label-width)]
-                [(fx fw) (values (+ x lw) (- cw lw))]
-                [(ch) (ui-control-height)]
-                [(labels) (map tasks-chip-label ts)]
-                [(sizes) (map (lambda (l)
-                                (let-values ([(w h) (ui-chip-size
-                                                     l (and on-remove #t))])
-                                  (cons (min w fw) h)))
-                              labels)]
-                [(bw bh) (ui-button-size "Add" 'plus)]
-                [(at height)
-                 (ui-flow fx y fw 4
-                          (append (map (lambda (s) (cons (car s) ch)) sizes)
-                                  (if add (list (cons bw bh)) '())))])
-    (ui-draw-label x y lw ch '(dim) label)
-    (for-each
-     (lambda (t l s p i)
-       (let* ([cx (car p)] [cy (tasks-chip-y p s ch)]
-              [id (list key (task-id t))] [rid (list key 'remove (task-id t))])
-         (ui-region! ui id cx cy (car s) (cdr s) 'cursor 'hand 'focus 'keep
-                     'tip (tasks-quoted (tasks-shown-title t))
-                     'on (lambda (ev)
-                           (and (eq? (car ev) 'press)
-                                (eq? (list-ref ev 3) 'left)
-                                (begin (tasks-select! v t) #t))))
-         (when on-remove
-           (let ([r (cdr (assq 'remove (ui-chip-areas cx cy (car s) (cdr s))))])
-             (ui-pressable! ui rid (car r) (cadr r) (caddr r) (cadddr r)
-                            (lambda () (on-remove t)) '()
-                            '(focus keep tip "Remove") '((L . "Remove")))))
-         (ui-draw-chip cx cy (car s) (cdr s)
-                       (append (if on-remove (ui-flags ui rid 'removable) '())
-                               ;; last, or where the next one starts
-                               (ui-chain-flags
-                                (map (lambda (p s)
-                                       (list (car p) (tasks-chip-y p s ch)
-                                             (car s) (cdr s)))
-                                     (list-head at (length ts)) sizes)
-                                i))
-                       l)))
-     ts labels sizes (list-head at (length ts)) (iota (length ts)))
-    (cond
-      [add (let ([p (list-ref at (length ts))])
-             (ui-button ui (list key 'add) (car p) (cdr p) bw bh "Add" add
-                        'glyph 'plus 'quiet #t 'focus 'keep))]
-      [(null? ts) (ui-draw-label fx y fw ch '(hint) "None")])
-    (+ y (max ch height))))
+    (define (dropdown label id alist value)
+      (list label dh
+            (lambda (x y w)
+              (ui-dropdown ui id x y w dh (tasks-choices alist) value
+                           (lambda (new) (task-set! v t id new))))))
+    (define (chips label key ts on-remove add)
+      (let ([labels (map tasks-chip-label ts)])
+        (list label
+              (lambda (w) (ui-chips-height w labels (and on-remove #t)
+                                           (and add "Add")))
+              (lambda (x y w)
+                (ui-chips ui key x y w labels
+                          (lambda (i) (tasks-select! v (list-ref ts i)))
+                          'keys (map task-id ts)
+                          'tip (lambda (i)
+                                 (tasks-quoted
+                                  (tasks-shown-title (list-ref ts i))))
+                          'on-remove (and on-remove
+                                          (lambda (i)
+                                            (on-remove (list-ref ts i))))
+                          'add add)))))
+    (define (add!)   ; the menu under the button just pressed
+      (let ([r (ui-find ui '(blocked-by add))]
+            [choices (tasks-blocker-choices t)] [room (tasks-menu-room)]
+            [memo (cons #f #f)])   ; the shell asks at each draw and move
+        (ui-open-menu!
+         ui (ui-region-x r) (+ (ui-region-y r) (ui-region-h r))
+         (if (null? choices)
+             (list (cons "No task it may wait for" void))
+             (lambda (f)
+               (unless (equal? f (car memo))
+                 (set! memo (cons f (tasks-blocker-entries
+                                     choices f room
+                                     (lambda (c) (tasks-add-blocker! v t c))))))
+               (cdr memo)))
+         'filter #t)))
+    (ui-form
+     ui 'details x y cw
+     (list
+      (dropdown "Status" 'status tasks-statuses (task-status t))
+      (dropdown "Priority" 'priority tasks-priorities (task-priority t))
+      (dropdown "Kind" 'kind tasks-kinds (task-kind t))
+      (list "Assignee" eh
+            (lambda (x y w)
+              (ui-text-field ui 'assignee x y w eh (or (task-assignee t) "")
+                             (lambda (s) (task-set! v t 'assignee s))
+                             'placeholder "Nobody"
+                             'on-enter (lambda () (ui-focus! ui #f))
+                             'suggest (lambda (typed)
+                                        (ui-suggestions
+                                         typed (tasks-names *tasks*) 8)))))
+      (list "Due" dh
+            (lambda (x y w)
+              (ui-date-field ui 'due x y w dh (task-due t)
+                             (lambda (d) (task-set! v t 'due d))
+                             'label (lambda (d) (tasks-due-label d today)))))
+      (list "Tags"
+            (lambda (w) (ui-chip-input-size w (task-tags t)))
+            (lambda (x y w)
+              (ui-chip-input ui 'tags x y w (task-tags t)
+                             (tasks-view-tag-draft v)
+                             (lambda (s) (tasks-view-tag-draft-set! v s))
+                             (lambda (ss)
+                               (when (exists tasks-tag ss)
+                                 (task-set! v t 'tags
+                                            (append (task-tags t) ss))))
+                             (lambda (i)
+                               (task-set! v t 'tags
+                                          (tasks-without (task-tags t) i)))
+                             'placeholder "Add a tag…"
+                             'suggest
+                             (lambda (typed)
+                               (ui-suggestions
+                                typed
+                                (remp (lambda (g) (member g (task-tags t)))
+                                      (tasks-tags *tasks*))
+                                8)))))
+      (chips "Blocked by" 'blocked-by (tasks-blockers-of t)
+             (lambda (b)
+               (task-set! v t 'blocked-by (remv (task-id b)
+                                                (task-blocked-by t))))
+             add!)
+      (chips "Blocks" 'blocks (tasks-blocks-of t) #f #f)))))
 
 ;; A chip's label for t: its id and the start of its title, ticked when
 ;; it is done.
@@ -2167,35 +2134,6 @@
           [(not (memq c *tasks*)) (notify (format "~a is gone" (task-label c)))]
           [else (task-set! v t 'blocked-by
                            (append (task-blocked-by t) (list (task-id c))))])))
-
-;; What t waits for, chips a × removes, and Add, a menu of the tasks it
-;; may wait for (typing filters it, and it shows only what fits); what
-;; waits for t. Returns the y below them.
-(define (tasks-details-links v t x y cw)
-  (let ([ui (tasks-view-ui v)] [gap (ui-gap)])
-    (define (add!)   ; the menu under the button just pressed
-      (let ([r (ui-find ui '(blocked-by add))]
-            [choices (tasks-blocker-choices t)] [room (tasks-menu-room)]
-            [memo (cons #f #f)])   ; the shell asks at each draw and move
-        (ui-open-menu!
-         ui (ui-region-x r) (+ (ui-region-y r) (ui-region-h r))
-         (if (null? choices)
-             (list (cons "No task it may wait for" void))
-             (lambda (f)
-               (unless (equal? f (car memo))
-                 (set! memo (cons f (tasks-blocker-entries
-                                     choices f room
-                                     (lambda (c) (tasks-add-blocker! v t c))))))
-               (cdr memo)))
-         'filter #t)))
-    (let ([y (tasks-details-chips
-              v 'blocked-by x y cw "Blocked by" (tasks-blockers-of t)
-              (lambda (b)
-                (task-set! v t 'blocked-by (remv (task-id b)
-                                                 (task-blocked-by t))))
-              add!)])
-      (tasks-details-chips v 'blocks x (+ y gap) cw "Blocks"
-                           (tasks-blocks-of t) #f #f))))
 
 ;; The checklist: its progress, the items, and a field that adds one.
 ;; Returns the y below it.
@@ -2279,9 +2217,8 @@
                   (lambda (s) (task-set! v t 'title s))
                   'single #t 'large #t 'bare #t 'placeholder "Title"
                   'on-enter (lambda () (ui-focus! ui #f)))
-    (let*-values ([(y) (tasks-details-fields v t today x (+ y th gap 8) cw)]
-                  [(y) (tasks-details-links v t x y cw)]
-                  [(y) (tasks-details-description v t x (+ y 16) cw)])
+    (let*-values ([(y) (tasks-details-form v t today x (+ y th gap 8) cw)]
+                  [(y) (tasks-details-description v t x (+ y 16 gap) cw)])
       (let*-values ([(y) (tasks-details-checklist v t x (+ y 16) cw)]
                     ;; labels h 0: as high as their role's font, which the
                     ;; kit decides

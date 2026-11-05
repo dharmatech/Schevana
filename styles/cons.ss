@@ -582,7 +582,7 @@
   (cons-ring! x y w h 'cons-ink 1))
 
 ;; A column's heading, faint, its words underlined; the sort as a
-;; pointer head; the words where a table's text is (tasks-cell-inset).
+;; pointer head; the words where a table's text is (ui-table-cell-inset).
 (define (cons-table-header x y w h flags label dir)
   (let* ([sh (font-line-height 'ui-small)] [g (ui-small-glyph-size)]
          [tx (+ x (* 2 (cons-space)))]
@@ -806,7 +806,7 @@
 ;; Inside a card everything is g from its edges; a table's text g inside
 ;; its row's box, which is g inside the table.
 (define (cons-tasks-card-pad) (cons-space))
-(define (cons-tasks-cell-inset) (* 2 (cons-space)))
+(define (cons-table-cell-inset) (* 2 (cons-space)))
 
 ;; The details' margin, the pad.
 (define (cons-tasks-details-pad) (* 2 (cons-space)))
@@ -1217,7 +1217,7 @@
   'tasks-column-insets 'cons-tasks-column-insets
   'tasks-column-header-height 'cons-tasks-column-header-height
   'tasks-card-pad 'cons-tasks-card-pad
-  'tasks-cell-inset 'cons-tasks-cell-inset
+  'ui-table-cell-inset 'cons-table-cell-inset
   'tasks-details-pad 'cons-tasks-details-pad
   'tasks-card-insets 'cons-tasks-card-insets
   'tasks-draw-link 'cons-tasks-link

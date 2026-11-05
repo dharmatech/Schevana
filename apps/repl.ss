@@ -3,21 +3,29 @@
 ;;; Each evaluation runs as a process (see proc.ss), so long computations
 ;;; keep the desktop alive and Ctrl+C interrupts them.
 ;;;
-;;; A REPL evaluates in one of four environments (its mode), the world or
-;;; a child of it (services/env.ss):
-;;;   world        the shared environment the whole system lives in, so a
-;;;                define here changes the running world
-;;;   private      all of Chez, and of the world what it may read (the
-;;;                REPL's list), live; set! of those is refused, and
-;;;                defines stay in this window and vanish with it, like
-;;;                private browsing
-;;;   whole-world  as private, but with every name of the world's, those
-;;;                it gains later too. Calling the world's procedures still
-;;;                acts on the world.
-;;;   pure         plain Chez Scheme; none of Schevana's names are bound
+;;; A REPL window evaluates in one environment (services/env.ss), which its
+;;; title names, and its title icon's kind ('title-icon: the style shows
+;;; it as it will):
+;;;   (repl)            the world itself, the shared environment the whole
+;;;                     system lives in, so a define here changes the world
+;;;   (repl 'private)   a new child of the world's of that kind, the
+;;;                     window's own, dropped as it closes: private (what
+;;;                     reads the world, live; set! of it refused), world
+;;;                     (every name of the world's, those it gains later
+;;;                     too), pure (plain Chez Scheme), sandbox, thread
+;;;   (repl "/sandbox") an environment that is there (the Environments
+;;;                     app opens these); not /worklets, where the pool's
+;;;                     threads run
+;;; In a thread's environment, a sandbox in a vat of its own, the forms go
+;;; to the vat: its thread runs them and prints what they return, and
+;;; Ctrl+C stops them there. Once its environment is dropped, a REPL
+;;; evaluates nowhere. An evaluation that takes a while makes the window
+;;; busy ('busy), which its style shows: by default a busy mark in place of
+;;; the running input's prompt, which says, under the pointer, that Ctrl+C
+;;; stops it. Inputs entered meanwhile wait under it, and run in turn.
 
 (define-record-type repl
-  (nongenerative schevana-repl-2)
+  (nongenerative schevana-repl-4)
   (fields (mutable lines)      ; transcript, newest first: ((style . text) ...)
           (mutable count)
           (mutable open?)      ; is the newest line unterminated output?
@@ -27,68 +35,94 @@
           (mutable hist-pos)   ; -1 while editing fresh input
           (mutable saved)      ; fresh input stashed while browsing history
           (mutable scroll)     ; visual rows scrolled back from the bottom
-          (mutable proc)       ; the running evaluation, or #f
+          (mutable proc)       ; the running evaluation (a process, or a
+                               ; vat's job), or #f
           (mutable pending)    ; output from the process, newest first
           (mutable port)
           (mutable blink)      ; cursor visible?
           (mutable blink-at)
           (mutable cols)       ; layout from the last draw
           (mutable rows)
-          (mutable queued?)    ; Enter was pressed while an evaluation ran
-          mode                 ; world, private, whole-world or pure
-          env))                ; its environment (services/env.ss)
+          (mutable queue)      ; inputs entered while a form ran, to run
+                               ; in turn, the oldest first
+          env                  ; its environment
+          own?                 ; made for it, so dropped as it closes
+          (mutable started)    ; when the evaluation running began, or #f
+          (mutable pointer)    ; where the pointer last moved, (x y ms)
+          (mutable busy)       ; the busy mark as drawn, (x y w h ms), or #f
+          (mutable running)))  ; the running input's first line in the
+                               ; transcript, or #f
 
-;; (mode title prompt-color background-tint)
-(define repl-modes
-  '((world "REPL" accent #f)
-    (private "Private REPL" accent-2 accent-2)
-    (whole-world "Whole-World REPL" accent accent)
-    (pure "Pure Scheme REPL" green green)))
+;; A REPL's look by its environment's kind: (kind prompt-color background),
+;; a bare child's by its base.
+(define repl-looks
+  '((root accent bg-0)
+    (private accent-2 repl-bg-private)
+    (world accent repl-bg-world)
+    (pure green repl-bg-pure)
+    (sandbox teal repl-bg-sandbox)
+    (thread orange repl-bg-thread)))
 
-(define (repl-mode-info mode)
-  (or (assq mode repl-modes)
-      (errorf 'repl "unknown REPL mode ~s (expected world, private, \
-                     whole-world or pure)" mode)))
+;; The backgrounds, tinted by the prompt's color: rules, so that they
+;; follow the style and palette as they change, as an open REPL must.
+(for-each (lambda (key tint)
+            (color-default! key (theme-rule (mix 'bg-0 tint 0.06))))
+          '(repl-bg-private repl-bg-world repl-bg-pure repl-bg-sandbox
+            repl-bg-thread)
+          '(accent-2 accent green teal orange))
 
-(define (repl-title r) (cadr (repl-mode-info (repl-mode r))))
+(define (repl-kind r) (vat-env-kind (repl-env r)))
 
-(define (repl-background r)
-  (let ([tint (cadddr (repl-mode-info (repl-mode r)))])
-    (if tint (mix 'bg-0 tint 0.06) 'bg-0)))
+(define (repl-look r)
+  (cdr (or (assq (repl-kind r) repl-looks) (assq 'pure repl-looks))))
 
-;; The REPL's list: what a private REPL is shared of the world's, read-only
-;; and live. Reading the world; acting on it is the world REPL's.
-(define repl-private-names
-  '(windows
-    focused-window
-    find-window
-    window-title
-    window-ref
-    apps
-    procs
-    styles
-    current-style
-    palettes
-    wallpapers
-    theme
-    theme-keys
-    now-ms
-    uptime-ms
-    source-files))
+;; "REPL — /path".
+(define (repl-title r)
+  (let ([e (repl-env r)])
+    (if (env-dropped? e)
+        (format "REPL — ~a (dropped)" (env-path e))
+        (format "REPL — ~a" (env-path e)))))
 
-(define (make-repl-environment mode)
-  (if (eq? mode 'world)
-      (env-root)
-      (let ([e (env-fork (env-root) mode 'chez)])
-        (case mode
-          [(private) (env-share! e repl-private-names)]
-          [(whole-world) (env-share-world! e)])
-        e)))
+;; An evaluation shows as busy once it has run this long: one that ends
+;; sooner shows nothing.
+(define repl-busy-ms 300)
+
+(define (repl-busy? r)
+  (let ([t (repl-started r)])
+    (and t (repl-proc r) (>= (- (now-ms) t) repl-busy-ms))))
+
+;; What the busy mark says, and the window's 'busy.
+(define (repl-busy-words r)
+  (if (vat-of (repl-env r))
+      "Running on its thread: Ctrl+C stops it"
+      "Running: Ctrl+C stops it"))
+
+;; A theme color, never one worked out once: a REPL opened in one style
+;; and shown in another has the other's.
+(define (repl-background r) (cadr (repl-look r)))
+
+;; The environment a REPL opens in, and whether it is its own: what is
+;; the world (root), a kind (a new child of the world's, the REPL's own),
+;; an environment or its path. => (values env own?)
+(define (repl-environment-of what)
+  (let ([e (cond [(eq? what 'root) (env-root)]
+                 [(symbol? what) (env-fork (env-root) what)]
+                 [(string? what)
+                  (or (env-find what) (errorf 'repl "no environment ~a" what))]
+                 [(env? what) what]
+                 [else (errorf 'repl "a REPL opens in a kind, an environment \
+                                      or its path, not ~s" what)])])
+    (cond [(env-dropped? e) (errorf 'repl "~a was dropped" (env-path e))]
+          [(eq? (env-kind e) 'worklets)
+           (errorf 'repl "no REPL in /worklets: the pool's threads run \
+                          there, worklets only")])
+    (values e (and (symbol? what) (not (eq? what 'root))))))
 
 (define (repl-environment r) (env-environment (repl-env r)))
 
 (define repl-max-lines 4000)
 (define repl-prompt "λ> ")
+(define repl-waiting "↳  ")   ; before an input that waits its turn
 (define repl-cont   "   ")
 
 (define repl-keywords
@@ -192,59 +226,119 @@
         (substring s 0 (- (string-length s) 1))
         s)))
 
+;; src into the transcript after the prompt, its other lines under the
+;; first. => its first line, as the transcript holds it
 (define (repl-echo! r src)
-  (let loop ([lines (string-split src #\newline)] [first? #t])
-    (unless (null? lines)
-      (repl-add! r 'input
-                 (string-append (if first? repl-prompt repl-cont) (car lines)))
-      (loop (cdr lines) #f))))
+  (let loop ([lines (string-split src #\newline)] [first #f])
+    (if (null? lines)
+        first
+        (begin
+          (repl-add! r 'input
+                     (string-append (if first repl-cont repl-prompt)
+                                    (car lines)))
+          (loop (cdr lines) (or first (car (repl-lines r))))))))
 
+;; Enter on a complete input: it runs, or, while a form runs, waits after
+;; those waiting already, the input line free for the next. Either way it
+;; is history.
 (define (repl-submit! r win)
   (let ([src (repl-input r)])
-    (repl-echo! r src)
     (unless (string=? "" (string-trim src))
       (repl-history-set! r (cons src (remove src (repl-history r)))))
     (repl-input-set! r "")
     (repl-point-set! r 0)
     (repl-hist-pos-set! r -1)
-    (let ([forms (guard (c [#t (repl-add! r 'error (condition->string c)) #f])
-                   (read-input! src))])
-      (when (and forms (pair? forms))
-        (repl-eval! r win forms)))))
+    (if (repl-proc r)
+        (repl-queue-set! r (append (repl-queue r) (list src)))
+        (repl-run! r win src))))
 
+;; src echoed and evaluated, its forms read with their places. One that
+;; does not read, or holds nothing to run, lets the next waiting one go.
+(define (repl-run! r win src)
+  (repl-running-set! r (repl-echo! r src))
+  (let ([forms (guard (c [#t (repl-add! r 'error (condition->string c)) #f])
+                 (read-input! src))])
+    (when (and forms (pair? forms)) (repl-eval! r win forms))
+    (unless (repl-proc r) (repl-next! r win))))
+
+;; The running input is done: the next waiting one runs, if one waits.
+(define (repl-next! r win)
+  (repl-running-set! r #f)
+  (let ([q (repl-queue r)])
+    (when (pair? q)
+      (repl-queue-set! r (cdr q))
+      (repl-run! r win (car q)))))
+
+;; forms evaluated where the REPL is: in a process here, or, in a vat's
+;; sandbox, sent to the vat (root never evaluates there itself). Nowhere
+;; once the environment is dropped.
 (define (repl-eval! r win forms)
-  (let ([port (repl-port r)] [width (max 20 (- (repl-cols r) 1))])
-    (window-title-set! win (string-append (repl-title r)
-                                          " — running · Ctrl+C to interrupt"))
-    (invalidate!)   ; the title shows in the bars too
-    (repl-proc-set! r
-      (spawn "repl"
-             (lambda ()
-               (parameterize ([current-output-port port]
-                              [current-error-port port]
-                              [current-input-port (open-input-string "")]
-                              [pretty-line-length width])
-                 (for-each
-                  (lambda (form)
-                    (call-with-values
-                      (lambda () (env-eval (repl-env r) form))
-                      (lambda vals
-                        (for-each (lambda (v)
-                                    (unless (eq? v (void))
-                                      (repl-emit! r 'result (value->string v))))
-                                  vals))))
-                  forms)))
-             (lambda (status value)
-               (repl-drain! r)
-               (case status
-                 [(error) (repl-add! r 'error (condition->string value))]
-                 [(killed) (repl-add! r 'info "; interrupted")])
-               (repl-proc-set! r #f)
-               (window-title-set! win (repl-title r))
-               (when (repl-queued? r)
-                 (repl-queued?-set! r #f)
-                 (when (input-complete? (repl-input r)) (repl-submit! r win)))
-               (invalidate!))))))
+  (let ([width (max 20 (- (repl-cols r) 1))] [e (repl-env r)])
+    (if (env-dropped? e)
+        (repl-add! r 'error (format "; ~a was dropped: this REPL evaluates \
+                                     nowhere now" (env-path e)))
+        (let ([v (vat-of e)])
+          (repl-started-set! r (now-ms))
+          (repl-proc-set! r (if v
+                                (repl-send! r win v forms width)
+                                (repl-spawn! r win forms width)))))))
+
+(define (repl-spawn! r win forms width)
+  (let ([port (repl-port r)])
+    (spawn "repl"
+           (lambda ()
+             (parameterize ([current-output-port port]
+                            [current-error-port port]
+                            [current-input-port (open-input-string "")]
+                            [pretty-line-length width])
+               (for-each
+                (lambda (form)
+                  (call-with-values
+                    (lambda () (env-eval (repl-env r) form))
+                    (lambda vals
+                      (for-each (lambda (v)
+                                  (unless (eq? v (void))
+                                    (repl-emit! r 'result (value->string v))))
+                                vals))))
+                forms)))
+           (lambda (status value)
+             (repl-drain! r)
+             (case status
+               [(error) (repl-add! r 'error (condition->string value))]
+               [(killed) (repl-add! r 'info "; interrupted")])
+             (repl-done! r win)))))
+
+;; The vat's thread runs the forms and prints what they return there,
+;; where the values live; the texts come back. => the job.
+(define (repl-send! r win v forms width)
+  (vat-repl! v forms width
+             (lambda (texts)
+               (for-each (lambda (t) (repl-add! r 'result t)) texts)
+               (repl-done! r win))
+             (lambda (text)
+               (repl-add! r 'error text)
+               (repl-done! r win))))
+
+;; The evaluation is over: the window is no longer busy, and the next
+;; waiting input runs.
+(define (repl-done! r win)
+  (repl-proc-set! r #f)
+  (repl-started-set! r #f)
+  (when (window-ref win 'busy)
+    (window-set! win 'busy #f)
+    (invalidate!))   ; a style may show it in its bars
+  (repl-next! r win)
+  (invalidate!))
+
+;; Ctrl+C: the evaluation stops; a vat's job escapes on the vat's thread,
+;; and its then never comes.
+(define (repl-stop! r win)
+  (let ([p (repl-proc r)])
+    (if (vat-job? p)
+        (begin (vat-job-kill! p)
+               (repl-add! r 'info "; interrupted")
+               (repl-done! r win))
+        (kill! p))))
 
 ;;; ------------------------------------------------------------------ editing
 
@@ -643,7 +737,9 @@
             (values 'symbols start typed
                     (or quoted
                         (map (lambda (sym) (cons (symbol->string sym) #f))
-                             (environment-symbols (repl-environment r))))))]))))
+                             (remp gensym?
+                                   (environment-symbols
+                                    (repl-environment r)))))))]))))
 
 ;; The choices for a quoted name inside the form opening at open, or #f.
 (define (quoted-choices r s open start)
@@ -979,10 +1075,17 @@
         (when (and c (memq key '(backspace delete)))
           (refresh-completion! r)))))
 
-;; The pointer over the REPL: the completion list's where it is, else an
-;; I-beam with nothing to say (the REPL has no use for the buttons); #t
-;; when the list's row under it changed.
-(define (repl-pointer! r win) (complete-pointer! r win 'ibeam '()))
+;; The pointer over the REPL: the completion list's where it is, an arrow
+;; over the busy mark, else an I-beam with nothing to say (the REPL has no
+;; use for the buttons); #t when the list's row under it changed.
+(define (repl-pointer! r win)
+  (complete-pointer! r win (if (repl-over-busy? r win) 'arrow 'ibeam) '()))
+
+;; Is the pointer over the busy mark, as last drawn?
+(define (repl-over-busy? r win)
+  (let ([b (repl-busy r)] [at (complete-pointer-at win)])
+    (and b at (point-in? (car at) (cdr at) (car b) (cadr b) (caddr b)
+                         (cadddr b)))))
 
 ;; A press goes to the completion list; the REPL has no other use for it.
 (define (repl-mouse-down r)
@@ -1004,9 +1107,11 @@
   (repl-blink-at-set! r (now-ms))
   (let ([s (repl-input r)] [p (repl-point r)] [ctrl? (memq 'ctrl mods)])
     (cond
+      ;; Ctrl+C stops the running form and drops what waits, as a
+      ;; terminal's interrupt flushes its type-ahead (it is history)
       [(and ctrl? (eqv? key #\c))
        (if (repl-proc r)
-           (kill! (repl-proc r))
+           (begin (repl-queue-set! r '()) (repl-stop! r win))
            (begin (repl-echo! r (string-append s "^C"))
                   (repl-input-set! r "")
                   (repl-point-set! r 0)))]
@@ -1030,9 +1135,17 @@
           (cond
             [(memq 'shift mods) (repl-newline! r)]
             [(not (input-complete? s)) (repl-newline! r)]
-            [(repl-proc r) (repl-queued?-set! r #t)]
+            ;; nothing typed waits for nothing
+            [(and (repl-proc r) (string=? "" (string-trim s))) (void)]
             [else (repl-submit! r win)])]
-         [(backspace) (when (> p 0) (repl-delete! r (- p 1) p))]
+         [(backspace)
+          (cond [(> p 0) (repl-delete! r (- p 1) p)]
+                ;; on an empty line, the last waiting input comes back
+                [(and (string=? s "") (pair? (repl-queue r)))
+                 (let ([q (repl-queue r)])
+                   (repl-queue-set! r (list-head q (- (length q) 1)))
+                   (repl-input-set! r (car (last-pair q)))
+                   (repl-point-set! r (string-length (repl-input r))))])]
          [(delete) (when (< p (string-length s)) (repl-delete! r p (+ p 1)))]
          [(left) (repl-point-set! r (max 0 (- p 1)))]
          [(right) (repl-point-set! r (min (string-length s) (+ p 1)))]
@@ -1172,23 +1285,41 @@
          [cols (max 8 (exact (floor (/ (- w pad pad) cw))))]
          [rows (max 1 (exact (floor (/ (- h pad pad) lh))))]
          [focused? (eq? win (focused-window))]
-         [running? (and (repl-proc r) #t)]
+         [busy? (repl-busy? r)]
          [input (repl-input r)]
          [ilines (string-split input #\newline)]
-         [prompt (cond [(repl-queued? r) "↳  "]
-                       [running? "·· "]
-                       [else repl-prompt])]
-         ;; logical lines, bottom-up: input lines then transcript
+         ;; logical lines, bottom-up: input lines, the inputs waiting
+         ;; (the newest lowest), then the transcript
          [input-entries
           (let loop ([ls ilines] [i 0] [start 0] [acc '()])
             (if (null? ls)
                 acc
                 (loop (cdr ls) (+ i 1) (+ start (string-length (car ls)) 1)
                       (cons (list 'edit
-                                  (string-append (if (= i 0) prompt repl-cont)
+                                  (string-append (if (= i 0)
+                                                     repl-prompt
+                                                     repl-cont)
                                                  (car ls))
                                   start)
                             acc))))]
+         [waiting
+          (apply append
+                 (map (lambda (src)
+                        (reverse
+                         (map (lambda (l i)
+                                (cons 'wait
+                                      (string-append (if (= i 0)
+                                                         repl-waiting
+                                                         repl-cont)
+                                                     l)))
+                              (string-split src #\newline)
+                              (iota (length (string-split src #\newline))))))
+                      (reverse (repl-queue r))))]
+         ;; the running input's prompt is the busy mark's place, once it
+         ;; shows, where its style gives it a size
+         [marked (and busy? (repl-running r)
+                      (let-values ([(bw bh) (ui-busy-size)]) (> bw 0))
+                      (repl-running r))]
          [paren (let ([p (repl-point r)])
                   (or (and (> p 0) (memv (string-ref input (- p 1)) '(#\) #\]))
                            (let ([m (matching-paren input (- p 1))])
@@ -1203,14 +1334,15 @@
                         0 input-entries)
              (fold-left (lambda (acc l)
                           (+ acc (rows-for (string-length (cdr l)) cols)))
-                        0 (repl-lines r)))]
-         [caret #f])   ; where the cursor was drawn: (x . y)
+                        0 (append waiting (repl-lines r))))]
+         [caret #f]   ; where the cursor was drawn: (x . y)
+         [mark #f])   ; where the running input's prompt was drawn: (x . y)
     (repl-cols-set! r cols)
     (repl-rows-set! r rows)
     (repl-scroll-set! r (clamp (repl-scroll r) 0 (max 0 (- total rows))))
     (fill-rect 0 0 w h (repl-background r))
     ;; Lay out bottom-up; while everything fits, hang it from the top instead.
-    (let loop ([entries (append input-entries (repl-lines r))]
+    (let loop ([entries (append input-entries waiting (repl-lines r))]
                [bottom (if (< total rows) (+ pad (* total lh)) (- h pad))]
                [skip (repl-scroll r)])
       (when (and (pair? entries) (> bottom 0))
@@ -1226,11 +1358,7 @@
                   [edit?
                    (let* ([start (caddr e)]
                           [colors (scheme-colors text 3)])
-                     (vector-fill-range!
-                      colors 0 3
-                      (if running?
-                          'orange
-                          (caddr (repl-mode-info (repl-mode r)))))
+                     (vector-fill-range! colors 0 3 (car (repl-look r)))
                      (when paren
                        (for-each
                         (lambda (i)
@@ -1267,7 +1395,13 @@
                   [(eq? (car e) 'input)
                    (let ([colors (scheme-colors text 3)])
                      (vector-fill-range! colors 0 3 'text-faint)
+                     (when (eq? e marked)
+                       (vector-fill-range! colors 0 3 (repl-background r))
+                       (set! mark (cons pad top)))
                      (draw-repl-line pad top text colors cols 0 shown cw lh))]
+                  [(eq? (car e) 'wait)
+                   (draw-repl-line pad top text 'text-faint cols 0 shown cw
+                                   lh)]
                   [else
                    (draw-repl-line pad top text (style-color (car e))
                                    cols 0 shown cw lh)])
@@ -1282,12 +1416,44 @@
                            (* (- 1 size)
                               (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))
                            size)))
+    (repl-draw-busy r win mark cw th mark-top)
     (let ([c (complete-of r)] [e (repl-env r)])
       (when c
         (complete-show c caret (* cw (- (repl-point r) (complete-start c)))
                        lh w h (lambda (name) (name-kind name e))
                        (lambda (item) (completion-description r c item)))))
+    (repl-draw-busy-tip r win w h)
     (repl-pointer! r win)))
+
+;; The busy mark, at the size its style gives it, from the prompt's start
+;; (mark: its row's top, or #f, none to draw), centered on the cells cw
+;; wide it spans (the default's two, Genera's one), and on the text th
+;; high from mark-top.
+(define (repl-draw-busy r win mark cw th mark-top)
+  (let-values ([(bw bh) (ui-busy-size)])
+    (repl-busy-set! r #f)
+    (when (and mark (> bw 0) (> bh 0))
+      (let* ([cells (* cw (max 1 (ceiling (/ bw cw))))]
+             [bx (+ (car mark) (/ (- cells bw) 2))]
+             [by (+ (cdr mark) mark-top (/ (- th bh) 2))])
+        (repl-busy-set! r (list bx by bw bh (now-ms)))
+        (ui-draw-busy bx by bw bh
+                      (if (repl-over-busy? r win) '(hover) '())
+                      (now-ms))))))
+
+;; Its words, once the pointer has rested on it, as the kit's tooltips
+;; wait, in a window w × h.
+(define (repl-draw-busy-tip r win w h)
+  (let ([p (repl-pointer r)])
+    (when (and p (repl-over-busy? r win)
+               (>= (- (now-ms) (caddr p)) ui-tip-ms))
+      (with-place 'tooltip
+        (lambda ()
+          (let*-values ([(words) (repl-busy-words r)]
+                        [(tw th) (ui-tooltip-size words)]
+                        [(tx ty) (ui-popup-place (+ (car p) 12) (+ (cadr p) 20)
+                                                 (- (cadr p) 8) tw th w h)])
+            (ui-draw-tooltip tx ty tw th '() words)))))))
 
 ;; The cursor before the character cw × th at (x, y): the text kit's
 ;; caret, a bar, or a block in reverse video over the character.
@@ -1312,70 +1478,85 @@
   (for-each (lambda (l) (repl-add! r 'input (string-append "   " l))) examples))
 
 (define (repl-banner! r)
-  (case (repl-mode r)
-    [(world)
-     (repl-add! r 'banner (format "Schevana — a world made of Scheme.   ~a"
-                                  (scheme-version)))
-     (repl-add! r 'info "Every window, color and key binding here is a live \
-                         Scheme value. Try:")
-     (repl-examples!
-      r
-      '("(clock)                          ; apps are just procedures"
-        "(windows)                        ; the window list, as data"
-        "(set-theme! 'accent #xff9e64)    ; recolor the world"
-        "(spawn \"spin\" (lambda () (let loop () (loop))))"))
-     (repl-add! r (quote info) "F1 apps · Ctrl+Tab switch · Tab completes · \
-                                Shift+Enter newline · Ctrl+C stops")
-     (repl-add! r 'info "To experiment without changing anything, \
-                         Ctrl+Shift+P opens a Private REPL;")
-     (repl-add! r 'info "(repl 'whole-world) opens one that sees every name \
-                         of the world's.")]
-    [(private)
-     (repl-add! r 'banner "Private REPL — like a private browsing window.")
-     (repl-add! r 'info "Your definitions stay in this window and vanish \
-                         when you close it. Of the world")
-     (repl-add! r 'info "it sees what it may read, live, and set! of that \
-                         is refused. Try:")
-     (repl-examples!
-      r
-      '("(map window-title (windows))"
-        "(define (draw-window win) (error 'oops \"broken\"))  ; harmless here"))
-     (repl-add! r 'info "(exit) closes this REPL.")]
-    [(whole-world)
-     (repl-add! r 'banner "Whole-World REPL — the world's names, live, \
-                           under yours.")
-     (repl-add! r 'info "Every name of the world's is here, those it gains \
-                         later too, and set! of")
-     (repl-add! r 'info "one is refused. Your definitions stay in this \
-                         window and vanish with it.")
-     (repl-add! r 'info "Calling the world's procedures still acts on the \
-                         world: (set-theme! ...)")
-     (repl-add! r 'info "recolors it. (exit) closes this REPL.")]
-    [(pure)
-     (repl-add! r 'banner (format "Pure Scheme REPL — plain ~a."
-                                  (scheme-version)))
-     (repl-add! r 'info "None of Schevana's names are bound here: a clean \
-                         scratchpad whose")
-     (repl-add! r 'info "definitions are invisible everywhere else. (exit) \
-                         closes this REPL.")])
-  (repl-add! r 'info ""))
+  (let ([path (env-path (repl-env r))])
+    (case (repl-kind r)
+      [(root)
+       (repl-add! r 'banner (format "Schevana — a world made of Scheme.   ~a"
+                                    (scheme-version)))
+       (repl-add! r 'info "Every window, color and key binding here is a \
+                           live Scheme value. Try:")
+       (repl-examples!
+        r
+        '("(clock)                          ; apps are just procedures"
+          "(windows)                        ; the window list, as data"
+          "(set-theme! 'accent #xff9e64)    ; recolor the world"
+          "(spawn \"spin\" (lambda () (let loop () (loop))))"))
+       (repl-add! r 'info "F1 apps · Ctrl+Tab switch · Tab completes · \
+                           Shift+Enter newline · Ctrl+C stops")
+       (repl-add! r 'info "To experiment without changing anything, \
+                           Ctrl+Shift+P opens a Private REPL;")
+       (repl-add! r 'info "(envs) shows the tree of environments, and opens \
+                           a REPL in any of them.")]
+      [(private)
+       (repl-add! r 'banner (format "Private REPL in ~a — like a private \
+                                     browsing window." path))
+       (repl-add! r 'info "Your definitions stay here. Of the world it sees \
+                           what reads it, live,")
+       (repl-add! r 'info "and set! of that is refused. Try:")
+       (repl-examples!
+        r
+        '("(map window-title (windows))"
+          "(define (draw-window win) (error 'oops \"broken\"))  ; harmless \
+here"))]
+      [(world)
+       (repl-add! r 'banner (format "World REPL in ~a — the world's names, \
+                                     live, under yours." path))
+       (repl-add! r 'info "Every name of the world's is here, those it gains \
+                           later too, and set! of")
+       (repl-add! r 'info "one is refused. Your definitions stay here. \
+                           Calling the world's procedures")
+       (repl-add! r 'info "still acts on the world: (set-theme! ...) \
+                           recolors it. (fork) makes children.")]
+      [(pure)
+       (repl-add! r 'banner (format "Pure Scheme REPL in ~a — plain ~a."
+                                    path (scheme-version)))
+       (repl-add! r 'info "None of Schevana's names are bound here: a clean \
+                           scratchpad whose")
+       (repl-add! r 'info "definitions are invisible everywhere else.")]
+      [(sandbox)
+       (repl-add! r 'banner (format "Sandbox REPL in ~a — Scheme's pure \
+                                     core, and what it was shared." path))
+       (repl-add! r 'info "No files, no C, no threads: only what its parent \
+                           shared with it reaches out.")]
+      [(thread)
+       (repl-add! r 'banner (format "Thread REPL in ~a — the forms run on \
+                                     its vat's thread." path))
+       (repl-add! r 'info "Its sandbox is the vat's alone: what you define \
+                           lives there. Ctrl+C stops a form there.")])
+    (when (and (env-parent (repl-env r)) (eq? (env-base (repl-env r)) 'chez))
+      (repl-add! r 'info "(exit) closes this REPL."))
+    (repl-add! r 'info "")))
 
-(define (open-repl mode)
-  (let ([r (make-repl '() 0 #f "" 0 '() -1 #f 0 #f '() #f #t (now-ms)
-                      repl-initial-cols repl-initial-rows #f
-                      mode
-                      (make-repl-environment (car (repl-mode-info mode))))])
-    (repl-port-set! r (make-repl-port r))
-    (repl-banner! r)
-    (let ([win (open-repl-window r)])
-      ;; In a child of the world's, (exit) closes the window, not the world.
-      (unless (eq? (repl-env r) (env-root))
-        (define-top-level-value 'exit (lambda args (close-window! win))
-                                (repl-environment r)))
-      win)))
+;; A REPL in what (see repl-environment-of): the world's by default.
+(define (open-repl what)
+  (let-values ([(e own?) (repl-environment-of what)])
+    (let ([r (make-repl '() 0 #f "" 0 '() -1 #f 0 #f '() #f #t (now-ms)
+                        repl-initial-cols repl-initial-rows '() e own? #f #f
+                        #f #f)])
+      (repl-port-set! r (make-repl-port r))
+      (repl-banner! r)
+      (let ([win (open-repl-window r)])
+        ;; In a namespace, (exit) closes the window, not the world.
+        (when (and (env-parent e) (eq? (env-base e) 'chez))
+          (repl-define-exit! win e))
+        win))))
 
-(define-app (repl . mode) "REPL"
-  (open-repl (if (pair? mode) (car mode) 'world)))
+(define (repl-define-exit! win e)
+  (define-top-level-value 'exit (lambda args (close-window! win))
+                          (env-environment e)))
+
+(define-app (repl . what) "REPL"
+  (open-repl (if (pair? what) (car what) 'root)))
 (define-app (private-repl) "Private REPL" (open-repl 'private))
 (define-app (pure-repl) "Pure Scheme REPL" (open-repl 'pure))
 
@@ -1385,6 +1566,8 @@
     'min-size '(240 . 120)
     'cursor 'ibeam
     'bg (repl-background r)
+    'title-icon (lambda (x y s flags)
+                  (ui-draw-env-icon x y s flags (repl-kind r)))
     'draw (lambda (win w h) (repl-draw r win w h))
     'key (lambda (win key mods) (repl-key r win key mods))
     'text (lambda (win str) (repl-text r win str))
@@ -1394,18 +1577,38 @@
              (invalidate! win))
     'mouse-down (repl-mouse-down r)
     'mouse-move (lambda (win x y)
+                  (let ([p (repl-pointer r)])
+                    (unless (and p (= x (car p)) (= y (cadr p)))
+                      (repl-pointer-set! r (list x y (now-ms)))
+                      (when (repl-busy r) (invalidate! win))))
                   (when (repl-pointer! r win) (invalidate! win)))
     'blur (repl-blur r)
     'tick (lambda (win)
             (repl-drain! r)
+            ;; the environment dropped while it waited: the title says so
+            (unless (string=? (window-title win) (repl-title r))
+              (window-title-set! win (repl-title r))
+              (invalidate!))
+            ;; busy once it has run a while; its mark drawn again as it
+            ;; moves
+            (let ([b (repl-busy r)])
+              (cond [(and (repl-busy? r) (not (window-ref win 'busy)))
+                     (window-set! win 'busy (repl-busy-words r))
+                     (invalidate!)]   ; a style may show it in its bars
+                    [(and b (>= (- (now-ms) (list-ref b 4))
+                                (ui-busy-frame-ms)))
+                     (invalidate! win)]))
             (when (and (eq? win (focused-window))
                        (> (- (now-ms) (repl-blink-at r)) 530))
               (repl-blink-set! r (not (repl-blink r)))
               (repl-blink-at-set! r (now-ms))
               (invalidate! win)))
     'close (lambda (win)
-             (when (repl-proc r) (kill! (repl-proc r)))
-             (unless (eq? (repl-env r) (env-root)) (env-drop! (repl-env r))))
+             (let ([p (repl-proc r)])
+               (cond [(vat-job? p) (vat-job-kill! p)]
+                     [p (kill! p)]))
+             (when (and (repl-own? r) (not (env-dropped? (repl-env r))))
+               (vat-drop-env! (repl-env r))))
     'state r))
 
 ;; A REPL opened before a reload has no mouse or blur handler: it gets

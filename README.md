@@ -77,7 +77,12 @@ icons from `.desktop` files instead, so install one once (it goes under
 
 REPL: Enter evaluates when the form is complete (otherwise it inserts an
 indented newline), Shift+Enter always adds a newline, Up/Down walk history,
-Ctrl+C interrupts, Ctrl+L clears, Ctrl+V pastes.
+Ctrl+C interrupts, Ctrl+L clears, Ctrl+V pastes. A form that runs a while
+shows as the style has it: a spinner in place of its prompt (Genera's
+turns `| / - \` and its who line says Run; the pointer over it says how
+to stop it). Forms entered meanwhile wait under it (↳) and run in turn,
+the spinner moving down to each; Backspace on an empty line takes the
+last back, and Ctrl+C stops the running one and drops the rest.
 
 Tab extends the name before the cursor to what the matches starting with
 it share, and opens a list of the matches under the cursor that narrows
@@ -104,27 +109,50 @@ at the REPL shows what was typed there (input is read with its places,
 so errors in it say where too), and one `set!` to another procedure
 what that one tells.
 
-There are four kinds of REPL. The first evaluates in the world, the
-others each in a child environment of it (`services/env.ss`):
+A REPL evaluates in one environment (`services/env.ss`), named in its
+title (`REPL — /`, `REPL — /lab/sandbox`) with its kind's icon where the
+style shows one. A kind opens a new environment of it, the window's own:
 
 | | Opens with | What a `define` does |
 | --- | --- | --- |
 | REPL | `(repl)`, Ctrl+Shift+R | changes the running world |
-| Private REPL | `(private-repl)`, Ctrl+Shift+P | stays in that window and vanishes with it, like private browsing |
-| Whole-World REPL | `(repl 'whole-world)` | the same, with every name of the world's |
+| Private REPL | `(private-repl)`, Ctrl+Shift+P | stays in its environment and vanishes with it, like private browsing |
+| World REPL | `(repl 'world)` | the same, with every name of the world's |
 | Pure Scheme REPL | `(pure-repl)` | plain Chez Scheme, none of Schevana's names exist |
+| Sandbox, thread | `(repl 'sandbox)`, `(repl 'thread)` | stays in a sandbox: Scheme's pure core, no files, C or threads |
 
-A private REPL has all of Chez and, of the world, what reads it (the
-REPL's list: `(windows)`, `(theme 'accent)`, `(procs)` and the like),
-shared live: it sees the world as it is now. A `set!` of a shared name
-is refused ("attempt to assign read-only variable"), and redefining one,
-or `draw-window`, makes the REPL's own
-and breaks nothing. A whole-world REPL is shared every name of the
-world's, those the world gains later too, so there calling the world's
-procedures, such as `(set-theme! ...)`, `(open-window ...)` or
-`(reload!)`, still acts on the world. Neither is a security sandbox: the
-FFI is reachable from any REPL. In all but the world's, `(exit)` closes
-the window instead of Schevana.
+A private REPL has all of Chez and, of the world, what reads it
+(`env-private-names`: `(windows)`, `(theme 'accent)` and the like), live:
+a `set!` of one is refused ("attempt to assign read-only variable"), and
+redefining one makes the REPL's own. A world REPL has every name of the
+world's, so `(set-theme! ...)` there still acts on the world. Neither is
+a security sandbox: the FFI is reachable from any namespace, where
+`(exit)` closes the window. A thread's REPL sends its forms to the vat,
+whose thread runs and prints them; Ctrl+C stops them there.
+`(repl "/lab")` opens one in an environment that exists (not
+`/worklets`); once its environment is dropped, a REPL evaluates nowhere.
+
+**Environments**, `(envs)`, shows the tree: each environment's icon,
+kind, how many names it was shared and holds, and its thread's jobs;
+past a line you can drag, the one selected: kind, base, parent,
+children, what it forks, its jobs (× stops one) and its names, shared
+(the parent's name, read-only or through a setter, where bound) or its
+own. Its toolbar and a row's right-press menu act on it:
+
+- **Fork…**: a child of a kind it forks, named and shared names
+  (suggested as you type; `now-ms as clock` renames, `size via
+  size-set!` goes through a setter), optionally with a REPL in it.
+- **REPL** (Return): a REPL in it.
+- **Share…**: more of its parent's names (not into a thread's sandbox).
+- **Load…**: a file evaluated in it (`env-load`).
+- **Drop…**: it, what is under it and their threads.
+
+On `/worklets` it sets the pool's threads. A world namespace gets the
+names the world gains at its next evaluation; Sync shares them now
+(`env-sync!`). An environment forks only the kinds its own allows,
+through `(fork kind 'name n 'share names 'setters pairs)`: the world and
+world namespaces every kind, a sandbox sandboxes and threads, the others
+none; `(fork)` lists them.
 
 R6RS libraries work as in Chez: `(import (acme math))` in any REPL, in an
 app's file, or inside a body (`(let () (import (acme math)) …)`). Besides
@@ -322,8 +350,8 @@ styles and palettes with the others, and the saved look may name them.
 ## Architecture
 
 ```
-apps/        ordinary procedures: repl  clock  life  sketch  monitor
-             settings  tasks
+apps/        ordinary procedures: repl  clock  envs  life  sketch
+             monitor  settings  tasks
 wallpapers/  desktop fills: gradient  flat  shade
 palettes/    named colors: catppuccin  crayons  forest  genera  gruvbox
              interlisp  neon  nord  paper  phosphor  sakura  sunset
@@ -430,18 +458,24 @@ Decisions worth keeping in mind for the real design:
   only pairs, vectors and boxes, and the crew refuses any procedure there
   that is no worklet.
 - **Environments are a tree.** The world is its root (`services/env.ss`).
-  A child is made on a base, all of Chez or the worklets', and is shared
-  only the names its parent lists, as in
+  A child is of a kind, `(env-fork e 'sandbox 'name 'tally 'share
+  '(add!))`, which says its base, all of Chez or the worklets', what it
+  is shared at once and what it may fork in turn (a registry, which vats
+  add threads to); `(env-child e name base)` makes a bare one. It is
+  shared only the names its parent lists, as in
   `(env-share! e '(windows (clock . now-ms)))`. Each is a read-only
   forwarder, a macro that makes code in the child refer to the parent's
   binding itself: live, at no cost a call. A `set!` of it is refused as
   it expands, in the words Chez uses for an R6RS import's: "attempt to
   assign read-only variable farewell". A setter may take the `set!`
-  instead (`env-share-setter!`), and the child's `define` makes its own. So a child changes its parent's
-  state only through what it was shared. Every name of the world's,
-  followed, is for the Whole-World REPL alone. A child on Chez's base
-  still reaches the world through Chez, so it organizes state and
-  confines nothing; the sandboxes that do confine come with apps in
+  instead (`env-share-setter!`), and the child's `define` makes its own.
+  So a child changes its parent's state only through what it was shared.
+  A sandbox's children are sandboxes on its base, shared what it holds:
+  it narrows what it hands down, never widens it. Every name of the
+  world's, followed, is a world namespace's alone, which a person asks
+  for. A dropped one is marked so (`env-dropped?`): what holds it knows.
+  A child on Chez's base still reaches the world through Chez, so it
+  organizes state and confines nothing; the sandboxes that do confine come with apps in
   their own environments.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
   (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
@@ -467,7 +501,10 @@ Decisions worth keeping in mind for the real design:
   kills its jobs, as `(vat-job-kill! j)` does: a job killed never starts,
   or escapes within microseconds, and its `then` never runs.
   `(vat-job-pending? j)` holds until `then` has run. Jobs carry and return
-  no procedure but worklets.
+  no procedure but worklets. A job sent with a `fail` gives it the error
+  instead of crashing the window; `(vat-repl! v forms width then fail)`
+  prints what the forms return on the vat's thread, where the values
+  live, as a REPL in a thread's environment does.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a

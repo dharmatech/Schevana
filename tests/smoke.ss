@@ -145,6 +145,7 @@
 (check "private repl opens focused" (eq? p (focused-window)))
 (type! "(define (draw-window win) (error 'oops \"broken\"))")
 (press! 'return)
+;; typed ahead: these wait in turn while the first runs
 (type! "(define private-secret 42)")
 (press! 'return)
 (type! "(set! *windows* '())")
@@ -578,8 +579,8 @@
 (check "whose definitions stay put" (not (top-level-bound? 'x)))
 (press! #\p 'ctrl 'shift)
 (steps 2)
-(check "ctrl+shift+p opens a private repl"
-       (equal? "Private REPL" (window-title (focused-window))))
+(check "ctrl+shift+p opens a private repl, titled by its environment"
+       (string-prefix? "REPL — /private" (window-title (focused-window))))
 (type! "(define note \"only here\")")
 (press! 'return)
 (steps 20)
@@ -589,6 +590,245 @@
 (close-window! q)
 (close-window! (focused-window))
 (focus-window! r)
+
+;; A REPL in an environment that is there: a thread's, whose forms run
+;; in its vat; its title names it; once dropped, it evaluates nowhere.
+(let* ([t (env-fork (env-root) 'thread 'name 'smoke-vat)]
+       [w (repl t)] [rr (repl-of w)])
+  (define (enter! src) (type! src) (press! 'return) (steps 2))
+  (define (idle?) (not (repl-proc rr)))
+  (define (said? text)
+    (wait-for (lambda () (and (idle?) (member text (transcript w)) #t))))
+  (steps 2)
+  (check "a REPL is titled by its environment's path, the world's too, and \
+          gives its frame its kind's icon"
+         (and (string=? (window-title w) "REPL — /smoke-vat")
+              (string=? (window-title r) "REPL — /")
+              (procedure? (window-ref w 'title-icon))))
+  (enter! "(define smoke-vat-n 41)")
+  (enter! "(+ smoke-vat-n 1) (lambda (x) x)")
+  (check "a thread's REPL sends its forms to the vat, which prints what they \
+          return"
+         (and (said? "42")
+              (exists (lambda (l) (string-prefix? "#<procedure" l))
+                      (transcript w))
+              (not (top-level-bound? 'smoke-vat-n))))
+  (enter! "(car 1)")
+  (check "an error in the vat is the REPL's to show, not a crash"
+         (and (wait-for idle?)
+              (exists (lambda (l) (string-contains-ci? l "car"))
+                      (transcript w))
+              (not (window-error w))))
+  (enter! "(let loop () (loop))")
+  (wait-for (lambda () (window-ref w 'busy)))
+  (steps 2)
+  (let ([b (repl-busy rr)])
+    (check "a long evaluation leaves the titles be; after a moment the \
+            window is busy, its mark in place of the running input's prompt"
+           (and (string=? (window-title w) "REPL — /smoke-vat")
+                (equal? (window-ref w 'busy)
+                        "Running on its thread: Ctrl+C stops it")
+                (equal? (cdr (repl-running rr)) "λ> (let loop () (loop))")
+                b))
+    (when b
+      (let-values ([(cx cy cw ch) (content-rect w)])
+        (inject! `(mouse-move ,(+ cx (car b) 2) ,(+ cy (cadr b) 2)))
+        (steps 1)
+        (check "over the mark the pointer is an arrow"
+               (eq? (window-ref w 'cursor) 'arrow)))))
+  (press! 'return)
+  (steps 1)
+  (check "Enter with nothing typed while a form runs queues nothing"
+         (null? (repl-queue rr)))
+  (type! "1")
+  (press! 'return)
+  (type! "(+ 1 1)")
+  (press! 'return)
+  (steps 1)
+  (check "while a form runs, each input entered waits in turn under it, \
+          the input line free for the next"
+         (and (equal? (repl-queue rr) '("1" "(+ 1 1)"))
+              (equal? (repl-input rr) "")))
+  (press! 'backspace)
+  (steps 1)
+  (check "Backspace on an empty line takes the last one back"
+         (and (equal? (repl-queue rr) '("1"))
+              (equal? (repl-input rr) "(+ 1 1)")))
+  (press! 'return)
+  (steps 1)
+  (press! #\c 'ctrl)
+  (steps 2)
+  (check "stopped, the window is no longer busy, its mark is gone, and \
+          what waited was dropped (it is history)"
+         (and (not (window-ref w 'busy)) (not (repl-busy rr))
+              (null? (repl-queue rr)) (not (repl-running rr))
+              (member "(+ 1 1)" (repl-history rr))))
+  (enter! "smoke-vat-n")
+  (check "ctrl+c stops a form on the vat's thread; the vat goes on"
+         (and (member "; interrupted" (transcript w)) (said? "41")))
+  (enter! "(fork 'sandbox)")
+  (check "a thread holds no fork"
+         (wait-for (lambda ()
+                     (and (idle?)
+                          (exists (lambda (l) (string-contains-ci? l "fork"))
+                                  (transcript w))))))
+  (check "no REPL opens in /worklets, where the pool's threads run"
+         (guard (c [#t #t]) (repl "/worklets") #f))
+  (vat-drop-env! t)
+  (steps 2)
+  (enter! "smoke-vat-n")
+  (check "once its environment is dropped, a REPL says so, and evaluates \
+          nowhere"
+         (and (wait-for (lambda ()
+                          (exists (lambda (l) (string-contains-ci? l "dropped"))
+                                  (transcript w))))
+              (string=? (window-title w) "REPL — /smoke-vat (dropped)")))
+  (close-window! w)
+  (focus-window! r))
+
+;; Environments: the tree, what the one selected is, and what can be done
+;; with it, by clicks and keys.
+(let* ([w (envs)] [v (window-ref w 'state)] [ui (envs-view-ui v)])
+  (define (live? id) (let ([b (ui-find ui id)]) (and b (ui-region-on b) #t)))
+  (define (sheet-button! i) (click-ui! w (list 'envs-sheet i)))
+  (steps 2)
+  (check "Environments shows the tree, the world first and selected, \
+          /worklets too; the world forks and takes a REPL, not Share or \
+          Drop"
+         (and (eq? (envs-view-selected v) (env-root))
+              (ui-find ui '(tree row 0)) (ui-find ui '(tree row 1))
+              (live? '(envs fork)) (live? '(envs repl))
+              (not (live? '(envs share))) (not (live? '(envs drop)))))
+  (click-ui! w '(envs fork))
+  (check "Fork… opens a sheet of the kinds, its name focused"
+         (and (eq? (envs-view-sheet v) 'fork)
+              (equal? (ui-focused ui) '(envs-sheet name))
+              (live? '(envs-sheet kind private))))
+  (click-ui! w '(envs-sheet kind sandbox))
+  (click-ui! w '(envs-sheet name))
+  (type! "smoke-box")
+  (click-ui! w (list '(envs-sheet shares) 'field))
+  (type! "now-m")
+  (steps 2)
+  (check "Share suggests the names the environment holds"
+         (ui-find ui (list (list '(envs-sheet shares) 'field) 'suggestion 0)))
+  (press! 'down)
+  (press! 'return)
+  (steps 2)
+  (type! "now-ms as clock")
+  (press! 'return)
+  (steps 2)
+  (check "a pick, and a share typed, become chips"
+         (equal? (envs-view-shares v) '("now-ms" "now-ms as clock")))
+  (check "Open a REPL in it starts off" (not (envs-view-repl? v)))
+  (sheet-button! 1)
+  (let ([c (env-find "/smoke-box")])
+    (check "Fork makes a child of the kind, named, shared what it was \
+            given, and selects it; no REPL opens unasked"
+           (and c (eq? (env-kind c) 'sandbox) (not (envs-view-sheet v))
+                (eq? (focused-window) w)
+                (eq? (envs-view-selected v) c)
+                (equal? (map car (env-shared-names c)) '(clock now-ms))
+                (env-eval c '(eq? clock now-ms))))
+    (type! "f")
+    (steps 2)
+    (check "F forks too; a sandbox's sheet offers sandboxes and threads \
+            only"
+           (and (eq? (envs-view-sheet v) 'fork)
+                (live? '(envs-sheet kind thread))
+                (not (live? '(envs-sheet kind private)))))
+    (type! "a/b")
+    (press! 'return)
+    (steps 2)
+    (check "a refused fork says why, and the sheet stays"
+           (and (eq? (envs-view-sheet v) 'fork)
+                (string-contains-ci? (envs-view-error v) "slash")))
+    (press! 'escape)
+    (steps 2)
+    (click-ui! w '(envs repl))
+    (check "REPL opens a REPL in the one selected"
+           (let ([f (focused-window)])
+             (and (repl? (window-ref f 'state #f))
+                  (eq? (repl-env (repl-of f)) c))))
+    (close-window! (focused-window))
+    (focus-window! w)
+    (steps 2)
+    (type! "f")
+    (steps 2)
+    (click-ui! w '(envs-sheet repl))
+    (sheet-button! 1)
+    (let ([child (envs-view-selected v)])
+      (check "ticked, Open a REPL in it opens one in the child"
+             (let ([f (focused-window)])
+               (and (eq? (env-parent child) c)
+                    (repl? (window-ref f 'state #f))
+                    (eq? (repl-env (repl-of f)) child)))))
+    (close-window! (focused-window))
+    (focus-window! w)
+    (steps 2)
+    (type! "f")
+    (steps 2)
+    (check "and it is off again when the sheet opens next"
+           (not (envs-view-repl? v)))
+    (press! 'escape)
+    (steps 2)
+    (click-ui! w '((envs parent) 0))
+    (check "the Parent chip goes to the parent" (eq? (envs-view-selected v) c))
+    (click-ui! w '(envs drop))
+    (sheet-button! 1)
+    (check "Drop… asks first, then drops it; the world is selected again"
+           (and (env-dropped? c) (eq? (envs-view-selected v) (env-root)))))
+  (let ([lab (env-fork (env-root) 'world 'name 'smoke-lab)])
+    (eval '(define smoke-sync-new 1) *world-env*)
+    (envs-select! v lab)
+    (invalidate! w)   ; selected from here, not by input
+    (steps 2)
+    (check "a world namespace shows the names the world gained since it last \
+            synced, and Sync shares them"
+           (and (memq 'smoke-sync-new (env-unsynced lab))
+                (live? '(envs sync))
+                (begin (click-ui! w '(envs sync))
+                       (and (null? (env-unsynced lab))
+                            (assq 'smoke-sync-new (env-shared-names lab))
+                            (not (live? '(envs sync)))))))
+    (envs-select! v (env-root))
+    (vat-drop-env! lab)
+    (steps 2))
+  (let* ([line (lambda () (+ 3 (ui-region-x (ui-find ui 'split))))]
+         [before (line)])
+    (define (drag! x0 x1 y clicks)
+      (inject! `(mouse-move ,x0 ,y) `(mouse-down ,x0 ,y left ,clicks)
+               `(mouse-move ,x1 ,y) `(mouse-up ,x1 ,y left))
+      (steps 2))
+    (let-values ([(x y) (ui-point w 'split 0.5)])
+      (inject! `(mouse-move ,x ,y))
+      (steps 1)
+      (let ([cursor (window-ref w 'cursor)])
+        (drag! x (- x 100) y 1)
+        (let ([dragged (line)])
+          (drag! (- x 100) -5000 y 1)
+          (let ([narrowest (line)])
+            (inject! `(mouse-move ,(- (+ x narrowest) before) ,y)
+                     `(mouse-down ,(- (+ x narrowest) before) ,y left 1)
+                     `(mouse-up ,(- (+ x narrowest) before) ,y left)
+                     `(mouse-down ,(- (+ x narrowest) before) ,y left 2)
+                     `(mouse-up ,(- (+ x narrowest) before) ,y left))
+            (steps 2)
+            (check "the line between the tree and the inspector drags, no \
+                    further than the panes' least widths; a double click \
+                    puts it back"
+                   (and (eq? cursor 'resize-ew)
+                        (= dragged (- before 100))
+                        (= narrowest 280)
+                        (= (line) before))))))))
+  (click-ui! w '(tree row 1))
+  (let ([n (vat-pool-size)])
+    (click-ui! w '((envs pool) up))
+    (check "/worklets' Pool sets how many threads the pool has"
+           (= (vat-pool-size) (+ n 1)))
+    (click-ui! w '((envs pool) down)))
+  (close-window! w)
+  (focus-window! r))
 
 ;; A crashing app only crashes its own window.
 (define bad (open-window "Broken" 'size '(300 . 120) 'pos '(80 . 480)
@@ -854,7 +1094,8 @@
 (call-with-output-file *theme-file-path*
   (lambda (p)
     (write '((window-style . amiga) (preset . workbench) (corner-radius . 4))
-           p)))
+           p))
+  'replace)
 (theme-file-load!)
 (check
  "a saved theme naming a removed style or palette falls back to the defaults"
@@ -1361,6 +1602,28 @@
             (equal? (car (task-tags nt)) "at-f0-(x.ss:0)")))
 (set-task! nt 'tags '())
 (tasks-view-tag-draft-set! tv "")
+(set-task! nt 'tags '("render"))
+(steps 2)   ; the chip moves the field
+(click-ui! tw '(tags field))
+(type! "re")
+(steps 2)
+(let ([shown (filter-map (lambda (r)
+                           (let ([id (ui-region-id r)])
+                             (and (pair? id) (pair? (cdr id))
+                                  (eq? (cadr id) 'suggestion) id)))
+                         (ui-state-regions tui))])
+  (press! 'down)
+  (press! 'return)
+  (steps 2)
+  (check "the tag field suggests the tags the other tasks have, not its \
+          own; Down and Return add one"
+         (and (pair? shown)
+              (= (length (task-tags nt)) 2)
+              (equal? (car (task-tags nt)) "render")
+              (member (cadr (task-tags nt)) (tasks-tags *tasks*))
+              (string=? (tasks-view-tag-draft tv) ""))))
+(press! 'escape)
+(set-task! nt 'tags '())
 
 (click-ui! tw 'description)
 (type! "line one")
@@ -4071,8 +4334,8 @@
     (set! *toasts* '())
     (steps 1)))
 
-;; (reload!) in a whole-world REPL reloads the world, not the REPL.
-(let ([p (repl 'whole-world)] [old render-frame!])
+;; (reload!) in a world REPL reloads the world, not the REPL.
+(let ([p (repl 'world)] [old render-frame!])
   (steps 2)
   (type! "(reload!)")
   (press! 'return)
@@ -4084,7 +4347,7 @@
     (wait-for (lambda () (not (repl-proc (repl-of p)))))
     (let ([w (plain-window "Plain" 300 200)])
       (let-values ([(l t r b) (frame-insets w)])
-        (check "(reload!) in a whole-world REPL reloads the world, whose \
+        (check "(reload!) in a world REPL reloads the world, whose \
                 styles keep the world's names"
                (and reloaded? (= t (title-height)) (not (= t 99)))))
       (close-window! w)))
