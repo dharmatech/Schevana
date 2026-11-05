@@ -189,7 +189,7 @@
 ;;; are there for a later layer to set. fluid-let (a view for a while) is
 ;;; not a set.
 
-(define core-hooks '(*profile-span* *theme-saver*))
+(define core-hooks '(*profile-span* *theme-saver* *window-gone*))
 
 ;; The names a file defines at its top level.
 (define (top-level-names f)

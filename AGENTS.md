@@ -43,14 +43,14 @@ before it:
 |---|---|
 | `src/` | The core: the world (windows, focus, the theme's layers, processes, timers, the canvas, the host), its registries, the hooks later layers fill, and the caches its own procedures need. |
 | `kits/` | Libraries, pure or almost. |
-| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, the profiler, the saved look. |
+| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, vats and their jobs, the profiler, the saved look. |
 | `desktop/` | The screen's own surfaces and the desktop's behavior: wallpaper, bars, menu, toasts, keys, arranging windows. |
 | `styles/`, `palettes/`, `wallpapers/` | One definition per file, registered by its definer. |
 | `apps/` | One app per file, defined with `define-app`. |
 
 - **The core never depends on a later layer.** It reaches them only
   through registries, parts and settings they fill, and hooks they set
-  (`*profile-span*`, `*theme-saver*`).
+  (`*profile-span*`, `*theme-saver*`, `*window-gone*`).
 - **The core has a budget**, 14,200 tokens (atoms as read; comments,
   whitespace and names' lengths are free), in `tests/sources.ss`. Don't
   join lines or shorten names to fit it. Code the core doesn't need moves
@@ -77,11 +77,13 @@ before it:
 - **S4. Threads.** Global state belongs to the main thread, and only it
   writes it. The exceptions are a service's own structures that threads
   share, changed only by `box-cas!` (the main thread's mail, the crew's
-  loops). A worker runs only worklets (`define-worklet`): procedures
-  compiled where SDL, Cairo and the world's state are out of reach, which
-  touch only what they are handed; the crew refuses to hand them any
-  procedure but worklets. Don't hand a worker world code by other means
-  (`fork-thread`).
+  loops, a vat's mailbox). A worker runs only worklets (`define-worklet`):
+  procedures compiled where SDL, Cairo and the world's state are out of
+  reach, which touch only what they are handed; or, in a vat, code
+  compiled in the vat's own sandbox, which its thread alone evaluates in.
+  The crew and the vats refuse to hand them any procedure but worklets,
+  and a vat's results come back to main the same way. Don't hand a worker
+  world code by other means (`fork-thread`).
 - **S5. Names.** A global is earmuffed and carries its owner's prefix
   (`*status-segments*`, `*repl-inputs*`).
 - **S6. Environments.** Code that makes an environment shares it a list

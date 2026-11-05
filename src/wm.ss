@@ -86,6 +86,9 @@
 
 ;; the window whose handler is running
 (defvar current-window (make-thread-parameter #f))
+;; Told of each window that closes or crashes, to stop what works for it:
+;; a hook a later layer sets (its background jobs, services/vat.ss).
+(defvar *window-gone* void)
 
 ;; The bounding box of two boxes (x0 y0 x1 y1).
 (define (box-union a b)
@@ -426,6 +429,7 @@
 ;; (focus, order, titles) half changed.
 (define (window-crash! win kind c)
   (window-error-set! win (cons kind c))
+  (*window-gone* win)
   (invalidate!))
 
 ;; Gives win the keyboard and brings it to the front (raise? #f: not).
@@ -458,6 +462,7 @@
   (when (memq win *windows*)
     (window-call win 'close)
     (set! *windows* (remq win *windows*))
+    (*window-gone* win)
     (when (and *drag* (eq? (drag-win *drag*) win))
       (set! *drag* #f)
       (set! *drag-outline* #f))

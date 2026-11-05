@@ -335,7 +335,8 @@ desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
 services/    long-lived state behind an API, no surface: crew, worker
              threads for data-parallel loops; env, the tree of
              environments; profile, the profiler; theme-file, the saved
-             look, written soon after each change
+             look, written soon after each change; vat, threads with a
+             mailbox and a sandbox, and their background jobs
 kits/        app: launching one by name, the color a name gets; color:
              hue, saturation and lightness, a color as one fixnum, the
              text color that reads on one; complete: a completion list
@@ -453,6 +454,18 @@ Decisions worth keeping in mind for the real design:
   at most 8 (`SCHEVANA_WORKERS` sets it, 0 for none). Everything else stays
   on the main thread; `(post-main! thunk)` hands work back to it from any
   thread.
+- **Vats run jobs in the background.** A vat (`services/vat.ss`) is a
+  thread, its mailbox and a sandbox only its thread evaluates in, so its
+  state is its own: `(vat-eval! v '(define n 0) #f)` defines there, and
+  `(vat-send! v 'add! '(5) show)` calls the vat's `add!` there.
+  `(vat-send! (vat-pool) step! (list grid) show)` runs a worklet on the
+  pool's threads, 4 until `(vat-pool-size-set! n)`. When a job returns, its `then` (`show`) runs on main at
+  the next step as a handler of the window that sent the job: an error in
+  the job or in `then` crashes that window. Closing or crashing the window
+  kills its jobs, as `(vat-job-kill! j)` does: a job killed never starts,
+  or escapes within microseconds, and its `then` never runs.
+  `(vat-job-pending? j)` holds until `then` has run. Jobs carry and return
+  no procedure but worklets.
 - **Apps are procedures.** `define-app` defines a normal procedure that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
