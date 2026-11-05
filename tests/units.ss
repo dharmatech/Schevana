@@ -1,9 +1,10 @@
 ;;; tests/units.ss — the drawing layer piece by piece: the measuring
-;;; context, pixmaps, Life's generations and grid, and invalidation; the
-;;; edit kit (editing, rows and their lazy layout), the widget kit's dates
-;;; and layout, Tasks' own procedures, the window manager's surfaces
-;;; and strips, and styles: derived ones, parts by name, a window's own;
-;;; the shared drawing primitives and the behaviors a style chooses.
+;;; context, pixmaps, Life's generations and grid, Boids' flocking, and
+;;; invalidation; the edit kit (editing, rows and their lazy layout), the
+;;; widget kit's dates and layout, Tasks' own procedures, the window
+;;; manager's surfaces and strips, and styles: derived ones, parts by
+;;; name, a window's own; the shared drawing primitives and the behaviors
+;;; a style chooses.
 ;;; Shadow tiles too.   ; shadow
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir]
@@ -866,6 +867,244 @@
        (and (life-matches-rects? 1 720 466) (life-matches-rects? 1 803 515)))
 (check "Life's pixmap drawing equals per-cell rectangles at 200%"
        (and (life-matches-rects? 2 720 466) (life-matches-rects? 2 803 515)))
+
+;;; ------------------------------------------------------------------ Boids
+;;; The Niva version's tests (tests/flockTest.niva in boids-niva), and the
+;;; screen's rules.
+
+(define (test-boid x y vx vy) (make-boid (make-vec x y) (make-vec vx vy)))
+
+(define (test-boid-numbers b)
+  (let ([p (boid-position b)] [v (boid-velocity b)])
+    (list (vec-x p) (vec-y p) (vec-x v) (vec-y v))))
+
+;; To the last digit, so any change to the rules shows. They are the Niva
+;; version's numbers: the same flonum operations, in the same order.
+(check "Boids: the demo's first step is the Niva version's"
+       (equal? (map test-boid-numbers
+                    (boids-step boids-demo boids-default-rules))
+               '((0.9869999999999999 0.054 0.9869999999999999 0.054)
+                 (1.0 2.002 0.0 1.002)
+                 (3.003 0.999 1.003 0.999))))
+
+(check "Boids: a step leaves the flock it steps as it was"
+       (let ([before (map test-boid-numbers boids-demo)])
+         (boids-step boids-demo boids-default-rules)
+         (equal? (map test-boid-numbers boids-demo) before)))
+
+(check "Boids: a boid is not its own neighbor"
+       (let ([b (test-boid 0.0 0.0 1.0 0.0)])
+         (null? (boid-neighbors b (list b) 50.0 360.0))))
+
+;; Heading right, with one boid ahead, one to the side and one behind.
+(check "Boids: what the view angle lets a boid see"
+       (let ([b (test-boid 0.0 0.0 1.0 0.0)]
+             [ahead (test-boid 3.0 0.0 1.0 0.0)]
+             [side (test-boid 0.0 3.0 1.0 0.0)]
+             [behind (test-boid -3.0 0.0 1.0 0.0)])
+         (and (boid-sees? b ahead 180.0)
+              (not (boid-sees? b side 180.0))
+              (not (boid-sees? b behind 180.0))
+              (boid-sees? b side 270.0)
+              (not (boid-sees? b behind 270.0))
+              (boid-sees? b behind 360.0)
+              (boid-sees? b ahead 10.0))))
+
+;; Heading right: of these, only the boid close and straight ahead.
+(check "Boids: blockers are close and ahead"
+       (let* ([b (test-boid 0.0 0.0 1.0 0.0)]
+              [ahead (test-boid 10.0 0.0 1.0 0.0)]
+              [flock (list b ahead
+                           (test-boid 0.0 10.0 1.0 0.0)     ; to the side
+                           (test-boid -10.0 0.0 1.0 0.0)    ; behind
+                           (test-boid 50.0 0.0 1.0 0.0))])  ; too far
+         (equal? (boid-neighbors b flock 40.0 90.0) (list ahead))))
+
+;; One unit sideways, and one unit back. Heading a little upward, the
+;; sideways step goes up too.
+(check "Boids: clear view steps aside, back off steps back"
+       (let ([b (test-boid 0.0 0.0 1.0 0.0)]
+             [climbing (test-boid 0.0 0.0 1.0 0.2)]
+             [ahead (list (test-boid 10.0 0.0 1.0 0.0))])
+         (and (equal? (format "~s" (boid-step-aside b ahead))
+                      "#<vec 0.0 -1.0>")
+              (equal? (format "~s" (boid-back-off b ahead))
+                      "#<vec -1.0 0.0>")
+              (> (vec-y (boid-step-aside climbing ahead)) 0.0))))
+
+(check "Boids: resizing a flock keeps the boids already there"
+       (let ([fewer (boids-resize boids-demo 2 100 100)]
+             [more (boids-resize boids-demo 5 100 100)])
+         (and (= (length fewer) 2) (= (length more) 5)
+              (equal? fewer (list-head boids-demo 2))
+              (equal? (list-head more 3) boids-demo)
+              (equal? (boids-resize boids-demo 3 100 100) boids-demo))))
+
+;; 50 frames of 150 boids.
+(check "Boids: a frame keeps every boid on screen, within the speed limits"
+       (let ([lo (boids-rule boids-default-rules 'min-speed)]
+             [hi (boids-rule boids-default-rules 'max-speed)])
+         (let loop ([flock (boids-scatter 150 900 600)] [i 0])
+           (or (= i 50)
+               (let ([next (boids-step-on flock boids-default-rules 900 600)])
+                 (and (for-all
+                       (lambda (b)
+                         (let* ([p (boid-position b)] [v (boid-velocity b)]
+                                [s (sqrt (vec-dot v v))])
+                           (and (<= 0.0 (vec-x p) 900.0)
+                                (<= 0.0 (vec-y p) 600.0)
+                                (<= (- lo 1e-9) s (+ hi 1e-9)))))
+                       next)
+                      (loop next (+ i 1))))))))
+
+;; The record types are nongenerative: loading the file again keeps them,
+;; so a flock in flight still works with the new procedures.
+(check "Boids: boids made before the file loads again still work after"
+       (let ([b (car boids-demo)])
+         (load-source "apps/boids.ss")
+         (and (boid? b) (vec? (boid-position b))
+              (= (length (boids-step (list b) boids-default-rules)) 1))))
+
+(check "Boids: random rules are the rules, each within its range"
+       (let loop ([i 0])
+         (or (= i 500)
+             (let ([rules (boids-random-rules)])
+               (and (equal? (plist-keys rules)
+                            (plist-keys boids-default-rules))
+                    (for-all (lambda (range)
+                               (<= (cadr range) (boids-rule rules (car range))
+                                   (caddr range)))
+                             boids-ranges)
+                    (<= (boids-rule rules 'min-speed)
+                        (boids-rule rules 'max-speed))
+                    (loop (+ i 1)))))))
+
+;; The keys, through the window's own handler. A clock moved a second on
+;; lets a tick step whether or not the last one was long ago.
+(let ([win (boids)])
+  (define (key! k) (window-call win 'key k '()))
+  (define (flock) (window-ref win 'flock))
+  (define (tick-later!)
+    (fluid-let ([now-ms (let ([t (now-ms)]) (lambda () (+ t 1000)))])
+      (steps 1)))
+  (check "Boids: R picks random rules, D the defaults again"
+         (begin
+           (key! #\r)
+           (and (not (equal? (window-ref win 'rules) boids-default-rules))
+                (begin (key! #\d)
+                       (eq? (window-ref win 'rules) boids-default-rules)))))
+  (check "Boids: S scatters as many boids anew"
+         (let ([before (flock)])
+           (key! #\s)
+           (and (= (length (flock)) (length before))
+                (not (exists eq? (flock) before)))))
+  (check "Boids: Space holds the flock still, and again sets it going"
+         (let ([before (begin (key! #\space) (flock))])
+           (tick-later!)
+           (let ([held? (eq? (flock) before)])
+             (key! #\space)
+             (tick-later!)
+             (and held? (not (eq? (flock) before))))))
+  (close-window! win))
+
+(check "Boids: setting a rule keeps the others, and their order"
+       (let ([rules (boids-set-rule boids-default-rules 'view-angle 270.0)])
+         (and (= (boids-rule rules 'view-angle) 270.0)
+              (equal? (plist-keys rules) (plist-keys boids-default-rules))
+              (= (boids-rule rules 'cohesion)
+                 (boids-rule boids-default-rules 'cohesion)))))
+
+(check "Boids: min and max speed can't cross; the one set pushes the other"
+       (let ([faster (boids-set-rule boids-default-rules 'min-speed 4.5)]
+             [slower (boids-set-rule boids-default-rules 'max-speed 0.6)])
+         (and (= (boids-rule faster 'max-speed) 4.5)
+              (= (boids-rule slower 'min-speed) 0.6)
+              (= (boids-rule (boids-set-rule boids-default-rules
+                                             'min-speed 2.0)
+                             'max-speed)
+                 4.0))))
+
+(check "Boids: a weight's slider is a cube, the others straight"
+       (let ([cohesion (assq 'cohesion boids-ranges)]
+             [radius (assq 'cohesion-radius boids-ranges)])
+         (and (< (abs (- (boids-slider-value cohesion 0.5) 0.025)) 1e-12)
+              (< (abs (- (boids-slider-t cohesion 0.025) 0.5)) 1e-12)
+              (= (boids-slider-value radius 0.5) 100.0)
+              (= (boids-slider-t radius 100.0) 0.5))))
+
+;; The rules window, opened with the flock, where both fit.
+(let* ([win (parameterize ([new-window-position '(40 . 60)]) (boids))]
+       [rules-win (lambda () (find-window "Boids — Rules"))]
+       [press! (lambda (rw id)   ; the middle of the widget id
+                 (let ([r (ui-find (window-ref rw 'ui) id)])
+                   (let ([x (+ (ui-region-x r) (/ (ui-region-w r) 2))]
+                         [y (+ (ui-region-y r) (/ (ui-region-h r) 2))])
+                     (window-call rw 'mouse-down x y 'left 1)
+                     (window-call rw 'mouse-up x y 'left))))])
+  (render-frame!)
+  (check "Boids: the rules window opens beside the flock, which has the keys"
+         (let ([rw (rules-win)])
+           (and rw (eq? (focused-window) win)
+                (= (window-x rw) (+ (window-x win) (window-w win) 12))
+                (= (window-y rw) (window-y win)))))
+  (check "Boids: the rules window has room for all its rows"
+         (let-values ([(w h) (window-content-size (rules-win))])
+           (let* ([bottom #f]
+                  [s (image (exact (ceiling w)) (exact (ceiling h)) 1
+                            (lambda ()
+                              (let ([ui (make-ui)])
+                                (ui-begin! ui)
+                                (set! bottom (boids-draw-rules ui win w)))))])
+             (cairo-surface-destroy s)
+             (<= bottom h))))
+  (check "Boids: its slider sets the flock's rule, on a weight's cube"
+         (begin
+           (press! (rules-win) 'cohesion)
+           (< (abs (- (boids-rule (window-ref win 'rules) 'cohesion) 0.025))
+              1e-9)))
+  (check "Boids: its buttons and keys act on the flock"
+         (begin
+           (press! (rules-win) 'randomize)
+           (and (not (eq? (window-ref win 'rules) boids-default-rules))
+                (begin (window-call (rules-win) 'key #\d '())
+                       (eq? (window-ref win 'rules) boids-default-rules)))))
+  (check "Boids: its count slider resizes the flock"
+         (begin
+           (press! (rules-win) 'count)
+           (= (length (window-ref win 'flock))
+              (round (+ 10 (/ (- boids-max-count 10) 2))))))
+  (check "Boids: H closes the rules window and opens it again"
+         (begin
+           (window-call win 'key #\h '())
+           (and (not (rules-win))
+                (begin (window-call win 'key #\h '())
+                       (rules-win) #t))))
+  ;; as when fonts grow in Settings: the rows ask for more room
+  (check "Boids: the rules window grows when its rows need more, on screen"
+         (let-values ([(w h) (window-content-size (rules-win))]
+                      [(dx dy dw dh) (desktop-rect)])
+           (define (grown-by! dw)
+             (fluid-let ([boids-rules-size (lambda () (values (+ w dw) h))])
+               (steps 1))
+             (let-values ([(w2 h2) (window-content-size (rules-win))])
+               (and (= w2 (+ w dw)) (= h2 h))))
+           (and (grown-by! 40)
+                (= (window-x (rules-win))
+                   (+ (window-x win) (window-w win) 12))   ; it fit there
+                (grown-by! 400)
+                (= (+ (window-x (rules-win)) (window-w (rules-win)))
+                   (+ dx dw)))))                           ; it moved left
+  (check "Boids: closing the flock closes its rules window"
+         (begin (close-window! win) (not (rules-win)))))
+
+;; Opened far to the right, the rules window is moved to fit, and the
+;; flock moves left to clear it.
+(let ([win (parameterize ([new-window-position '(400 . 60)]) (boids))])
+  (check "Boids: opened where the rules can't fit beside, the flock moves"
+         (let ([rw (find-window "Boids — Rules")])
+           (and (< (window-x win) 400)
+                (= (+ (window-x win) (window-w win) 12) (window-x rw)))))
+  (close-window! win))
 
 ;;; ------------------------------------------------------------------
 ;;; invalidation
