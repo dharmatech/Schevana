@@ -224,12 +224,25 @@
 ;;; fxvectors, boxes, raising and catching (but not reading a condition),
 ;;; the clock (now-ns), the thread's id and the worklets defined so far.
 ;;; SDL, Cairo and the world's state are not: a worklet that names
-;;; anything else, or sets a top-level name, is refused when it is
-;;; defined, so all it touches is what it is handed. Of that, it can open
-;;; only pairs, vectors and boxes.
+;;; anything else is refused when it is defined, so all it touches is what
+;;; it is handed. Of that, it can open only pairs, vectors and boxes. The
+;;; clock and the worklets are there as forwarders to the world's own
+;;; bindings, so Chez refuses a worklet's set! of them; one that sets any
+;;; other top-level name is refused too, since that name would be state
+;;; that worker threads write at once.
 ;;;
 ;;;   (define-worklet (step! grid next lo hi) ...)
 ;;;   (worklet (x) (fx* x x))                       one without a name
+
+;; A read-only forwarder to the identifier id's binding: a macro that,
+;; installed in another environment, makes code there refer to that
+;; binding itself (live, and at no cost a call), and that Chez keeps from
+;; set!, as R6RS keeps an imported variable.
+(define (forwarder-to id)
+  (lambda (x)
+    (syntax-case x ()
+      [_ (identifier? x) id]
+      [(_ . rest) #`(#,id . rest)])))
 
 (define (worklet-base-environment)
   (let ([e (copy-environment
@@ -250,7 +263,7 @@
                                 make-fxvector fxvector fxvector-length
                                 fxvector-ref fxvector-set! get-thread-id))
             #t)])
-    (define-top-level-value 'now-ns now-ns e)
+    (define-top-level-syntax 'now-ns (forwarder-to #'now-ns) e)
     e))
 
 (defvar *worklet-environment* (worklet-base-environment))
@@ -292,13 +305,13 @@
     [(_ formals body ...)
      (worklet-compile 'worklet '(lambda formals body ...))]))
 
-;; (define-worklet (name . formals) body ...): a worklet, its name the
-;; world's and the other worklets' (its own too, so it may recur).
+;; (define-worklet (name . formals) body ...): a worklet, defined where the
+;; form is, and forwarded to from the worklet environment before it
+;; compiles, so it may recur and the others see it redefined.
 (define-syntax define-worklet
   (syntax-rules ()
     [(_ (name . formals) body ...)
      (begin
-       (unless (top-level-bound? 'name *worklet-environment*)
-         (define-top-level-value 'name (void) *worklet-environment*))
-       (define name (worklet-compile 'name '(lambda formals body ...)))
-       (define-top-level-value 'name name *worklet-environment*))]))
+       (define-top-level-syntax 'name (forwarder-to #'name)
+                                *worklet-environment*)
+       (define name (worklet-compile 'name '(lambda formals body ...))))]))

@@ -6469,7 +6469,8 @@
 (check "a worklet reaches only its environment: one that names a world \
         procedure, SDL, eval, a primitive, a condition's reader or a world \
         local, or sets a top-level name, is refused when defined; worklets \
-        call worklets by name, and see them redefined"
+        call worklets by name and see them redefined, and Chez refuses a \
+        worklet's set! of another"
        (let ([refused
               (map (lambda (form)
                      (guard (c [#t (and (pair? (condition-irritants c))
@@ -6492,7 +6493,19 @@
                                   $top-level-value condition-irritants y
                                   units-twice))
                 (= before 4) (= ((eval 'units-quad) 1) 9)
+                (guard (c [#t (syntax-violation? c)])
+                  (eval '(define-worklet (units-bad) (set! units-twice 0)))
+                  #f)
                 (worklet? (eval 'units-quad)) (not (worklet? car))))))
+
+(define-worklet (units-clock) (now-ns))
+
+(check "a worklet's clock is the world's now-ns, redefined too"
+       (let* ([world now-ns]
+              [seen (begin (set! now-ns (lambda () 42))
+                           (guard (c [#t c]) (units-clock)))])
+         (set! now-ns world)
+         (and (eqv? seen 42) (fixnum? (units-clock)))))
 
 (check "post-main!: thunks from four threads run at the next step, on the \
         main thread, once each and in each thread's order; one that \

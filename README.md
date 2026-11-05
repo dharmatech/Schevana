@@ -416,7 +416,9 @@ Decisions worth keeping in mind for the real design:
   world procedure, SDL, Cairo, `eval`, a `#%` primitive or a local of the
   code around it, or sets a top-level name, is refused when it is
   defined, so a worklet touches only what it is handed, by construction;
-  worklets call each other by name and see each other redefined. Of what
+  worklets call each other by name and see each other redefined, through
+  read-only forwarders to the world's bindings, so Chez itself refuses a
+  worklet's `set!` of another. Of what
   it is handed, a worklet opens only pairs, vectors and boxes, and the
   crew refuses any procedure there that is no worklet.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
