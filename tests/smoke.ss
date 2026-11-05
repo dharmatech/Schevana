@@ -260,7 +260,7 @@
            (wait-for (lambda ()
                        (equal? (doc "zz-twice")
                                '("(zz-twice a b)" "Adds them.")))))
-    (env-eval '(set! zz-twice car) env)
+    (env-eval env '(set! zz-twice car))
     (check "set! to another procedure: what that procedure tells"
            (equal? (doc "zz-twice") '("(zz-twice …)" "Takes 1 argument.")))
     (check "an app's launcher, made by define-app, keeps its description"

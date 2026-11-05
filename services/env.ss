@@ -9,7 +9,7 @@
 ;;;   (env-share-setter! e '*crew-size* 'crew-size-set!)
 ;;;   (env-share-world! e)                    every name of the world's,
 ;;;                                           and those it gains later
-;;;   (env-eval '(windows) e)   (env-load path e)
+;;;   (env-eval e '(windows))   (env-load e path)
 ;;;   (env-path e) => "/scratch"   (env-find "/scratch")   (env-drop! e)
 ;;;
 ;;; Root is the world (*world-env*), the superuser. A child has a base,
@@ -37,6 +37,13 @@
   (nongenerative schevana-env-1)
   (fields name parent base environment anchor shares
           (mutable children) (mutable world?)))
+
+;; #<env /private chez>: its path and base, not the tree it holds.
+(record-writer (record-type-descriptor env)
+  (lambda (e p wr)
+    (if (env-base e)
+        (fprintf p "#<env ~a ~a>" (env-path e) (env-base e))
+        (fprintf p "#<env ~a>" (env-path e)))))
 
 (define (env-anchor-in environment base)
   (and (memq base '(#f chez)) (eval '(syntax env-anchor) environment)))
@@ -174,12 +181,12 @@
 
 ;; form evaluated, and path loaded, in e, with interaction-environment
 ;; bound to it, so that defvar, eval and load inside mean e.
-(define (env-eval form e)
+(define (env-eval e form)
   (env-sync! e)
   (parameterize ([interaction-environment (env-environment e)])
     (eval form (env-environment e))))
 
-(define (env-load path e)
+(define (env-load e path)
   (env-sync! e)
   (parameterize ([interaction-environment (env-environment e)])
     (load-file! path)))

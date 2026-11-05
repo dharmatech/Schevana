@@ -227,7 +227,7 @@
                  (for-each
                   (lambda (form)
                     (call-with-values
-                      (lambda () (env-eval form (repl-env r)))
+                      (lambda () (env-eval (repl-env r) form))
                       (lambda vals
                         (for-each (lambda (v)
                                     (unless (eq? v (void))
