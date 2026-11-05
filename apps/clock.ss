@@ -1,5 +1,7 @@
 ;;; apps/clock.ss — an analog clock. Shows 'tick + 'draw.
 
+(app-requests window draw timers)
+
 ;; The face at date d (default: now). Clock windows opened before a reload
 ;; still call it with w and h only.
 (define draw-clock-face

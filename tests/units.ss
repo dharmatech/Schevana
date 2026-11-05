@@ -19,9 +19,11 @@
 (define out-dir
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
 
-;; Never touch the user's real theme file.
+;; Never touch the user's real theme file, nor their apps' permissions.
 (set! *theme-file-path* (string-append out-dir "/theme.ss"))
 (when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
+(set! *grant-file-path* (string-append out-dir "/permissions.ss"))
+(when (file-exists? *grant-file-path*) (delete-file *grant-file-path*))
 
 (define failures 0)
 
@@ -636,6 +638,14 @@
 
 ;;; ------------------------------------------------------------------ Life
 
+;; Life runs in its sandbox (services/grant.ss): its procedures, from
+;; there.
+(define life-env (env-environment (grant-env 'life)))
+(define (life-row-pixels . args)
+  (apply (top-level-value 'life-row-pixels life-env) args))
+(define life-step-rows! (top-level-value 'life-step-rows! life-env))
+(define (life-bar-height) ((top-level-value 'life-bar-height life-env)))
+
 ;; The next generation on a torus, the obvious way: the reference.
 (define (life-reference grid cols rows)
   (let ([next (make-bytevector (* cols rows) 0)])
@@ -770,13 +780,22 @@
 (define (life-drawn win s)
   (let-values ([(cw ch) (window-content-size win)])
     (let* ([seen #f]
-           [a (fluid-let ([draw-life-cells
-                           (let ([real draw-life-cells])
-                             (lambda args (set! seen args) (apply real args)))])
-                (image (exact (ceiling (* s cw))) (exact (ceiling (* s ch))) s
-                       (lambda ()
-                         ((hashtable-ref (window-handlers win) 'draw #f)
-                          win cw ch))))])
+           [real (top-level-value 'draw-life-cells life-env)]
+           [a (dynamic-wind
+                (lambda ()
+                  (set-top-level-value! 'draw-life-cells
+                                        (lambda args
+                                          (set! seen args)
+                                          (apply real args))
+                                        life-env))
+                (lambda ()
+                  (image (exact (ceiling (* s cw))) (exact (ceiling (* s ch)))
+                         s
+                         (lambda ()
+                           ((hashtable-ref (window-handlers win) 'draw #f)
+                            win cw ch))))
+                (lambda ()
+                  (set-top-level-value! 'draw-life-cells real life-env)))])
       (values a seen))))
 
 ;; The live cells a window shows: those whose pixel is not bg-0's.
@@ -1924,8 +1943,8 @@
              (delete-task! t)
              ok))))
 
-(check "the seed's long descriptions: the README as it is, the kit's \
-        source cut to the most, the backlog as one paragraph and a base64 \
+(check "the seed's long descriptions: the README and the kit's source \
+        cut to the most, the backlog as one paragraph and a base64 \
         blob with no spaces, the same at every seeding; with the files \
         gone, the paragraph"
        (let* ([text (lambda (what) (tasks-seed-text what))]
@@ -1938,7 +1957,9 @@
               [blob (text 'blob)] [paragraph (text 'changelog)]
               [gone (fluid-let ([*schevana-root* "/no/such/tree"])
                       (text 'readme))])
-         (and (equal? (text 'readme) readme)
+         (and (equal? (text 'readme)
+                      (substring readme 0 (min (string-length readme)
+                                               tasks-description-max)))
               (= 65536 (string-length (text 'kit-source)))
               (= 65536 (string-length paragraph) (string-length blob))
               (not (has? paragraph #\newline)) (not (has? blob #\space))
@@ -6758,7 +6779,7 @@
 (check "a child's path is its name under its parent's, and finds it; a \
         sibling of the same name is numbered"
        (let* ([twin (env-child (env-root) 'units 'chez)]
-              [inner (env-child units-env 'inner 'worklet)]
+              [inner (env-child units-env 'inner 'core)]
               [ok (and (equal? (env-path (env-root)) "/")
                        (equal? (env-path units-env) "/units")
                        (equal? (env-path twin) "/units-2")
@@ -6768,7 +6789,7 @@
                        (eq? (env-find "/worklets/") (env-find "/worklets"))
                        (not (env-find "/units/none"))
                        (equal? (format "~s ~s" (env-root) inner)
-                               "#<env /> #<env /units/inner worklet>"))])
+                               "#<env /> #<env /units/inner core>"))])
          (env-drop! twin)
          (env-drop! inner)
          ok))
@@ -6881,10 +6902,10 @@
 
 (check "a sandbox's children are sandboxes on its base, shared what it \
         holds, its own names and its shares, read-only"
-       (let ([box (env-child (env-root) 'units-box 'worklet)])
+       (let ([box (env-child (env-root) 'units-box 'core)])
          (env-share! box '(units-env-get))
          (env-eval box '(define units-box-own 7))
-         (let ([inner (env-child box 'inner 'worklet)])
+         (let ([inner (env-child box 'inner 'core)])
            (env-share! inner '(units-box-own units-env-get))
            (let ([ok (and (raises? (lambda () (env-child box 'ns 'chez)))
                           (equal? (env-eval inner
@@ -6899,8 +6920,9 @@
 
 (check "an environment forks only the kinds its own allows, refuses \
         what is not its to share and options it does not take, and hands \
-        forks down: a world namespace's makes all, a sandbox's sandboxes \
-        and threads, a pure one holds none"
+        forks down: a world namespace's makes all the world's, not an \
+        app's sandbox, a sandbox's sandboxes and threads, a pure one holds \
+        none"
        (let* ([w (env-fork (env-root) 'world)]
               [wf (env-eval w 'fork)]
               [s (env-find (wf 'sandbox))]
@@ -6910,7 +6932,9 @@
          (let* ([inner (env-find (sf 'sandbox 'share '(units-fork-own)))]
                 [named (env-find (sf 'sandbox 'name 'units-named))]
                 [t (env-find (sf 'thread))]
-                [ok (and (equal? (wf) (env-kinds))
+                [ok (and (equal? (wf) (env-forks (env-root)))
+                         (not (memq 'app (wf)))
+                         (raises? (lambda () (wf 'app)))
                          (equal? (sf) '(sandbox thread))
                          (raises? (lambda () (sf 'private)))
                          (raises? (lambda ()
@@ -6945,9 +6969,9 @@
                         (equal? (env-eval c '(list (units-env-get) v))
                                 (list (units-env-get) units-env-value))
                         (equal? (env-shared-names c)
-                                '((sz units-env-size units-env-size-set!)
-                                  (units-env-get units-env-get #f)
-                                  (v units-env-value #f)))
+                                '((sz units-env-size units-env-size-set! #f)
+                                  (units-env-get units-env-get #f #f)
+                                  (v units-env-value #f #f)))
                         (equal? (env-own-names c) '(units-given-own))
                         (raises? (lambda ()
                                    (env-fork (env-root) 'pure
@@ -6986,7 +7010,7 @@
 
 (check "the world forks every kind, in the order registered; a bare child \
         forks nothing and is titled by its base"
-       (let ([c (env-child (env-root) 'units-bare 'worklet)])
+       (let ([c (env-child (env-root) 'units-bare 'core)])
          (let ([ok (and (equal? (env-forks (env-root))
                                 '(private world pure sandbox thread))
                         (null? (env-forks (env-worklets)))
@@ -7106,7 +7130,7 @@
               (equal? (envs-chip-picked "a") '(a "" "")))))
 
 (check "dropping a child takes it, and its children, out of the tree and \
-        marks them dropped; not the world, nor /worklets"
+        marks them dropped; not the world, nor /worklets, nor /apps"
        (let ([g (env-child units-env-world 'grand 'chez)])
          (env-drop! units-env-world)
          (env-drop! units-env)
@@ -7115,11 +7139,207 @@
               (raises? (lambda () (env-child g 'more 'chez)))
               (raises? (lambda () (env-drop! (env-root))))
               (raises? (lambda () (env-drop! (env-worklets))))
+              (raises? (lambda () (env-drop! (grant-apps-env))))
               (not (env-find "/units-world/grand"))
               (not (env-find "/units"))
               (not (memq units-env (env-children (env-root))))
               (equal? (map env-name (env-children (env-root)))
-                      '(worklets)))))
+                      '(worklets apps)))))
+
+;;; The confined base (services/env.ss): what is always safe, for apps.
+
+(check "a confined sandbox has what is always safe, and nothing that \
+        reaches past its arguments: no files, eval or environments, C, \
+        threads or sleep, the clock, the inspector, the console's ports or \
+        exit; its children are confined or core, never chez"
+       (let* ([e (env-child (env-root) 'units-confined 'confined)]
+              [held (environment-symbols (env-environment e))]
+              [ok (and (for-all (lambda (n) (not (memq n held)))
+                                '(eval expand load interaction-environment
+                                  environment copy-environment top-level-value
+                                  set-top-level-value! define-top-level-value
+                                  foreign-procedure load-shared-object
+                                  fork-thread make-mutex sleep open-input-file
+                                  open-output-file open-file-input-port
+                                  file-exists? delete-file directory-list
+                                  system process getenv exit current-time
+                                  real-time current-date record-rtd inspect
+                                  inspect/object collect-request-handler
+                                  print-radix syntax-case datum->syntax
+                                  console-output-port current-input-port
+                                  read))
+                       (equal? (env-eval e '(let ([v (make-fxvector 2 1)])
+                                              (fxvector-set! v 0 (fx+ 1 2 3))
+                                              (list (fxvector->list v)
+                                                    (sort < '(3 1 2))
+                                                    (format "~a!" 'x))))
+                               '((6 1) (1 2 3) "x!"))
+                       (raises? (lambda () (env-child e 'units-wider 'chez)))
+                       (eq? (env-base (env-child e 'units-narrower 'core))
+                            'core)
+                       (equal? (env-title e) "Sandbox"))])
+         (env-drop! e)
+         ok))
+
+(check "a confined sandbox's record types are its own: a uid, which could \
+        name the world's, is refused"
+       (let* ([e (env-child (env-root) 'units-records 'confined)]
+              [ok (and (= 1 (env-eval e '(begin
+                                           (define-record-type units-pt
+                                             (fields x))
+                                           (units-pt-x (make-units-pt 1)))))
+                       (raises? (lambda ()
+                                  (env-eval e '(define-record-type units-w
+                                                 (nongenerative
+                                                  schevana-env-3)
+                                                 (fields a)))))
+                       (raises? (lambda ()
+                                  (env-eval e '(make-record-type-descriptor
+                                                'q #f 'schevana-env-3 #f #f
+                                                '#())))))])
+         (env-drop! e)
+         ok))
+
+(check "what a confined sandbox writes to the console goes to its log, and \
+        to the caller's output too while root evaluates there (a REPL's)"
+       (let* ([e (env-child (env-root) 'units-log 'confined)]
+              [out (open-output-string)])
+         (parameterize ([current-output-port out])
+           (env-eval e '(begin (display "a") (newline) (printf "~a" 1)
+                               (format #t "b") (write "c" (current-output-port))
+                               (define (units-say) (display "!")))))
+         ((env-eval e 'units-say))   ; no evaluation: the log alone
+         (let ([ok (and (equal? (env-log e) "a\n1b\"c\"!")
+                        (equal? (get-output-string out) "a\n1b\"c\""))])
+           (env-drop! e)
+           ok)))
+
+;;; Apps in sandboxes (services/grant.ss): bundles, grants, stubs and the
+;;; person's decisions.
+
+(check "a tree app that requests bundles runs in its sandbox under /apps, \
+        holding them, live, and nothing it did not request; the world's \
+        apps run in the world, and (clock) there opens Clock"
+       (let* ([c (grant-env 'clock)] [held (environment-symbols
+                                            (env-environment c))]
+              [w (clock)]
+              [ok (and (equal? (env-path c) "/apps/clock")
+                       (eq? (env-kind c) 'app) (eq? (env-base c) 'confined)
+                       (eq? (env-eval c 'now-ms) now-ms)
+                       (eq? (env-eval c 'fill-rect) fill-rect)
+                       (not (memq 'notify held)) (not (memq 'windows held))
+                       (not (memq 'draw-clock-face
+                                  (environment-symbols *world-env*)))
+                       (not (grant-env 'settings)) (not (grant-env 'repl))
+                       (eq? (window-app w) 'clock)
+                       (equal? (grant-requested 'clock)
+                               '(window draw timers))
+                       (null? (grant-undecided 'clock)))])
+         (close-window! w)
+         ok))
+
+(check "an app's define-app registers its own app alone, its windows are \
+        its own whatever it says, and its defvar keeps a value as it loads \
+        again, in its sandbox"
+       (let* ([c (grant-env 'clock)]
+              [w (env-eval c '(open-window "Units" 'app 'settings))]
+              [ok (and (raises? (lambda ()
+                                  (env-eval c '(define-app (units-not-clock)
+                                                 "No" #f))))
+                       (not (memq 'units-not-clock (apps)))
+                       (eq? (window-app w) 'clock)
+                       (begin (env-eval c '(defvar units-kept 1))
+                              (env-eval c '(set! units-kept 2))
+                              (env-eval c '(defvar units-kept 1))
+                              (= 2 (env-eval c 'units-kept)))
+                       (not (memq 'units-kept
+                                  (environment-symbols *world-env*))))])
+         (close-window! w)
+         ok))
+
+(check "an app the person approves: what it requests and no one decided \
+        raises, naming it; a decision is saved, makes its sandbox again, \
+        and is read back from the file; a denied bundle raises as denied"
+       (let* ([before (grant-env 'sketch)]
+              [asked (grant-undecided 'sketch)]
+              [needed (guard (c [(grant-needed? c) c])
+                        (env-eval before '(open-window "x")) #f)])
+         (grant-decide! 'sketch '(window) '(draw))
+         (let* ([after (grant-env 'sketch)]
+                [saved (call-with-input-file *grant-file-path* get-string-all)]
+                [denied (guard (c [(grant-needed? c) (condition-message c)])
+                          (env-eval after '(fill-rect 0 0 1 1 'red)) #f)])
+           (hashtable-clear! *grant-decisions*)
+           (grant-file-load!)
+           (let ([ok (and (equal? asked '(window draw))
+                          needed (eq? (grant-needed-app needed) 'sketch)
+                          (eq? (grant-needed-bundle needed) 'window)
+                          (string-contains-ci? (condition-message needed)
+                                               "Sketch needs Open windows")
+                          (env-dropped? before) (not (env-dropped? after))
+                          (equal? (env-path after) "/apps/sketch")
+                          (string-contains-ci? saved "approved (window)")
+                          denied (string-contains-ci? denied "denied")
+                          (let-values ([(ok no) (grant-of 'sketch)])
+                            (and (equal? ok '(window)) (equal? no '(draw))))
+                          (eq? (grant-env 'sketch) after)
+                          (null? (grant-undecided 'sketch)))])
+             (grant-decide! 'sketch '(window draw) '())
+             ok))))
+
+(check "Environments says how an app's requests stand and which bundle \
+        each name came in, and what it is there: the world's, or a stub; \
+        other environments keep the parent's name, set! and where bound"
+       (begin
+         (grant-decide! 'sketch '(window) '(draw))
+         (let* ([e (grant-env 'sketch)] [rows (env-shared-names e)]
+                [text (lambda (n key)
+                        (envs-names-text e 'shared (assq n rows) key))]
+                [ok (and (eq? (grant-state 'sketch 'draw) 'denied)
+                         (eq? (grant-state 'clock 'timers) 'allowed)
+                         (eq? (grant-bundle-of 'fill-rect) 'draw)
+                         (not (grant-bundle-of 'define-app))
+                         (eq? (grant-app-in e) 'sketch)
+                         (not (grant-app-in (grant-apps-env)))
+                         (equal? (envs-bundle-label 'sketch 'window)
+                                 "Open windows")
+                         (equal? (envs-bundle-label 'sketch 'draw)
+                                 "Draw in its windows · denied")
+                         (equal? (envs-bundle-label #f 'toasts)
+                                 "Show notifications · 1")
+                         (equal? (text 'close-window! 'bundle) "Open windows")
+                         (equal? (text 'close-window! 'held) "the world's")
+                         (equal? (text 'fill-rect 'bundle)
+                                 "Draw in its windows")
+                         (equal? (text 'fill-rect 'held) "a stub: denied")
+                         (equal? (text 'define-app 'bundle) "Every app's")
+                         (equal? (map car (envs-names-columns e 'shared 300))
+                                 '(name bundle held))
+                         (equal? (map car (envs-names-columns (env-root)
+                                                              'shared 300))
+                                 '(name from set holder))
+                         (begin
+                           (hashtable-delete! *grant-decisions* 'sketch)
+                           (equal? (envs-bundle-label 'sketch 'draw)
+                                   "Draw in its windows · not decided")))])
+           (grant-decide! 'sketch '(window draw) '())
+           ok)))
+
+(check "an app of the person's runs in a sandbox though it requests \
+        nothing, and holds nothing of the world's then"
+       (let ([dir (string-append out-dir "/apps")])
+         (unless (file-directory? dir) (mkdir dir))
+         (call-with-output-file (string-append dir "/units-mine.ss")
+           (lambda (p)
+             (write '(define-app (units-mine) "Mine" (open-window "Mine")) p))
+           'replace)
+         (grant-load-app! (string-append dir "/units-mine.ss"))
+         (let ([e (grant-env 'units-mine)])
+           (and e (equal? (env-path e) "/apps/units-mine")
+                (memq 'units-mine (apps))
+                (raises? (lambda () (app-launch! 'units-mine)))
+                (not (memq 'open-window
+                           (environment-symbols (env-environment e))))))))
 
 ;;; Vats (services/vat.ss): threads with a mailbox and a sandbox; jobs,
 ;;; their deliveries on main, and their kills.
@@ -7137,7 +7357,7 @@
 (define-worklet (vat-test-spin) (let loop () (loop)))
 (define-worklet (vat-test-fail) (error 'vat-test "failed on purpose"))
 
-(define vat-test (vat-start! (env-child (env-root) 'vat-test 'worklet)))
+(define vat-test (vat-start! (env-child (env-root) 'vat-test 'core)))
 
 (check "a vat runs a worklet on its own thread, and the job's then runs on \
         main at a later step, once"
@@ -7296,7 +7516,7 @@
 
 (check "vat-repl! evaluates forms on the vat's thread and prints there \
         what they return, procedures too, and an error as its text"
-       (let* ([e (env-child (env-root) 'vat-repl 'worklet)]
+       (let* ([e (env-child (env-root) 'vat-repl 'core)]
               [v (vat-start! e)] [got #f] [err #f])
          (vat-repl! v '((define x 2) (* x 21) (lambda () x)) 60
                     (lambda (texts) (set! got texts))
@@ -7324,7 +7544,7 @@
            ok)))
 
 (check "dropping a vat kills its jobs and refuses new ones"
-       (let* ([e (env-child (env-root) 'vat-drop 'worklet)]
+       (let* ([e (env-child (env-root) 'vat-drop 'core)]
               [v (vat-start! e)]
               [j (vat-send! v vat-test-spin '() #f)])
          (vat-drop! v)

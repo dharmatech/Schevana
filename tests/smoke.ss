@@ -13,9 +13,11 @@
 (define out-dir
   (if (pair? (command-line-arguments)) (car (command-line-arguments)) "."))
 
-;; Never touch the user's real theme file.
+;; Never touch the user's real theme file, nor their apps' permissions.
 (set! *theme-file-path* (string-append out-dir "/theme.ss"))
 (when (file-exists? *theme-file-path*) (delete-file *theme-file-path*))
+(set! *grant-file-path* (string-append out-dir "/permissions.ss"))
+(when (file-exists? *grant-file-path*) (delete-file *grant-file-path*))
 
 (define failures 0)
 
@@ -728,7 +730,7 @@
            (and c (eq? (env-kind c) 'sandbox) (not (envs-view-sheet v))
                 (eq? (focused-window) w)
                 (eq? (envs-view-selected v) c)
-                (equal? (map car (env-shared-names c)) '(clock now-ms))
+                (equal? (map car (env-shared-names c)) '(clock fork now-ms))
                 (env-eval c '(eq? clock now-ms))))
     (type! "f")
     (steps 2)
@@ -1070,6 +1072,100 @@
          (draw-into-layer! l (lambda () (draw-app-icon 64)))
          (free-layer! l)
          #t))
+
+;; An app in a sandbox that asks (services/grant.ss): the launcher shows
+;; what it requests first (desktop/permissions.ss), and Settings changes
+;; the answer later.
+(let ([launch! (lambda ()
+                 (launch-app-asking!
+                  (find (lambda (a) (eq? (app-name a) 'sketch)) *apps*))
+                 (steps 2))])
+  (launch!)
+  (let ([d (focused-window)])
+    (check "the launcher asks before Sketch opens: what it requests, each \
+            ticked"
+           (and (eq? (window-ref d 'permissions #f) 'sketch)
+                (not (find-window 'sketch))
+                (equal? (window-ref d 'ticked #f) '(window draw))))
+    (click-ui! d '(permissions draw))   ; unticked
+    (click-ui! d '(permissions allow))
+    (steps 2)
+    (let ([s (find-window 'sketch)])
+      (check "Allow decides as ticked and saves it, and Sketch opens; what \
+              it may not do crashes its window, which says where to allow it"
+             (and s (not (memq d (windows)))
+                  (let-values ([(ok no) (grant-of 'sketch)])
+                    (and (equal? ok '(window)) (equal? no '(draw))))
+                  (file-exists? *grant-file-path*)
+                  (window-error s)
+                  (grant-needed? (cdr (window-error s)))))
+      (let ([st (settings)])
+        (settings-st-tab-set! (window-ref st 'state) 'permissions)
+        (invalidate! st)
+        (steps 2)
+        (click-ui! st '(grant sketch draw))
+        (steps 2)
+        (let ([s2 (find-window 'sketch)])
+          (check "Settings' Permissions allows it: Sketch opens again where \
+                  it was, and draws"
+                 (and s2 (not (eq? s2 s)) (not (memq s (windows)))
+                      (not (window-error s2))
+                      (= (window-x s2) (window-x s))
+                      (= (window-y s2) (window-y s))
+                      (let-values ([(ok no) (grant-of 'sketch)])
+                        (and (equal? ok '(window draw)) (null? no))))))
+        (close-window! st)
+        (close-window! (find-window 'sketch)))
+      (launch!)
+      (check "decided, the launcher opens it without asking"
+             (let ([s3 (find-window 'sketch)])
+               (and s3 (eq? (focused-window) s3)
+                    (not (exists (lambda (w) (window-ref w 'permissions #f))
+                                 (windows))))))
+      (close-window! (find-window 'sketch))))
+  ;; Environments shows the bundles, and Permissions… changes them.
+  (let* ([e (envs)] [v (window-ref e 'state)] [ui (window-ref e 'ui)]
+         [show! (lambda (env)
+                  (envs-select! v env)
+                  (invalidate! e)
+                  (steps 2))])
+    (show! (grant-apps-env))
+    (check "Environments on /apps lists every bundle, and has no Permissions…"
+           (and (for-all (lambda (b) (ui-find ui (list '(envs bundles) b)))
+                         (map car grant-bundles))
+                (not (ui-find ui '(envs permissions)))))
+    (show! (grant-env 'clock))
+    (click-ui! e '(envs permissions))
+    (check "on Clock, what it requests; Permissions… does nothing: the \
+            table allows it"
+           (and (ui-find ui '((envs bundles) timers))
+                (not (ui-find ui '((envs bundles) toasts)))
+                (not (window-modal-child e))))
+    (let ([old (grant-env 'sketch)])
+      (show! old)
+      (click-ui! e '(envs permissions))
+      (let ([d (window-modal-child e)])
+        (check "on Sketch, Permissions… asks over Environments, which waits"
+               (and d (eq? (focused-window) d)
+                    (eq? (window-ref d 'permissions #f) 'sketch)))
+        (click-ui! d '(permissions draw))   ; unticked
+        (click-ui! d '(permissions allow))
+        (steps 2)
+        (check "Allow decides, and Environments stays on Sketch, whose \
+                sandbox was made again"
+               (and (not (memq d (windows))) (not (window-modal-child e))
+                    (env-dropped? old)
+                    (eq? (envs-view-selected v) (grant-env 'sketch))
+                    (eq? (grant-state 'sketch 'draw) 'denied)))))
+    (click-ui! e '((envs bundles) draw))
+    (check "a press on a bundle shows only its names"
+           (and (equal? (envs-view-names-query v) "Draw in its windows")
+                (eq? (envs-view-names v) 'shared)))
+    (click-ui! e '((envs bundles) draw))
+    (check "and again, all"
+           (equal? (envs-view-names-query v) ""))
+    (grant-decide! 'sketch '(window draw) '())
+    (close-window! e)))
 
 ;; Theme changes are live.
 (set-theme! 'accent #xff9e64)
@@ -1540,6 +1636,8 @@
 ;; there: back over Settings, the pointer drags nothing.
 (click-ui! s '(tab colors))
 (click-ui! s '(color accent))
+(move-window! s 40 (window-y s))   ; the other window beside it, not over
+(steps 1)
 (let ([other (open-window "Other" 'size '(160 . 100)
                           'pos (cons (min 1100 (+ (window-x s) (window-w s) 10))
                                      600))])
@@ -4310,7 +4408,11 @@
   (move-window! l 100 60)
   (steps 2)
   (let*-values ([(cx cy cw ch) (content-rect l)]
-                [(grid) (device-box cx cy cw (- ch (life-bar-height)))]
+                [(grid) (device-box cx cy cw
+                                    (- ch ((top-level-value
+                                            'life-bar-height
+                                            (env-environment
+                                             (grant-env 'life))))))]
                 [(old) (canvas-pixels grid (color->pixel green))])
     (hashtable-set! *theme* 'green #xff00ff)
     (hashtable-set! *theme* 'cyan #xff00ff)
@@ -4331,7 +4433,7 @@
 
 ;; Reloading as a process (the launcher's "Reload sources", a REPL) holds
 ;; the world still until it ends, but stays a process. These reload a copy
-;; of the tree whose apps/sketch.ss ends in form.
+;; of the tree whose apps/tasks.ss ends in form.
 (define (tree-copy-with name form)
   (let ([dir (string-append out-dir "/" name)])
     (system (format "rm -rf '~a' && mkdir -p '~a' && cp -r~{ '~a'~} '~a'"
@@ -4339,7 +4441,9 @@
                     (map (lambda (f) (string-append *schevana-root* "/" f))
                          (cons* "load.ss" "src" source-folders))
                     dir))
-    (let ([p (open-output-file (string-append dir "/apps/sketch.ss") 'append)])
+    ;; the last file to load into the world: an app in a sandbox would run
+    ;; the form there
+    (let ([p (open-output-file (string-append dir "/apps/tasks.ss") 'append)])
       (write form p)
       (newline p)
       (close-port p))
@@ -4435,7 +4539,7 @@
                   (not *reloading*) (> ticks t0)
                   (exists (lambda (t)
                             (string-contains-ci? (vector-ref t 1)
-                                                 "apps/sketch.ss"))
+                                                 "apps/tasks.ss"))
                           *toasts*))))
     (close-window! w)
     (set! *toasts* '())
@@ -4458,7 +4562,7 @@
            (and caught? (memq p (procs)) (not (reload-holding?))
                 (exists (lambda (t)
                           (string-contains-ci? (vector-ref t 1)
-                                               "failed in apps/sketch.ss"))
+                                               "failed in apps/tasks.ss"))
                         *toasts*)))
     (kill! p)
     (set! *toasts* '())

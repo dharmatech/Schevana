@@ -1081,7 +1081,11 @@
                           opts)
                    '((L . "Toggle"))))
   (ui-draw-checkbox x y w h
-                    (apply ui-flags ui id (if checked? '(checked) '()))
+                    (apply ui-flags ui id
+                           (append (if checked? '(checked) '())
+                                   (if (plist-ref opts 'disabled #f)
+                                       '(disabled)
+                                       '())))
                     label))
 
 (define (ui-toggle ui id x y w h label on? on-change . opts)
@@ -1958,7 +1962,8 @@
 
 ;; An environment's icon by its kind (services/env.ss): the world's globe,
 ;; a namespace's folder, a sandbox's box, a thread's or the worklets' gear,
-;; each in its kind's color; dim or disabled, faded.
+;; /apps' folder and an app's box, each in its kind's color; dim or
+;; disabled, faded.
 (define-part (ui-draw-env-icon x y s flags kind)
   (let-values ([(glyph ink)
                 (case kind
@@ -1966,6 +1971,8 @@
                   [(worklets) (values 'gear 'yellow)]
                   [(thread) (values 'gear 'orange)]
                   [(sandbox) (values 'box 'teal)]
+                  [(apps) (values 'folder 'magenta)]
+                  [(app) (values 'box 'magenta)]
                   [(world) (values 'folder 'accent)]
                   [(private) (values 'folder 'accent-2)]
                   [(pure) (values 'folder 'green)]

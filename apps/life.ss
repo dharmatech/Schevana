@@ -1,6 +1,8 @@
 ;;; apps/life.ss — Conway's Game of Life. Shows mouse input and animation.
 ;;; Space: pause · R: randomize · C: clear · N: single step · click/drag: draw
 
+(app-requests window draw timers)
+
 (define (life-bar-height) (max 26 (round (+ (font-line-height 'ui-small) 13))))
 
 ;; The status line under the grid.

@@ -76,10 +76,10 @@
 
 ;;; ------------------------------------------------------------------ vats
 
-;; A vat on e, a sandbox on the worklet base, with one thread.
+;; A vat on e, a sandbox on the core base, with one thread.
 (define (vat-start! e)
-  (unless (eq? (env-base e) 'worklet)
-    (errorf 'vat-start! "a vat runs in a sandbox on the worklet base, not ~a"
+  (unless (eq? (env-base e) 'core)
+    (errorf 'vat-start! "a vat runs in a sandbox on the core base, not ~a"
             (env-path e)))
   (vat-new e 1))
 
@@ -99,7 +99,7 @@
 (define (vat-env-kind e)
   (cond [(env-kind e)]
         [(vat-of e) 'thread]
-        [(eq? (env-base e) 'worklet) 'sandbox]
+        [(memq (env-base e) '(confined core)) 'sandbox]
         [else 'namespace]))
 
 ;; v's pending jobs, the oldest first.
@@ -350,7 +350,7 @@
 
 (env-register-kind! 'thread
   'title "Thread"
-  'base 'worklet
+  'base 'core
   'forks '()
   'doc "A sandbox in a vat of its own: its thread runs what is sent to it"
   'start (lambda (e) (vat-start! e)))

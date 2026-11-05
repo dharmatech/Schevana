@@ -18,6 +18,8 @@
 ;; before the saved theme is loaded: it may name a style or palette of the
 ;; user's.
 (load-user-folders!)
+;; What you allowed apps in sandboxes (services/grant.ss).
+(grant-file-load!)
 
 (define (parse-size s)
   (let ([parts (string-split s #\x)])

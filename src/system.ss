@@ -312,7 +312,16 @@
   (keep-source-text! path (file-text path))
   (load path))
 
-(define (load-source f) (load-file! (source-path f)))
+;; Loads an app's file (one in an apps folder, the tree's or the user's):
+;; into the world, until services/grant.ss sets this hook to give each
+;; app a sandbox of its own.
+(defvar *app-loader* (lambda (path) (load-file! path)))
+
+(define (load-source f)
+  (let ([path (source-path f)])
+    (if (equal? (path-last (path-parent path)) "apps")
+        (*app-loader* path)
+        (load-file! path))))
 
 ;; Loads files into the world (from a private REPL too). Run as a process
 ;; (the launcher's "Reload sources", (reload!) in a REPL), it names itself

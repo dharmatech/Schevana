@@ -1,6 +1,8 @@
 ;;; apps/sketch.ss — freehand drawing. Strokes are plain Scheme data:
 ;;; (window-ref win 'strokes) => ((color width (x . y) ...) ...)
 
+(app-requests window draw)
+
 (define sketch-palette '(text red orange yellow green teal accent accent-2))
 
 (define (sketch-toolbar-height)

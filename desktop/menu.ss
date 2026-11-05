@@ -310,7 +310,8 @@
    (map (lambda (a)
           (cons (app-title a)
                 (lambda ()
-                  (parameterize ([new-window-position at]) ((app-launch a))))))
+                  (parameterize ([new-window-position at])
+                    (launch-app-asking! a)))))
         (sort (lambda (a b) (string<? (app-title a) (app-title b))) *apps*))
    (list 'separator
          (cons "Tile windows" (lambda () (tile-windows!)))

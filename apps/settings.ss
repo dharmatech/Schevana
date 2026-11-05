@@ -10,11 +10,12 @@
 ;;; saved to *theme-file-path* (~/.schevana-theme.ss). Settings draws with the
 ;;; widget kit, so it is drawn in the chosen style too; its own pictures
 ;;; (the styles' miniatures, swatches, color tracks) are its
-;;; settings-draw-… procedures.
+;;; settings-draw-… procedures. Permissions, last, is what each app in a
+;;; sandbox may do (services/grant.ss).
 
 (define settings-tabs
   '((theme . "Theme") (colors . "Colors") (fonts . "Fonts")
-    (display . "Display")))
+    (display . "Display") (permissions . "Permissions")))
 
 ;; Percentages for the display's scale; 0 follows the desktop.
 (define settings-scale-choices
@@ -1010,6 +1011,50 @@
                                   (lambda (v) (set-fullscreen! v)))))))
 
 ;;; ------------------------------------------------------------------
+;;; permissions
+
+;; What each app in a sandbox may do: under its title, what it requests, a
+;; checkbox each, ticked when allowed. A change saves, and reloads the app
+;; (its windows open again). One the tree approves is shown, not changed.
+;; => the y below
+(define (settings-permissions ui x y w)
+  (let ([h (ui-control-height)] [gap (ui-gap)]
+        [y (+ 18 (ui-draw-label x y w 0 '(hint wrap)
+                                "An app outside the world runs in a sandbox: \
+                                 it holds only what it asks for and is \
+                                 allowed. Changing one reloads the app."))])
+    (if (null? (grant-apps))
+        (ui-draw-label x y w 0 '(hint wrap) "No app runs in a sandbox.")
+        (fold-left
+         (lambda (y app)
+           (let-values ([(ok no) (grant-of app)])
+             (let* ([asks? (grant-asks? app)]
+                    [y (ui-draw-label x y w 0 '(section) (grant-app-title app))]
+                    [y (+ 4 (ui-draw-label
+                             x (+ y 2) w 0 '(hint wrap)
+                             (cond [(not asks?) "Built in, and allowed by \
+                                                 Schevana."]
+                                   [(pair? (grant-undecided app))
+                                    "Not all decided: it asks at its next \
+                                     launch."]
+                                   [else "As you decided."])))])
+               (+ 22
+                  (fold-left
+                   (lambda (y b)
+                     (ui-checkbox ui (list 'grant app b) x y w h
+                                  (format (if (memq b no) "~a (denied)" "~a")
+                                          (grant-bundle-title b))
+                                  (and (memq b ok) #t)
+                                  (lambda (on)
+                                    (if on
+                                        (grant-decide! app (list b) '())
+                                        (grant-decide! app '() (list b))))
+                                  'disabled (not asks?))
+                     (+ y h gap))
+                   y (grant-requested app))))))
+         y (grant-apps)))))
+
+;;; ------------------------------------------------------------------
 ;;; the app
 
 (define (settings-sidebar ui st sw h)
@@ -1091,6 +1136,7 @@
                          [(colors) (settings-colors ui st x y cw (- h 38))]
                          [(fonts) (settings-fonts ui x y cw)]
                          [(display) (settings-display ui x y cw)]
+                         [(permissions) (settings-permissions ui x y cw)]
                          [else (settings-theme-tab ui x y cw)]))))]
          [content-h (+ (- bottom y) 20 18)]
          [max-scroll (max 0 (- content-h h))])

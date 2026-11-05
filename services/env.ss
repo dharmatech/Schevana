@@ -5,6 +5,7 @@
 ;;;   (env-fork e 'thread 'name 'tally 'share '(add! (clock . now-ns)))
 ;;;   (env-child (env-root) 'scratch 'chez)   a bare child: all of Chez, and
 ;;;                                           none of the world's names
+;;;   (env-child (env-root) 'box 'confined)   what is always safe (below)
 ;;;   (env-share! e '(windows (clock . now-ms)))   names of its parent's;
 ;;;                                           a pair renames: e's clock is
 ;;;                                           the parent's now-ms
@@ -17,8 +18,9 @@
 ;;;   (env-path e) => "/scratch"   (env-find "/scratch")   (env-drop! e)
 ;;;
 ;;; Root is the world (*world-env*), the superuser. A child has a base,
-;;; chez (all of Chez) or worklet (the worklets'), and of its parent's
-;;; names only those the parent shares, as read-only forwarders
+;;; chez (all of Chez), confined (what is always safe, for apps) or core
+;;; (Scheme's pure core, the worklets'), and of its parent's names only
+;;; those the parent shares, as read-only forwarders
 ;;; (forwarder-to, src/proc.ss): live, at no cost a call, and refusing a
 ;;; set! as it expands ("attempt to assign read-only variable"), as R6RS
 ;;; refuses set! of an import. The child's define of
@@ -40,12 +42,13 @@
 ;; setters of names shared through one, name: the setter's name; its
 ;; children, the oldest first; whether it shares every name of the
 ;; world's; its kind (#f: a bare child) and the kinds it may fork, a list
-;; or all; whether it was dropped.
+;; or all; whether it was dropped; what its parent gave it, name: a note
+;; (env-give!); and a confined one's log, the text it wrote to the console.
 (define-record-type env
-  (nongenerative schevana-env-2)
+  (nongenerative schevana-env-3)
   (fields name parent base environment anchor shares setters
           (mutable children) (mutable world?) (mutable kind)
-          (mutable may-fork) (mutable dropped?)))
+          (mutable may-fork) (mutable dropped?) given (mutable log)))
 
 ;; #<env /private chez>: its path and base, not the tree it holds.
 (record-writer (record-type-descriptor env)
@@ -69,13 +72,13 @@
 (define (env-new name parent base environment kind may-fork)
   (make-env name parent base environment (env-anchor-in environment)
             (make-eq-hashtable) (make-eq-hashtable) '() #f kind may-fork
-            #f))
+            #f (make-eq-hashtable) ""))
 
 ;; Root, with the worklets' environment its first child.
 (defvar *env-root*
   (let ([root (env-new 'root #f #f *world-env* 'root 'all)])
     (env-children-set! root
-      (list (env-new 'worklets root 'worklet *worklet-environment*
+      (list (env-new 'worklets root 'core *worklet-environment*
                      'worklets '())))
     root))
 
@@ -119,24 +122,30 @@
   (unless (main-thread?)
     (errorf who "the tree of environments is the main thread's")))
 
+;; The bases, largest first.
+(define env-bases '(chez confined core))
+
 ;; A bare child of parent on base, named name, or name-2, name-3 ... where
 ;; a sibling has it: shared nothing, forking nothing. A sandbox's child is
-;; a sandbox on its base: it may narrow what it hands down, never widen it.
+;; a sandbox on its base or a smaller one: it may narrow what it hands
+;; down, never widen it.
 (define (env-child parent name base)
   (env-on-main 'env-child)
-  (when (and (eq? (env-base parent) 'worklet) (not (eq? base 'worklet)))
+  (when (and (memq (env-base parent) '(confined core))
+             (not (memq base (memq (env-base parent) env-bases))))
     (errorf 'env-child "~a is a sandbox: its children are sandboxes on its \
-                        base, not ~s" (env-path parent) base))
+                        base or a smaller one, not ~s" (env-path parent) base))
   (when (env-dropped? parent)
     (errorf 'env-child "~a was dropped" (env-path parent)))
   (let ([e (env-new (env-child-name parent name) parent base
                     (case base
                       [(chez) (copy-environment (scheme-environment) #t)]
-                      [(worklet) (worklet-base-environment)]
-                      [else (errorf 'env-child
-                                    "no base ~s (expected chez or worklet)"
-                                    base)])
+                      [(confined) (env-confined-environment)]
+                      [(core) (worklet-base-environment)]
+                      [else (errorf 'env-child "no base ~s (expected ~a)"
+                                    base env-bases)])
                     #f '())])
+    (when (eq? base 'confined) (env-give-console! e))
     (env-children-set! parent (append (env-children parent) (list e)))
     (set! *env-generation* (+ *env-generation* 1))
     e))
@@ -239,27 +248,34 @@
     (values (env-environment h) n)))
 
 ;; form evaluated, and path loaded, in e, with interaction-environment
-;; bound to it, so that defvar, eval and load inside mean e.
+;; bound to it, so that defvar, eval and load inside mean e; what a
+;; confined e writes to its console meanwhile goes to the caller's output
+;; too (a REPL's).
 (define (env-eval e form)
   (env-sync! e)
-  (parameterize ([interaction-environment (env-environment e)])
+  (parameterize ([interaction-environment (env-environment e)]
+                 [env-listener (cons e (current-output-port))])
     (eval form (env-environment e))))
 
 (define (env-load e path)
   (env-sync! e)
-  (parameterize ([interaction-environment (env-environment e)])
+  (parameterize ([interaction-environment (env-environment e)]
+                 [env-listener (cons e (current-output-port))])
     (load-file! path)))
 
 ;; Drops e, and with it its children, from the tree; they are marked
 ;; dropped, so that what holds one (a REPL) knows. Not the world, nor
-;; /worklets, where the worklets live.
+;; /worklets, where the worklets live, nor one of a kind kept (/apps).
 (define (env-drop! e)
   (env-on-main 'env-drop!)
   (let ([p (env-parent e)])
     (cond [(not p) (errorf 'env-drop! "the world is not dropped")]
           [(eq? (env-kind e) 'worklets)
            (errorf 'env-drop! "/worklets is not dropped: the worklets live \
-                               there")])
+                               there")]
+          [(env-kind-ref (env-kind e) 'kept #f)
+           => (lambda (why)
+                (errorf 'env-drop! "~a is not dropped: ~a" (env-path e) why))])
     (env-children-set! p (remq e (env-children p)))
     (let mark ([e e])
       (env-dropped?-set! e #t)
@@ -270,44 +286,317 @@
 ;;; What an environment holds: what it was shared and still forwards, and
 ;;; what is its own, its base's names aside.
 
-;; The worklet base's names, once.
-(define *env-worklet-names* #f)
+;; The confined and core bases' names, once each.
+(define *env-base-names* (make-eq-hashtable))
 (define (env-base-names base)
+  (define (names-of environment)
+    (let ([t (make-eq-hashtable)])
+      (for-each (lambda (s) (hashtable-set! t s #t))
+                (environment-symbols environment))
+      t))
   (case base
-    [(chez) *env-chez-names*]
-    [(worklet)
-     (unless *env-worklet-names*
-       (let ([t (make-eq-hashtable)])
-         (for-each (lambda (s) (hashtable-set! t s #t))
-                   (environment-symbols (worklet-base-environment)))
-         (set! *env-worklet-names* t)))
-     *env-worklet-names*]
-    [else *env-chez-names*]))   ; root: the world's are its own
+    [(confined core)
+     (or (hashtable-ref *env-base-names* base #f)
+         (let ([t (names-of (if (eq? base 'core)
+                                (worklet-base-environment)
+                                (env-confined-environment)))])
+           (for-each (lambda (s) (hashtable-set! t s #t))
+                     (if (eq? base 'confined) env-console-names '()))
+           (hashtable-set! *env-base-names* base t)
+           t))]
+    [else *env-chez-names*]))   ; chez; root: the world's are its own
 
-;; The names e forwards: ((name parent's-name setter) ...), setter #f for a
-;; read-only one, by name. With look? #f, those e defined over are not
-;; looked for in e (a vat's sandbox, its thread's to read).
+;; The names e forwards, and those its parent gave it: ((name parent's-name
+;; setter note) ...), setter #f for a read-only one, note #f but for a
+;; given one, by name. With look? #f, those e defined over are not looked
+;; for in e (a vat's sandbox, its thread's to read).
 (define (env-shared-names e . look?)
   (let ([env (env-environment e)] [look? (or (null? look?) (car look?))])
     (sort (lambda (a b) (string<? (symbol->string (car a))
                                   (symbol->string (car b))))
-          (filter-map (lambda (n)
-                        (let ([t (hashtable-ref (env-shares e) n #f)])
-                          (and t (not (and look? (top-level-bound? n env)))
-                               (list n t (hashtable-ref (env-setters e) n
-                                                        #f)))))
-                      (vector->list (hashtable-keys (env-shares e)))))))
+          (append
+           (filter-map (lambda (n)
+                         (let ([t (hashtable-ref (env-shares e) n #f)])
+                           (and t (not (and look? (top-level-bound? n env)))
+                                (list n t (hashtable-ref (env-setters e) n
+                                                         #f)
+                                      #f))))
+                       (vector->list (hashtable-keys (env-shares e))))
+           (map (lambda (n) (list n n #f (hashtable-ref (env-given e) n #f)))
+                (vector->list (hashtable-keys (env-given e))))))))
 
-;; The names e defined itself, by name: not its base's, not forwarded.
+;; The names e defined itself, by name: not its base's, not forwarded, not
+;; given.
 (define (env-own-names e)
   (let ([env (env-environment e)] [base (env-base-names (env-base e))])
     (sort (lambda (a b) (string<? (symbol->string a) (symbol->string b)))
           (filter (lambda (s)
                     (not (or (gensym? s)
                              (hashtable-contains? base s)
+                             (hashtable-contains? (env-given e) s)
                              (and (hashtable-ref (env-shares e) s #f)
                                   (not (top-level-bound? s env))))))
                   (environment-symbols env)))))
+
+;; e's name is value, which e's parent made for it (its fork, an app's
+;; narrowed procedure, a stub), listed among its shares with note, which
+;; says what it is ("its own fork"). env-give-syntax! gives a macro, its
+;; transformer.
+(define (env-give! e name value note)
+  (define-top-level-value name value (env-environment e))
+  (env-given! e name note))
+
+(define (env-give-syntax! e name transformer note)
+  (define-top-level-syntax name transformer (env-environment e))
+  (env-given! e name note))
+
+(define (env-given! e name note)
+  (hashtable-delete! (env-shares e) name)
+  (hashtable-delete! (env-setters e) name)
+  (hashtable-set! (env-given e) name note))
+
+;;; ------------------------------------------------------------------ confined
+;;; The confined base, for apps (services/grant.ss): what is always safe,
+;;; touching only its arguments and what it makes itself. R6RS's libraries
+;;; but those of I/O, files, programs, evaluation and record inspection;
+;;; Chez's pure extras; strings' ports; and, narrowed, records and the
+;;; console. Left out on purpose: syntax-case (datum->syntax on an
+;;; identifier a world macro hands in would name any of the world's
+;;; bindings), the clock (an app's timers bundle), eval and environments,
+;;; C, threads and sleep, the inspector, Chez's own parameters, files and
+;;; the console's ports, exit. One name per line: adding one is a reviewed
+;;; change, and tests/units.ss refuses the dangerous ones.
+
+(define env-confined-libraries
+  '((rnrs base)
+    (rnrs unicode)
+    (rnrs bytevectors)
+    (rnrs lists)
+    (rnrs sorting)
+    (rnrs control)
+    (rnrs exceptions)
+    (rnrs conditions)
+    (rnrs records syntactic)
+    (rnrs records procedural)
+    (rnrs arithmetic fixnums)
+    (rnrs arithmetic flonums)
+    (rnrs arithmetic bitwise)
+    (rnrs hashtables)
+    (rnrs enums)
+    (rnrs mutable-pairs)
+    (rnrs mutable-strings)))
+
+(define env-confined-extras
+  '(fx=
+    fx<
+    fx>
+    fx<=
+    fx>=
+    fx+
+    fx-
+    fx*
+    fx1+
+    fx1-
+    fxquotient
+    fxremainder
+    fxmodulo
+    fxabs
+    fxlogand
+    fxlogor
+    fxlogxor
+    fxlognot
+    fxsll
+    fxsrl
+    fxsra
+    fl=
+    fl<
+    fl>
+    fl<=
+    fl>=
+    fl+
+    fl-
+    fl*
+    fl/
+    flonum->fixnum
+    add1
+    sub1
+    quotient
+    remainder
+    modulo
+    exact->inexact
+    inexact->exact
+    logand
+    logor
+    logxor
+    lognot
+    ash
+    random
+    iota
+    enumerate
+    void
+    box
+    box?
+    unbox
+    set-box!
+    box-cas!
+    make-fxvector
+    fxvector
+    fxvector?
+    fxvector-length
+    fxvector-ref
+    fxvector-set!
+    fxvector-fill!
+    fxvector-copy
+    fxvector->list
+    list->fxvector
+    make-flvector
+    flvector
+    flvector?
+    flvector-length
+    flvector-ref
+    flvector-set!
+    flvector-fill!
+    flvector-copy
+    bytevector
+    vector-copy
+    string-copy!
+    list-head
+    last-pair
+    list-copy
+    make-list
+    sort
+    sort!
+    merge
+    andmap
+    ormap
+    gensym
+    gensym?
+    make-parameter
+    parameterize
+    fluid-let
+    rec
+    errorf
+    call/1cc
+    make-weak-eq-hashtable
+    make-weak-eqv-hashtable
+    hashtable-values
+    hashtable-cells
+    date?
+    make-date
+    date-nanosecond
+    date-second
+    date-minute
+    date-hour
+    date-day
+    date-month
+    date-year
+    date-week-day
+    date-year-day
+    date-zone-offset
+    open-output-string
+    get-output-string
+    open-input-string
+    open-string-input-port
+    get-char
+    lookahead-char
+    get-line
+    get-string-all
+    get-string-n
+    get-datum
+    put-char
+    put-string
+    put-datum
+    fprintf
+    eof-object
+    eof-object?))
+
+;; A confined Chez environment, fresh; env-child gives it its console.
+(define (env-confined-environment)
+  (let ([e (copy-environment
+            (apply environment   ; Chez's last: its fx+ takes any count
+                   (append env-confined-libraries
+                           (list `(only (chezscheme)
+                                        ,@env-confined-extras))))
+            #t)])
+    (define-top-level-syntax 'define-record-type
+      (lambda (x) (env-confined-record-type x)) e)
+    (define-top-level-value 'make-record-type-descriptor
+      (lambda args (apply env-confined-rtd args)) e)
+    e))
+
+;; A sandbox's record types are its own: one named by a uid (nongenerative
+;; uid) could be another's, the world's too, and open its records.
+(define (env-confined-record-type x)
+  (syntax-case x ()
+    [(_ name clause ...)
+     (let loop ([cs #'(clause ...)])
+       (syntax-case cs ()
+         [() #'(define-record-type name clause ...)]
+         [((k uid) . _) (and (identifier? #'k)
+                             (eq? (syntax->datum #'k) 'nongenerative))
+          (syntax-violation 'define-record-type
+                            "a sandbox's record types are its own: no uid"
+                            x #'uid)]
+         [(_ . rest) (loop #'rest)]))]))
+
+(define (env-confined-rtd name parent uid . rest)
+  (when uid
+    (errorf 'make-record-type-descriptor
+            "a sandbox's record types are its own: no uid, not ~s" uid))
+  (apply make-record-type-descriptor name parent #f rest))
+
+;;; The console comes wrapped: what a confined environment writes to it
+;;; goes to its log (env-log), the last env-log-max characters, and, while
+;;; root evaluates in it (env-eval, a REPL's input), to root's output too.
+;;; A port given explicitly is written to as it is.
+
+(define env-log-max 16384)
+
+;; (environment . port) while env-eval runs there.
+(define env-listener (make-thread-parameter #f))
+
+(define env-console-names
+  '(display write write-char pretty-print newline printf format
+    current-output-port))
+
+(define (env-give-console! e)
+  (let* ([log (make-custom-textual-output-port
+               (format "~a's log" (env-path e))
+               (lambda (s start n)
+                 (env-log-add! e (substring s start (+ start n)))
+                 n)
+               #f #f #f)]
+         [flush (lambda (p) (when (eq? p log) (flush-output-port log)))]
+         [to (lambda (put)   ; to the log, or the port given
+               (case-lambda
+                 [(x) (put x log) (flush log)]
+                 [(x p) (put x p) (flush p)]))])
+    (for-each
+     (lambda (n v) (define-top-level-value n v (env-environment e)))
+     env-console-names
+     (list (to (lambda (x p) (display x p)))
+           (to (lambda (x p) (write x p)))
+           (to (lambda (x p) (write-char x p)))
+           (to (lambda (x p) (pretty-print x p)))
+           (case-lambda
+             [() (newline log) (flush log)]
+             [(p) (newline p) (flush p)])
+           (lambda (f . args) (apply fprintf log f args) (flush log))
+           (lambda (dest . args)   ; #t: the console
+             (let ([p (if (eq? dest #t) log dest)])
+               (if (eq? p log)
+                   (begin (apply fprintf log args) (flush log))
+                   (apply format p args))))
+           (lambda () log)))))
+
+(define (env-log-add! e s)
+  (let* ([all (string-append (env-log e) s)] [n (string-length all)])
+    (env-log-set! e (if (> n env-log-max)
+                        (substring all (- n env-log-max) n)
+                        all))
+    (let ([l (env-listener)])
+      (when (and l (eq? (car l) e))
+        (put-string (cdr l) s)))))
 
 ;;; ------------------------------------------------------------------ kinds
 ;;; A child is of a kind, which says its base, what it is shared at once
@@ -326,8 +615,9 @@
 
 ;; ((kind . plist) ...), in the order registered. plist: 'title, 'base,
 ;; 'forks (the kinds a child of it forks: a list, or all), 'doc, 'share
-;; (procedure (child): its own shares, first) and 'start (procedure
-;; (child), last).
+;; (procedure (child): its own shares, first), 'start (procedure (child),
+;; last), 'fork (#f: not forked by hand, made by code) and 'kept (why one
+;; is not dropped).
 (defvar *env-kinds* '())
 
 (define (env-register-kind! kind . plist)
@@ -339,10 +629,14 @@
   (let ([k (assq kind *env-kinds*)])
     (if k (plist-ref (cdr k) key default) default)))
 
-;; What e may fork: a list of kinds.
+;; What e may fork: a list of kinds. Kinds registered with 'fork #f are
+;; made by code alone (an app's sandbox, services/grant.ss).
 (define (env-forks e)
   (let ([f (env-may-fork e)])
-    (if (eq? f 'all) (env-kinds) (filter (lambda (k) (assq k *env-kinds*)) f))))
+    (filter (lambda (k) (env-kind-ref k 'fork #t))
+            (if (eq? f 'all)
+                (env-kinds)
+                (filter (lambda (k) (assq k *env-kinds*)) f)))))
 
 ;; What a kind is called, the world's and the worklets' too; a bare child
 ;; by its base.
@@ -355,7 +649,7 @@
 (define (env-title e)
   (if (env-kind e)
       (env-kind-title (env-kind e))
-      (if (eq? (env-base e) 'worklet) "Sandbox" "Namespace")))
+      (if (eq? (env-base e) 'chez) "Namespace" "Sandbox")))
 
 ;; What a private namespace is shared of the world's, read-only and live:
 ;; what reads it. Acting on it is the world's.
@@ -448,11 +742,11 @@
 ;; e's fork, a procedure of its own: (fork) => the kinds; (fork kind opt
 ;; ...) => the child's path.
 (define (env-give-fork! e)
-  (define-top-level-value 'fork
-    (case-lambda
-      [() (env-forks e)]
-      [(kind . opts) (env-path (apply env-fork e kind opts))])
-    (env-environment e)))
+  (env-give! e 'fork
+             (case-lambda
+               [() (env-forks e)]
+               [(kind . opts) (env-path (apply env-fork e kind opts))])
+             "its own fork"))
 
 (env-register-kind! 'private
   'title "Private namespace"
@@ -477,6 +771,6 @@
 
 (env-register-kind! 'sandbox
   'title "Sandbox"
-  'base 'worklet
+  'base 'core
   'forks '(sandbox thread)
   'doc "Scheme's pure core, and only what is shared with it")

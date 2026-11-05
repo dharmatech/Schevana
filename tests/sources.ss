@@ -189,7 +189,8 @@
 ;;; are there for a later layer to set. fluid-let (a view for a while) is
 ;;; not a set.
 
-(define core-hooks '(*profile-span* *theme-saver* *window-gone*))
+(define core-hooks
+  '(*profile-span* *theme-saver* *window-gone* *app-loader*))
 
 ;; The names a file defines at its top level.
 (define (top-level-names f)
@@ -301,9 +302,14 @@
 
 (define world-symbols (environment-symbols (interaction-environment)))
 
-(define (registered? d)
+;; d is registered: a name in the world, or in box, the sandbox of the
+;; app whose file defines it (services/grant.ss).
+(define (registered? d box)
   (case (car d)
-    [(name) (and (memq (cdr d) world-symbols) #t)]
+    [(name) (and (memq (cdr d) (if box
+                                   (environment-symbols (env-environment box))
+                                   world-symbols))
+                 #t)]
     [(app) (and (memq (cdr d) (apps)) #t)]
     [(style) (and (find-style (cdr d)) #t)]
     [(palette) (and (assq (cdr d) *palettes*) #t)]
@@ -315,11 +321,12 @@
   (let* ([ds (definitions f)]
          [stem (string->symbol (file-stem f))]
          [kind (cdr (or (assoc (file-folder f) folder-kinds) '(#f . #f)))]
-         [own (filter (lambda (d) (eq? (car d) kind)) ds)])
+         [own (filter (lambda (d) (eq? (car d) kind)) ds)]
+         [box (and (eq? kind 'app) (grant-env stem))])
     (append
      (map (lambda (d)
             (format "~a: ~a ~a is not registered" f (car d) (cdr d)))
-          (remp registered? ds))
+          (remp (lambda (d) (registered? d box)) ds))
      (cond
        [(equal? (file-folder f) "desktop") '()]
        [(not kind)
@@ -511,6 +518,48 @@
        (for-all (lambda (name) (hashtable-contains? (name-docs) name))
                 '("ui-button" "mac-draw-under" "px-fill" "settings"
                   "ui-draw-button" "ui-draw-button*")))
+
+;;; ------------------------------------------------------------------
+;;; apps in sandboxes
+;;; A tree app that requests bundles runs in a sandbox, approved by the
+;;; table in services/grant.ss: what it requests is that, so a new request
+;;; is a reviewed change. Sketch is left to the person, to show how an app
+;;; of theirs asks.
+
+(define apps-the-person-approves '(sketch))
+
+(check "every bundle names what the world has, each name in one bundle, \
+        and every tree app that requests bundles requests what the table \
+        approves, or is one the person approves"
+       (none?
+        (append
+         (let loop ([ns (apply append (map grant-bundle-names
+                                           (map car grant-bundles)))]
+                    [acc '()])
+           (cond [(null? ns) acc]
+                 [(memq (car ns) (cdr ns))
+                  (loop (cdr ns)
+                        (cons (format "~a is in two bundles" (car ns)) acc))]
+                 [else (loop (cdr ns) acc)]))
+         (filter-map (lambda (n)
+                       (and (not (memq n world-symbols))
+                            (format "a bundle names ~a, not the world's" n)))
+                     (apply append (map grant-bundle-names
+                                        (map car grant-bundles))))
+         (filter-map
+          (lambda (f)
+            (let ([app (string->symbol (file-stem f))]
+                  [asks (grant-requests (source-path f))])
+              (and asks
+                   (not (if (memq app apps-the-person-approves)
+                            (not (assq app grant-tree-apps))
+                            (equal? asks (cdr (or (assq app grant-tree-apps)
+                                                  '(#f . #f))))))
+                   (format "~a requests ~a; the table approves ~a" f asks
+                           (cdr (or (assq app grant-tree-apps)
+                                    '(#f . none)))))))
+          (filter (lambda (f) (equal? (file-folder f) "apps"))
+                  (folder-files))))))
 
 (check "the tests never load ~/.schevana.d"
        (and (not *user-folders?*) (not (exists path-absolute? (source-files)))))

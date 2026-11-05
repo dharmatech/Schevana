@@ -7,7 +7,9 @@
 ;;; Right, the one selected: what it is (its kind, base, parent and
 ;;; children, what it forks, its thread), then its names: those shared
 ;;; with it, each with the parent's name it forwards to, whether its set!
-;;; goes through a setter and where it is bound; or its own. The toolbar
+;;; goes through a setter and where it is bound; or its own. For an app's
+;;; sandbox, the bundles it requests, as each stands, and each name's;
+;;; /apps lists every bundle (services/grant.ss). The toolbar
 ;;; acts on the one selected, as the menu of a right press on a row does:
 ;;;   Fork…    a child of a kind its fork makes, named, shared names
 ;;;   REPL     a REPL in it (Return, a double click)
@@ -51,16 +53,19 @@
              is defined here changes the running world."]
     [(worklets) "Where the worklets live (define-worklet); the pool's \
                  threads run them."]
-    [(#f) (format "Made by code (env-child): ~a"
-                  (if (eq? (env-base e) 'worklet)
-                      "Scheme's pure core, and what is shared with it"
-                      "all of Chez, and what is shared with it"))]
+    [(#f) (format "Made by code (env-child): ~a, and what is shared with it"
+                  (case (env-base e)
+                    [(core) "Scheme's pure core"]
+                    [(confined) "what is always safe"]
+                    [else "all of Chez"]))]
     [else (env-kind-ref (env-kind e) 'doc "")]))
 
 (define (envs-base-words e)
   (case (env-base e)
     [(chez) "chez: all of Chez Scheme"]
-    [(worklet) "worklet: Scheme's pure core, no files, C or threads"]
+    [(confined) "confined: what is always safe, without files, C or \
+                 threads; the console its log"]
+    [(core) "core: the pure part of Scheme, without files, C or threads"]
     [else "The world's own"]))
 
 ;; The names e was shared and holds of its own, and those of the world's
@@ -107,6 +112,8 @@
       [(share load)
        (cond [(eq? kind 'worklets)
               "/worklets holds worklets only: define-worklet puts them there"]
+             [(and (eq? what 'share) (memq kind '(apps app)))
+              "An app holds the bundles it is allowed, and no more"]
              [vat? "Its sandbox is its vat's: share and load before its \
                     thread starts"]
              [(and (eq? what 'share) (not (env-parent e)))
@@ -115,6 +122,12 @@
       [(drop) (cond [(not (env-parent e)) "The world is not dropped"]
                     [(eq? kind 'worklets)
                      "/worklets is not dropped: the worklets live there"]
+                    [(env-kind-ref kind 'kept #f)
+                     => (lambda (why)
+                          (format "~a is not dropped: ~a" (env-path e) why))]
+                    [(eq? kind 'app)
+                     "An app's sandbox goes with the app: it is made again \
+                      as the app loads"]
                     [else #f])])))
 
 ;; The actions on e: ((what label glyph tip) ...), in the toolbar's order.
@@ -420,6 +433,7 @@
      (if (env-world? e) (list (envs-follows-row v e)) '())
      (cond
        [(eq? (env-kind e) 'worklets) (envs-pool-rows v)]
+       [(envs-bundled? e) (envs-bundle-rows v e)]
        [vat (envs-vat-rows v vat)]
        [else '()]))))
 
@@ -484,25 +498,115 @@
                                          (vat-job-kill! (list-ref jobs i)))
                             'empty "None waiting"))))))
 
-(define (envs-names-columns which room)
+;;; ------------------------------------------------------------------
+;;; apps' bundles
+
+;; Is e /apps, or an app's sandbox: does it hold what bundles hold?
+(define (envs-bundled? e) (and (memq (env-kind e) '(apps app)) #t))
+
+;; The title of the bundle a name came in. What no bundle holds, every
+;; app holds (define-app).
+(define (envs-bundle-title name)
+  (let ([b (grant-bundle-of name)])
+    (if b (grant-bundle-title b) "Every app's")))
+
+;; A bundle's chip: for an app, how its request stands; for /apps, how much
+;; it holds.
+(define (envs-bundle-label app b)
+  (let ([title (grant-bundle-title b)])
+    (if app
+        (case (grant-state app b)
+          [(denied) (format "~a · denied" title)]
+          [(undecided) (format "~a · not decided" title)]
+          [else title])
+        (format "~a · ~a" title (length (grant-bundle-names b))))))
+
+;; Only the names of bundle b, by the names' filter; pressed again, all.
+(define (envs-show-bundle! v b)
+  (let ([title (grant-bundle-title b)])
+    (envs-view-names-set! v 'shared)
+    (envs-view-names-query-set!
+     v (if (equal? (envs-view-names-query v) title) "" title))
+    (ui-forget! (envs-view-ui v) (list '(envs names-table) 'body))))
+
+;; What an app's sandbox requests, or on /apps what any may; a press shows
+;; a bundle's names. Then an app's: who decides, and the person's way to.
+(define (envs-bundle-rows v e)
+  (let* ([ui (envs-view-ui v)] [app (grant-app-in e)]
+         [bundles (if app (grant-requested app) (map car grant-bundles))]
+         [labels (map (lambda (b) (envs-bundle-label app b)) bundles)])
+    (cons
+     (list "Bundles" (lambda (w) (ui-chips-height w labels #f #f))
+           (lambda (x y w)
+             (ui-chips ui '(envs bundles) x y w labels
+                       (lambda (i) (envs-show-bundle! v (list-ref bundles i)))
+                       'keys bundles
+                       'empty "It requests none"
+                       'tip (lambda (i)
+                              (format "Only the names of ~a, or all again"
+                                      (grant-bundle-title
+                                       (list-ref bundles i))))))
+           'hint (if app
+                     "What it requests, of the world's names"
+                     "What an app may request: its sandbox is shared what \
+                      it is allowed from here"))
+     (if app (list (envs-permissions-row v app)) '()))))
+
+(define (envs-permissions-row v app)
+  (let*-values ([(ui) (envs-view-ui v)] [(ch) (ui-control-height)]
+                [(gap) (ui-gap)] [(asks?) (grant-asks? app)]
+                [(n) (length (grant-undecided app))]
+                [(bw bh) (ui-button-size "Permissions…" #f)])
+    (list "Decided by" ch
+          (lambda (x y w)
+            (ui-button ui '(envs permissions) x y bw ch "Permissions…"
+                       (lambda ()
+                         (open-permissions-dialog app void (current-window)))
+                       'disabled (not asks?)
+                       'tip (if asks?
+                                "Change what it may do: it loads again"
+                                "Built in: Schevana's table allows it"))
+            (ui-draw-label (+ x bw gap) y (max 0 (- w bw gap)) ch '(dim)
+                           (cond [(not asks?) "Schevana's table"]
+                                 [(= n 0) "You"]
+                                 [else (format "You: ~a not decided yet" n)])))
+          'hint (if asks?
+                    (format "Kept in ~a" *grant-file-path*)
+                    "grant-tree-apps, in services/grant.ss"))))
+
+(define (envs-names-columns e which room)
   (let ([third (round (/ room 3))] [quarter (round (/ room 4))])
-    (if (eq? which 'shared)
-        `((name "Name" ,(- room third quarter quarter))
-          (from "Parent's" ,quarter
-                "The parent's name it forwards to, where it is renamed")
-          (set "Set!" ,quarter "Refused, or through the parent's setter")
-          (holder "Bound in" ,third
-                  "Where its binding is: double click to go there"))
-        `((name "Name" ,(- room third quarter))
-          (what "Kind" ,quarter)
-          (value "Value" ,third)))))
+    (cond
+      [(not (eq? which 'shared))
+       `((name "Name" ,(- room third quarter))
+         (what "Kind" ,quarter)
+         (value "Value" ,third))]
+      [(envs-bundled? e)
+       `((name "Name" ,(- room third third))
+         (bundle "Bundle" ,third "The bundle it came in")
+         (held "What" ,third
+               "The world's own, read-only; or what was made for this app"))]
+      [else
+       `((name "Name" ,(- room third quarter quarter))
+         (from "Parent's" ,quarter
+               "The parent's name it forwards to, where it is renamed; \
+                or what the parent made for it")
+         (set "Set!" ,quarter "Refused, or through the parent's setter")
+         (holder "Bound in" ,third
+                 "Where its binding is: double click to go there"))])))
 
 (define (envs-names-text e which row key)
   (if (eq? which 'shared)
       (case key
         [(name) (symbol->string (car row))]
-        [(from) (if (eq? (car row) (cadr row)) "" (symbol->string (cadr row)))]
-        [(set) (if (caddr row) (format "via ~a" (caddr row)) "read-only")]
+        [(bundle) (envs-bundle-title (car row))]
+        [(held) (or (cadddr row) "the world's")]
+        [(from) (cond [(cadddr row)]   ; given: what it is
+                      [(eq? (car row) (cadr row)) ""]
+                      [else (symbol->string (cadr row))])]
+        [(set) (cond [(cadddr row) "its own"]
+                     [(caddr row) (format "via ~a" (caddr row))]
+                     [else "read-only"])]
         [else (envs-holder e (car row) (cadr row))])
       (let ([env (env-environment e)])
         (case key
@@ -531,10 +635,13 @@
                 [(shown) (if (string=? q "")
                              all
                              (filter (lambda (r)
-                                       (string-contains-ci?
-                                        (symbol->string
-                                         (if (pair? r) (car r) r))
-                                        q))
+                                       (let ([n (if (pair? r) (car r) r)])
+                                         (or (string-contains-ci?
+                                              (symbol->string n) q)
+                                             (and (pair? r) (envs-bundled? e)
+                                                  (string-contains-ci?
+                                                   (envs-bundle-title n)
+                                                   q)))))
                                      all))]
                 [(sw sh) (ui-label-size '(section) "Names" w)]
                 [(ch) (ui-control-height)]
@@ -567,7 +674,7 @@
             (let ([room (ui-table-room w)])
               (ui-draw-surface x ty w th '(well))
               (ui-table ui '(envs names-table) x (+ ty 4) w (- th 8)
-                        (envs-names-columns which room) shown #f
+                        (envs-names-columns e which room) shown #f
                         (lambda (row) #f)
                         (lambda (row key cx cy cw ch flags)
                           (ui-draw-cell cx cy cw ch flags
@@ -1181,10 +1288,11 @@
 
 (define (envs-draw v w h)
   (let ([ui (envs-view-ui v)])
-    ;; dropped elsewhere (a REPL closed, say): its nearest that is not
+    ;; dropped elsewhere (a REPL closed, say): the one made again where it
+    ;; was (an app's), or its nearest that is not
     (let up ([e (envs-view-selected v)])
       (if (env-dropped? e)
-          (up (env-parent e))
+          (up (or (env-find (env-path e)) (env-parent e)))
           (unless (eq? e (envs-view-selected v)) (envs-select! v e))))
     (ui-begin! ui)
     (ui-draw-surface 0 0 w h '(page))

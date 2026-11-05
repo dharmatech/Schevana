@@ -18,8 +18,9 @@ scheme --script tests/sources.ss
 
 - A change in behavior comes with a test of it.
 - Tests and scripts never touch the user's `~/.schevana-theme.ss`,
-  `~/.schevana.ss` or `~/.schevana.d`. Point `*theme-file-path*` at a scratch
-  file, as the suites do, or run with `HOME` set to a scratch folder.
+  `~/.schevana.ss` or `~/.schevana.d`. Point `*theme-file-path*` and
+  `*grant-file-path*` at scratch files, as the suites do, or run with
+  `HOME` set to a scratch folder.
 - Nothing opens a real window: the suites run headless.
 
 ## Simplicity first
@@ -46,7 +47,7 @@ before it:
 | `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, vats and their jobs, the profiler, the saved look. |
 | `desktop/` | The screen's own surfaces and the desktop's behavior: wallpaper, bars, menu, toasts, keys, arranging windows. |
 | `styles/`, `palettes/`, `wallpapers/` | One definition per file, registered by its definer. |
-| `apps/` | One app per file, defined with `define-app`. |
+| `apps/` | One app per file, defined with `define-app`; one whose first form is `app-requests` runs in a sandbox of its own (`services/grant.ss`). |
 
 - **The core never depends on a later layer.** It reaches them only
   through registries, parts and settings they fill, and hooks they set
@@ -59,6 +60,11 @@ before it:
   procedure, `*cr*` or `*scratch*` outside `src/`: the core grows a
   primitive instead (`tests/sources.ss`).
 - **A file in a folder registers what it defines** (`tests/sources.ss`).
+- **An app in a sandbox requests what the table approves**
+  (`grant-tree-apps` in `services/grant.ss`, `tests/sources.ss`): a new
+  request is a reviewed change, and a bundle names only what the world
+  has. An app that tunes the world (Settings, Tasks) requests nothing and
+  runs there.
 
 ## State
 

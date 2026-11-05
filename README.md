@@ -151,7 +151,10 @@ own. Its toolbar and a row's right-press menu act on it:
   (a style's `modal-above`).
 - **Drop…**: it, what is under it and their threads.
 
-On `/worklets` it sets the pool's threads. A world namespace gets the
+On `/worklets` it sets the pool's threads. On an app's sandbox it lists
+the bundles the app requests, as each stands (a press shows a bundle's
+names), who decides them, and Permissions… to change them; `/apps` lists
+every bundle. A world namespace gets the
 names the world gains at its next evaluation; Sync shares them now
 (`env-sync!`). An environment forks only the kinds its own allows,
 through `(fork kind 'name n 'share names 'setters pairs)`: the world and
@@ -348,6 +351,9 @@ Schevana's own (`kits` first, then `services`, `desktop`, `styles`,
 `palettes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
 styles and palettes with the others, and the saved look may name them.
+An app of yours runs in a sandbox of its own: its file's first form says
+what it needs, `(app-requests window draw timers)`, and the launcher asks
+you before its first run (Settings, Permissions changes it later).
 `(apps)`, `(styles)`, `(palettes)`, `(wallpapers)` and
 `(surfaces)` list what is registered.
 
@@ -464,7 +470,7 @@ Decisions worth keeping in mind for the real design:
   that is no worklet.
 - **Environments are a tree.** The world is its root (`services/env.ss`).
   A child is of a kind, `(env-fork e 'sandbox 'name 'tally 'share
-  '(add!))`, which says its base, all of Chez or the worklets', what it
+  '(add!))`, which says its base, all of Chez or its pure core, what it
   is shared at once and what it may fork in turn (a registry, which vats
   add threads to); `(env-child e name base)` makes a bare one. It is
   shared only the names its parent lists, as in
@@ -480,8 +486,22 @@ Decisions worth keeping in mind for the real design:
   world's, followed, is a world namespace's alone, which a person asks
   for. A dropped one is marked so (`env-dropped?`): what holds it knows.
   A child on Chez's base still reaches the world through Chez, so it
-  organizes state and confines nothing; the sandboxes that do confine come with apps in
-  their own environments.
+  organizes state and confines nothing. The confined base is what is
+  always safe, for apps: R6RS's libraries and Chez's pure extras, but no
+  files, eval, C, threads, clock or inspector, records of its own types
+  only, and its console writes to its log (`env-log`).
+- **Apps run in sandboxes.** An app's file that starts with
+  `(app-requests window draw timers)` loads into `/apps/<name>`
+  (`services/grant.ss`), on the confined base, holding of the world's
+  names only its bundles: titled lists ("Draw in its windows": `fill-rect`
+  and 48 more). The tree's Clock and Life are approved by a table; Sketch,
+  and every app of yours, asks the person, whose answers are kept in
+  `~/.schevana.d/permissions.ss`. A bundle not allowed is there as stubs
+  that raise, naming it ("Sketch needs Draw in its windows (fill-rect):
+  denied"); a name in no bundle it requests is unbound. Its `define-app`
+  registers that app alone, and `(clock)` at the world's REPL still opens
+  Clock. Settings, Monitor, Tasks, the REPL and Environments request
+  nothing and run in the world, which they tune.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
   (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
   of the range on worker threads, the caller among them, and returns when
@@ -510,7 +530,8 @@ Decisions worth keeping in mind for the real design:
   instead of crashing the window; `(vat-repl! v forms width then fail)`
   prints what the forms return on the vat's thread, where the values
   live, as a REPL in a thread's environment does.
-- **Apps are procedures.** `define-app` defines a normal procedure that
+- **Apps are procedures.** `define-app` defines a normal procedure (in
+  the app's sandbox, for one in a sandbox) that
   calls `open-window` with a property list of handlers (`'draw`, `'key`,
   `'text`, `'mouse-down`, `'tick`, ...). Every other option becomes a
   window property (`window-ref` / `window-set!`).
@@ -842,8 +863,10 @@ process's Kill, Profiling off, the rows that focus and kill then, and on
 again), reloads the sources (the profiler's history kept), runs the
 host's SDL code (uploads, presents, resize events, the window's size)
 against a stand-in that replaces every SDL call, so no window opens, and
-writes screenshots to the given folder. It never touches your real
-`~/.schevana-theme.ss`, and no test reads `~/.schevana.d`.
+writes screenshots to the given folder. It asks Sketch's permissions
+through the launcher and Settings, never touches your real
+`~/.schevana-theme.ss` or apps' permissions, and no test reads
+`~/.schevana.d`.
 
 ```bash
 scheme --script tests/units.ss out
