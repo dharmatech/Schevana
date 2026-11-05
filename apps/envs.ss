@@ -132,7 +132,21 @@
         [(repl) (repl e)]
         [(fork) (envs-open-fork! v (car (env-forks e)))]
         [(load) (envs-open-load! v)]
+        [(share) (envs-open-share! v)]
         [else (envs-open-sheet! v what)]))))
+
+;; The share dialog, over Environments, for more of the parent's names.
+(define (envs-open-share! v)
+  (let* ([e (envs-view-selected v)] [p (env-parent e)])
+    (envs-open-picker!
+     (format "Share with ~a" (env-path e)) p e "Share" '()
+     (lambda (picked)
+       (let-values ([(shares setters) (envs-picked-shares picked)])
+         (env-shares-check 'share p shares setters)
+         (env-share! e shares)
+         (for-each (lambda (s) (env-share-setter! e (car s) (cdr s)))
+                   setters)
+         (hashtable-delete! (envs-view-facts v) e))))))
 
 ;; The file dialog, over Environments, for a file to load into the one
 ;; selected, where the last was picked.
@@ -154,7 +168,6 @@
   (envs-view-error-set! v #f)
   (ui-focus! (envs-view-ui v)
              (case what
-               [(share) (list '(envs-sheet shares) 'field)]
                [else #f])))
 
 (define (envs-open-fork! v kind)
@@ -233,16 +246,6 @@
           (envs-select! v c)
           (when (and (envs-view-repl? v) (not (envs-why-not c 'repl)))
             (repl c)))))))
-
-(define (envs-share! v)
-  (let ([e (envs-view-selected v)])
-    (guard (c [#t (envs-view-error-set! v (condition->string c))])
-      (let-values ([(shares setters) (envs-sheet-shares v)])
-        (env-shares-check 'share (env-parent e) shares setters)
-        (env-share! e shares)
-        (for-each (lambda (s) (env-share-setter! e (car s) (cdr s))) setters)
-        (hashtable-delete! (envs-view-facts v) e)
-        (envs-view-sheet-set! v #f)))))
 
 ;; The file's forms evaluated in e, in a process; a toast says how it
 ;; went.
@@ -611,13 +614,27 @@
         '())))
 
 ;; The share field: the chips, and what is typed, suggested from the names
-;; holder holds.
+;; holder holds; and Choose…, the share dialog for them.
 (define (envs-share-row v holder hint)
-  (let ([ui (envs-view-ui v)])
+  (let*-values ([(ui) (envs-view-ui v)]
+                [(bw bh) (ui-button-size "Choose…" #f)] [(gap) (ui-gap)])
     (list "Share"
-          (lambda (w) (ui-chip-input-size w (envs-view-shares v)))
+          (lambda (w) (ui-chip-input-size (- w bw gap) (envs-view-shares v)))
           (lambda (x y w)
-            (ui-chip-input ui '(envs-sheet shares) x y w (envs-view-shares v)
+            (ui-button ui '(envs-sheet choose) (- (+ x w) bw) y bw bh
+                       "Choose…"
+                       (lambda ()
+                         (envs-open-picker!
+                          (format "Share from ~a" (env-path holder)) holder #f
+                          "Choose"
+                          (filter values (map envs-chip-picked
+                                              (envs-view-shares v)))
+                          (lambda (picked)
+                            (envs-view-shares-set!
+                             v (map envs-picked-chip picked)))))
+                       'tip "Pick them from the list of its names")
+            (ui-chip-input ui '(envs-sheet shares) x y (- w bw gap)
+                           (envs-view-shares v)
                            (envs-view-draft v)
                            (lambda (s) (envs-view-draft-set! v s))
                            (lambda (ss)
@@ -724,30 +741,6 @@
                     (list "Fork" (lambda () (envs-fork! v)) 'primary))
               (lambda () (envs-close-sheet! v)))))
 
-;; Share: more of the parent's names.
-(define (envs-share-sheet v)
-  (let* ([ui (envs-view-ui v)] [e (envs-view-selected v)] [p (env-parent e)]
-         [bw (envs-sheet-width)]
-         [rows (cons (envs-share-row
-                      v p
-                      (format "Names of ~a's, read-only and live in ~a. \
-                               “now-ms as clock” renames one; “size via \
-                               size-set!” sets it through the setter."
-                              (env-path p) (env-path e)))
-                     (envs-error-rows v))])
-    (ui-sheet ui 'envs-sheet (format "Share with ~a" (env-path e)) bw
-              (ui-form-height rows bw)
-              (lambda (x y w) (ui-form ui '(envs-sheet form) x y w rows))
-              (list (list "Cancel" (lambda () (envs-close-sheet! v)))
-                    (cons* "Share" (lambda () (envs-share! v))
-                           'primary
-                           (if (and (null? (envs-view-shares v))
-                                    (string=? (envs-trim (envs-view-draft v))
-                                              ""))
-                               '(disabled)
-                               '())))
-              (lambda () (envs-close-sheet! v)))))
-
 (define (envs-drop-dialog v)
   (let* ([e (envs-view-selected v)]
          [under (let walk ([e e])
@@ -767,6 +760,384 @@
                (list (list "Cancel" (lambda () (envs-close-sheet! v)))
                      (list "Drop" (lambda () (envs-drop! v)) 'danger))
                (lambda () (envs-close-sheet! v)))))
+
+;;; ------------------------------------------------------------------
+;;; the share dialog
+;;; A window over Environments, which waits on it. Left, the names the
+;;; holder holds (the parent of what they are shared with), each with a
+;;; box to check, its kind, and, shared there already, its box checked
+;;; and off; right, those checked, in the order checked, and under them
+;;; the options of the one chosen: As (a rename) and Set! via (a setter
+;;; of the holder's). Its action shares them (Share…), or hands them
+;;; back (the Fork sheet's Choose…). Keys, with no field focused: Up and
+;;; Down choose a name, Space checks it, Return acts, Escape cancels;
+;;; typing filters.
+
+(define-record-type envs-picker
+  (nongenerative schevana-envs-picker-1)
+  (fields holder target action on-done ui
+          (mutable picked)    ; ((name alias setter) ...), as checked:
+                              ; alias and setter as typed, "" for none
+          (mutable current)   ; the name chosen, or #f
+          (mutable filter)
+          (mutable scope)     ; own (shared and its own) or all
+          (mutable kind)      ; the kind shown, or #f for any
+          (mutable error)     ; what the last try raised, or #f
+          (mutable listed)    ; (scope . names), the last listed
+          kinds))             ; name -> its kind, as found
+
+;; Opens the dialog over the window of the handler that calls it: names of
+;; holder's, for target (#f: one to be forked), picked already the
+;; ((name alias setter) ...) of picked; action its button's word. Its
+;; action calls (on-done picked), which may raise, as the dialog's
+;; error. => its window
+(define (envs-open-picker! title holder target action picked on-done)
+  (let* ([ui (make-ui)] [lh (font-line-height 'ui)]
+         [p (make-envs-picker holder target action on-done ui picked
+                              (and (pair? picked) (caar picked)) "" 'own #f
+                              #f #f (make-eq-hashtable))])
+    (apply ui-open-modal (current-window) title
+           (max 820 (round (* 58 lh))) (max 520 (round (* 35 lh)))
+           'min-size (cons (round (* 40 lh)) (round (* 24 lh)))
+           'app #f
+           'state p
+           'draw (lambda (win w h) (envs-picker-draw p w h))
+           (ui-handlers ui
+                        'key (lambda (win key mods)
+                               (envs-picker-key p key mods))
+                        'text (lambda (win str) (envs-picker-text p str))))))
+
+;; The holder's names in scope, by name: its own and those it was shared
+;; (the world's own, for the world), or every one, its base's too.
+(define (envs-picker-names p)
+  (let ([l (envs-picker-listed p)] [scope (envs-picker-scope p)])
+    (if (and l (eq? (car l) scope))
+        (cdr l)
+        (let* ([h (envs-picker-holder p)]
+               [names (if (eq? scope 'all)
+                          (remp gensym? (environment-symbols
+                                         (env-environment h)))
+                          (append (map car (env-shared-names h))
+                                  (env-own-names h)))]
+               [sorted (sort (lambda (a b)
+                               (string-ci<? (symbol->string a)
+                                            (symbol->string b)))
+                             names)])
+          (envs-picker-listed-set! p (cons scope sorted))
+          sorted))))
+
+;; A name's kind, as its binding is, wherever it is bound.
+(define (envs-name-kind holder name)
+  (let-values ([(h n) (env-holder holder name)])
+    (let ([env (env-environment h)])
+      (cond [(not (top-level-bound? n env)) "syntax"]
+            [(worklet? (top-level-value n env)) "worklet"]
+            [(procedure? (top-level-value n env)) "procedure"]
+            [else "variable"]))))
+
+;; A name's kind, found once: the list asks at every draw.
+(define (envs-picker-kind-of p n)
+  (let ([t (envs-picker-kinds p)])
+    (or (hashtable-ref t n #f)
+        (let ([k (envs-name-kind (envs-picker-holder p) n)])
+          (hashtable-set! t n k)
+          k))))
+
+;; What the list shows: the names the filter and kind leave.
+(define (envs-picker-shown p)
+  (let ([q (envs-trim (envs-picker-filter p))] [k (envs-picker-kind p)])
+    (filter (lambda (n)
+              (and (or (string=? q "")
+                       (string-contains-ci? (symbol->string n) q))
+                   (or (not k) (string=? k (envs-picker-kind-of p n)))))
+            (envs-picker-names p))))
+
+;; The holder's names the target forwards to already, under any name.
+(define (envs-picker-shared p)
+  (let ([t (envs-picker-target p)])
+    (if t (map cadr (env-shared-names t)) '())))
+
+(define (envs-picker-toggle! p name)
+  (let ([picked (envs-picker-picked p)])
+    (envs-picker-error-set! p #f)
+    (if (assq name picked)
+        (envs-picker-picked-set! p (remp (lambda (e) (eq? (car e) name))
+                                         picked))
+        (unless (memq name (envs-picker-shared p))
+          (envs-picker-picked-set! p (append picked (list (list name "" ""))))
+          (envs-picker-current-set! p name)))))
+
+;; Sets the chosen one's alias or setter (field 1 or 2) to s.
+(define (envs-picker-set! p field s)
+  (let ([name (envs-picker-current p)])
+    (envs-picker-error-set! p #f)
+    (envs-picker-picked-set!
+     p (map (lambda (e)
+              (if (eq? (car e) name)
+                  (if (= field 1)
+                      (list (car e) s (caddr e))
+                      (list (car e) (cadr e) s))
+                  e))
+            (envs-picker-picked p)))))
+
+;; picked as env-share! and env-share-setter! take them: (values shares
+;; setters), what does not read as a name refused.
+(define (envs-picked-shares picked)
+  (let loop ([es picked] [shares '()] [setters '()])
+    (if (null? es)
+        (values (reverse shares) (reverse setters))
+        (let* ([name (caar es)]
+               [word (lambda (what s)
+                       (let ([s (envs-trim s)])
+                         (cond [(string=? s "") #f]
+                               [(exists (lambda (c) (or (char-whitespace? c)
+                                                        (char=? c #\/)))
+                                        (string->list s))
+                                (errorf 'share "~a's ~a is a name, not ~s"
+                                        name what s)]
+                               [else (string->symbol s)])))]
+               [alias (word "As" (cadar es))]
+               [setter (word "Set! via" (caddar es))]
+               [n (if alias (cons alias name) name)])
+          (if setter
+              (loop (cdr es) shares (cons (cons n setter) setters))
+              (loop (cdr es) (cons n shares) setters))))))
+
+;; A picked one as the Fork sheet's chip says it, and back.
+(define (envs-picked-chip e)
+  (string-append (symbol->string (car e))
+                 (if (string=? (envs-trim (cadr e)) "")
+                     ""
+                     (string-append " as " (envs-trim (cadr e))))
+                 (if (string=? (envs-trim (caddr e)) "")
+                     ""
+                     (string-append " via " (envs-trim (caddr e))))))
+
+(define (envs-chip-picked chip)
+  (let-values ([(share setter) (envs-share-words chip)])
+    (and share
+         (list (if (pair? share) (cdr share) share)
+               (if (pair? share) (symbol->string (car share)) "")
+               (if setter (symbol->string setter) "")))))
+
+(define (envs-picker-done! p)
+  (guard (c [#t (envs-picker-error-set! p (condition->string c))])
+    ((envs-picker-on-done p) (envs-picker-picked p))
+    (close-window! (current-window))))
+
+;;; drawing
+
+(define (envs-picker-names-columns room)
+  (ui-table-fit room
+                `((name "Name" #f)
+                  (kind "Kind" ,(round (+ (* 2 (ui-table-cell-inset)) 4
+                                          (text-widest '("procedure"
+                                                         "variable" "worklet"
+                                                         "syntax")
+                                                       'ui)))))
+                '(kind) (* 8 (font-line-height 'ui))))
+
+(define (envs-picker-list p x y w h)
+  (let* ([ui (envs-picker-ui p)] [shared (envs-picker-shared p)])
+    (ui-draw-surface x y w h '(well))
+    (ui-table ui '(envs-picker names) x (+ y 4) w (- h 8)
+              (envs-picker-names-columns (ui-table-room w))
+              (envs-picker-shown p) (envs-picker-current p)
+              (lambda (n) (envs-picker-current-set! p n))
+              (lambda (n key cx cy cw ch flags)
+                (let ([dim (if (memq n shared) (cons 'dim flags) flags)])
+                  (ui-draw-cell cx cy cw ch dim
+                                (if (eq? key 'name)
+                                    (symbol->string n)
+                                    (string-append
+                                     (envs-picker-kind-of p n)
+                                     (if (memq n shared) " · shared" ""))))))
+              'checked (lambda (n)
+                         (cond [(memq n shared) 'fixed]
+                               [(assq n (envs-picker-picked p)) #t]
+                               [else #f]))
+              'on-check (lambda (n) (envs-picker-toggle! p n))
+              'on-open (lambda (n) (envs-picker-toggle! p n))
+              'tip (lambda (n)
+                     (and (memq n shared)
+                          (format "~a is shared with ~a already"
+                                  n (env-path (envs-picker-target p)))))
+              'reveal #t)))
+
+;; Those checked, and the options of the one chosen.
+(define (envs-picker-side p x y w h)
+  (let*-values ([(ui) (envs-picker-ui p)] [(gap) (ui-gap)]
+                [(picked) (envs-picker-picked p)]
+                [(sw sh) (ui-label-size '(section) "To share" w)]
+                [(ch) (ui-control-height)]
+                [(e) (assq (envs-picker-current p) picked)]
+                [(rows)
+                 (if e
+                     (list (list "As" ch
+                                 (lambda (fx fy fw)
+                                   (ui-text-field ui '(envs-picker as) fx fy fw
+                                                  ch (cadr e)
+                                                  (lambda (s)
+                                                    (envs-picker-set! p 1 s))
+                                                  'placeholder
+                                                  (symbol->string (car e))))
+                                 'hint "Its name there; its own by default")
+                           (list "Set! via" ch
+                                 (lambda (fx fy fw)
+                                   (ui-text-field ui '(envs-picker via) fx fy
+                                                  fw ch (caddr e)
+                                                  (lambda (s)
+                                                    (envs-picker-set! p 2 s))
+                                                  'placeholder "read-only"
+                                                  'suggest
+                                                  (lambda (typed)
+                                                    (envs-picker-setters
+                                                     p (car e) typed))))
+                                 'hint "A procedure of the holder's that its \
+                                        set! calls; read-only when none"))
+                     '())]
+                [(fh) (if e (+ (ui-form-height rows w) sh 6 16) 0)]
+                [(th) (max (* 3 (ui-table-row-height)) (- h sh 6 fh gap))])
+    (ui-draw-label x y w sh '(section)
+                   (format "To share (~a)" (length picked)))
+    (ui-draw-surface x (+ y sh 6) w th '(well))
+    (ui-table ui '(envs-picker picked) x (+ y sh 10) w (- th 8)
+              (let ([room (ui-table-room w)])
+                (ui-table-fit room
+                              `((name "Name" #f)
+                                (as "As" ,(round (* room 0.3)))
+                                (via "Set! via" ,(round (* room 0.3))))
+                              '(via as) (* 6 (font-line-height 'ui))))
+              picked e
+              (lambda (r) (envs-picker-current-set! p (car r)))
+              (lambda (r key cx cy cw ch flags)
+                (ui-draw-cell cx cy cw ch flags
+                              (case key
+                                [(name) (symbol->string (car r))]
+                                [(as) (cadr r)]
+                                [else (caddr r)])))
+              'on-open (lambda (r) (envs-picker-toggle! p (car r))))
+    (when e
+      (let ([fy (+ y sh 6 th 16)])
+        (ui-draw-label x fy w sh '(group) (symbol->string (car e)))
+        (ui-form ui '(envs-picker form) x (+ fy sh 6) w rows)))))
+
+;; The holder's procedures typed may name, name-set! first.
+(define (envs-picker-setters p name typed)
+  (let ([own (string->symbol (format "~a-set!" name))])
+    (append (if (and (string=? typed "")
+                     (memq own (envs-picker-names p)))
+                (list (symbol->string own))
+                '())
+            (ui-suggestions
+             typed
+             (map symbol->string
+                  (filter (lambda (n)
+                            (string=? (envs-picker-kind-of p n) "procedure"))
+                          (filter (lambda (n)
+                                    (string-contains-ci? (symbol->string n)
+                                                         typed))
+                                  (envs-picker-names p))))
+             8))))
+
+(define (envs-picker-draw p w h)
+  (let*-values ([(ui) (envs-picker-ui p)] [(pad gap) (values (ui-pad) (ui-gap))]
+                [(ch) (ui-control-height)]
+                [(scopes) (list (cons (if (env-parent (envs-picker-holder p))
+                                          "Its own and shared"
+                                          "The world's own")
+                                      'own)
+                                (cons "All, Chez's too" 'all))]
+                [(kinds) '(("Any kind" . #f) ("Procedures" . "procedure")
+                           ("Syntax" . "syntax") ("Variables" . "variable")
+                           ("Worklets" . "worklet"))]
+                [(dw dh) (ui-dropdown-size (map car (append scopes kinds)))]
+                [(fw fh) (ui-text-box-size '(search) 0 1)]
+                [(n) (length (envs-picker-picked p))]
+                [(action) (format "~a ~a" (envs-picker-action p)
+                                  (if (= n 1) "1 name" (format "~a names" n)))]
+                [(aw ah) (ui-button-size action #f)]
+                [(cw chh) (ui-button-size "Cancel" #f)]
+                [(foot) (+ ch pad pad)])
+    (ui-begin! ui)
+    (ui-draw-surface 0 0 w h '(page))
+    (let* ([top (ui-toolbar
+                 0 0 w
+                 (list (list #f fh
+                             (lambda (x y w h)
+                               (ui-text-field ui '(envs-picker filter) x y w h
+                                              (envs-picker-filter p)
+                                              (lambda (s)
+                                                (envs-picker-filter-set! p s))
+                                              'search #t
+                                              'placeholder
+                                              (format "Filter ~a's names"
+                                                      (env-path
+                                                       (envs-picker-holder p)))
+                                              'on-enter
+                                              (lambda () (ui-focus! ui #f)))))
+                       (list dw dh
+                             (lambda (x y w h)
+                               (ui-dropdown ui '(envs-picker scope) x y w h
+                                            scopes (envs-picker-scope p)
+                                            (lambda (s)
+                                              (envs-picker-scope-set! p s)))))
+                       (list dw dh
+                             (lambda (x y w h)
+                               (ui-dropdown ui '(envs-picker kind) x y w h
+                                            kinds (envs-picker-kind p)
+                                            (lambda (k)
+                                              (envs-picker-kind-set! p k))))))
+                 'flex '(150 . 100000))]
+           [bh (max 0 (- h top foot))]
+           [lw (ui-split ui '(envs-picker split) 0 top w bh
+                         (round (* w 0.52)) 260 300)])
+      (envs-picker-list p pad (+ top pad) (- lw pad pad) (- bh pad pad))
+      (envs-picker-side p (+ lw pad) (+ top pad) (- w lw pad pad)
+                        (- bh pad pad))
+      (let ([fy (+ top bh)] [by (+ top bh pad)])
+        (ui-draw-surface 0 fy w foot '(footer))
+        (let ([err (envs-picker-error p)])
+          (when err
+            (ui-draw-label pad by (- w pad pad aw cw gap gap) ch '(error)
+                           err)))
+        (ui-button ui '(envs-picker cancel) (- w pad aw gap cw) by cw ch
+                   "Cancel" (lambda () (close-window! (current-window)))
+                   'tip "Escape")
+        (ui-button ui '(envs-picker done) (- w pad aw) by aw ch action
+                   (lambda () (envs-picker-done! p))
+                   'primary #t
+                   'disabled (and (= n 0) (envs-picker-target p) #t))))
+    (ui-end! ui w h)))
+
+;;; keys
+
+(define (envs-picker-key p key mods)
+  (and (null? mods)
+       (case key
+         [(escape) (close-window! (current-window)) #t]
+         [(return) (envs-picker-done! p) #t]
+         [(#\space)
+          (when (envs-picker-current p)
+            (envs-picker-toggle! p (envs-picker-current p)))
+          #t]
+         [else
+          (let* ([shown (envs-picker-shown p)]
+                 [i (list-index (lambda (n) (eq? n (envs-picker-current p)))
+                                shown)]
+                 [j (ui-table-step i (length shown)
+                                   (ui-table-page (envs-picker-ui p)
+                                                  '(envs-picker names))
+                                   key)])
+            (and j (begin (envs-picker-current-set! p (list-ref shown j))
+                          #t)))])))
+
+;; Typing filters; a blank is Space's, which the key took.
+(define (envs-picker-text p str)
+  (unless (string=? (envs-trim str) "")
+    (envs-picker-filter-set! p (string-append (envs-picker-filter p) str))
+    (ui-focus! (envs-picker-ui p) '(envs-picker filter)))
+  #t)
 
 ;;; ------------------------------------------------------------------
 ;;; the window
@@ -827,7 +1198,6 @@
       (envs-inspector v tw top (- w tw) (- h top)))
     (case (envs-view-sheet v)
       [(fork) (envs-fork-sheet v)]
-      [(share) (envs-share-sheet v)]
       [(drop) (envs-drop-dialog v)])
     (ui-due! ui (+ (now-ms) 1000))   ; jobs and names come and go
     (ui-end! ui w h)))

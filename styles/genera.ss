@@ -457,6 +457,7 @@
   (px-fill x y w h 'window-bg)
   (cond [(memq 'well flags) (px-ring x y w h 'text)]
         [(memq 'toolbar flags) (px-fill x (+ y h -1) w 1 'text)]
+        [(memq 'footer flags) (px-fill x y w 1 'text)]
         [(memq 'side flags) (px-fill x y 1 h 'text)]
         [(memq 'nav flags) (px-fill (+ x w -1) y 1 h 'text)]))
 

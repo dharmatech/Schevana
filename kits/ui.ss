@@ -1092,11 +1092,16 @@
 
 (define (ui-checkbox-box) (round (+ (font-line-height 'ui) 1)))
 
+;; flags: checked, hover, focused, disabled (faded, the pointer doing
+;; nothing).
 (define-part (ui-draw-checkbox x y w h flags label)
   (let* ([b (ui-checkbox-box)] [by (+ y (floor (/ (- h b) 2)))]
-         [lh (font-line-height 'ui)] [checked? (memq 'checked flags)])
+         [lh (font-line-height 'ui)] [checked? (memq 'checked flags)]
+         [off? (memq 'disabled flags)]
+         [flags (if off? (remq 'hover flags) flags)])
     (if checked?
-        (begin (fill-round-rect x by b b 4 'accent)
+        (begin (fill-round-rect x by b b 4 (if off? (alpha 'accent 0.45)
+                                               'accent))
                (ui-draw-glyph x by b b '(primary) 'check))
         (begin (fill-round-rect x by b b 4 'bg-0)
                (stroke-round-rect x by b b 4 (if (memq 'hover flags)
@@ -1331,8 +1336,9 @@
                    (iota k))
               cut?))))
 
-;; flags: page, toolbar (a line below), side (a line at the left), nav
-;; (a deeper column, a line at the right: Settings' tabs), well.
+;; flags: page, toolbar (a line below), footer (a line above: a dialog's
+;; buttons), side (a line at the left), nav (a deeper column, a line at
+;; the right: Settings' tabs), well.
 (define-part (ui-draw-surface x y w h flags)
   (cond
     [(memq 'well flags) (fill-round-rect x y w h 8 'bg-0)]
@@ -1343,6 +1349,7 @@
      (fill-rect x y w h 'bg-1)
      (cond [(memq 'toolbar flags)
             (fill-rect x (- (+ y h) 1) w 1 'window-border)]
+           [(memq 'footer flags) (fill-rect x y w 1 'window-border)]
            [(memq 'side flags) (fill-rect x y 1 h 'window-border)])]))
 
 ;; How wide a well's ring is, if its style draws one (Genera's 1-pixel
@@ -2075,8 +2082,10 @@
 ;; draws a cell: (lambda (row key x y w h flags) ...), flags its row's and
 ;; its column's. opts: 'sort ((key . up|down) or #f), 'on-sort (key) on a
 ;; press on a heading, 'on-open (row) on a double click, 'on-menu (row x
-;; y) on a right press, 'tip (row): a row's tooltip, or #f, and 'reveal:
-;; true scrolls the selected row into view.
+;; y) on a right press, 'tip (row): a row's tooltip, or #f, 'reveal: true
+;; scrolls the selected row into view, and 'checked (row): a checkbox
+;; before each row's first cell, checked when it gives true, checked and
+;; off when it gives fixed, with 'on-check (row) on a press on it.
 (define (ui-table ui id x y w h columns rows selected on-select cell . opts)
   (with-place 'list
     (lambda ()
@@ -2091,11 +2100,17 @@
              [on-sort (plist-ref opts 'on-sort (lambda (k) #f))]
              [on-open (plist-ref opts 'on-open (lambda (r) #f))]
              [on-menu (plist-ref opts 'on-menu (lambda (r x y) #f))]
+             [checked (plist-ref opts 'checked #f)]
+             [on-check (plist-ref opts 'on-check (lambda (r) #f))]
+             ;; the checkboxes' lane, before the first cell
+             [box (ui-checkbox-box)]
+             [lane (if checked (+ (ui-table-cell-inset) box) 0)]
              [body (list id 'body)] [view-h (max 0 (- h hh))]
              [i (and (plist-ref opts 'reveal #f)
                      (list-index (lambda (r) (eq? r selected)) rows))]
              [rows (list->vector rows)] [n (vector-length rows)])
-        (ui-table-headings! ui id sx sw x y hh columns sort on-sort x)
+        (ui-table-headings! ui id sx sw x y hh columns sort on-sort
+                            (+ x lane))
         (when i (ui-reveal! ui body (* i rh) (* (+ i 1) rh) view-h))
         (ui-memo! ui (list id 'page) (max 1 (exact (floor (/ view-h rh)))))
         (ui-scroll ui body sx (+ y hh) sw view-h
@@ -2118,11 +2133,28 @@
                   (let ([flags (apply ui-flags ui rid
                                       (if (eq? row selected) '(selected) '()))])
                     (ui-draw-table-row x ry w rh flags)
-                    (let cells ([cs columns] [cx x])
+                    (when checked
+                      (let ([state (checked row)] [cid (list id 'check i)]
+                            [bx (+ x (ui-table-cell-inset))])
+                        (unless (eq? state 'fixed)
+                          (ui-pressable! ui cid (- bx 4) ry (+ box 8) rh
+                                         (lambda () (on-check row)) '()
+                                         '(focus keep) '((L . "Check"))))
+                        (ui-draw-checkbox bx ry box rh
+                                          (apply ui-flags ui cid
+                                                 (append
+                                                  (if state '(checked) '())
+                                                  (if (eq? state 'fixed)
+                                                      '(disabled)
+                                                      '())))
+                                          #f)))
+                    (let cells ([cs columns] [cx x] [first? #t])
                       (unless (null? cs)
-                        (cell row (caar cs) cx ry (caddr (car cs)) rh
-                              (append flags (ui-column-flags (car cs))))
-                        (cells (cdr cs) (+ cx (caddr (car cs))))))
+                        (let ([in (if first? lane 0)])
+                          (cell row (caar cs) (+ cx in) ry
+                                (- (caddr (car cs)) in) rh
+                                (append flags (ui-column-flags (car cs)))))
+                        (cells (cdr cs) (+ cx (caddr (car cs))) #f)))
                     (when (eq? row selected)
                       (ui-draw-highlight-over x ry w rh '()))))))
             (+ top (* n rh))))))))

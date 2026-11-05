@@ -7090,6 +7090,21 @@
            (env-drop! w)
            ok)))
 
+(check "the share dialog's names as fork and env-share! take them, and as \
+        the Fork sheet's chips"
+       (let-values ([(shares setters)
+                     (envs-picked-shares '((a "" "") (b "bee" "")
+                                           (c "" "c-set!")
+                                           (d "dee" "d-set!")))])
+         (and (equal? shares '(a (bee . b)))
+              (equal? setters '((c . c-set!) ((dee . d) . d-set!)))
+              (raises? (lambda () (envs-picked-shares '((a "a b" "")))))
+              (equal? (envs-picked-chip '(d "dee" "d-set!"))
+                      "d as dee via d-set!")
+              (equal? (envs-chip-picked "d as dee via d-set!")
+                      '(d "dee" "d-set!"))
+              (equal? (envs-chip-picked "a") '(a "" "")))))
+
 (check "dropping a child takes it, and its children, out of the tree and \
         marks them dropped; not the world, nor /worklets"
        (let ([g (env-child units-env-world 'grand 'chez)])

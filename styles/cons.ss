@@ -632,6 +632,7 @@
      (px-fill x y w h 'bg-1)
      (cond [(memq 'toolbar flags)
             (px-fill x (- (+ y h) 1) w 1 'window-border)]
+           [(memq 'footer flags) (px-fill x y w 1 'window-border)]
            [(memq 'side flags) (px-fill x y 1 h 'window-border)])]))
 
 ;; A popup is an outlined box on the window's background, nothing under

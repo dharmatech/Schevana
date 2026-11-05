@@ -794,6 +794,74 @@
     (envs-select! v (env-root))
     (vat-drop-env! lab)
     (steps 2))
+  ;; Share…: the share dialog, Environments waiting on it
+  (eval '(define smoke-share-a 1) *world-env*)
+  (eval '(define smoke-share-n 1) *world-env*)
+  (eval '(define (smoke-share-n-set! v) (set! smoke-share-n v)) *world-env*)
+  (let ([box (env-fork (env-root) 'pure 'name 'smoke-share)]
+        [check-of (lambda (i) (list '(envs-picker names) 'check i))])
+    (define (picker) (window-ref (focused-window) 'state))
+    (envs-select! v box)
+    (invalidate! w)
+    (steps 2)
+    (click-ui! w '(envs share))
+    (let* ([pw (focused-window)] [p (picker)])
+      (type! "smoke-share")
+      (press! 'escape)   ; the filter lets go
+      (steps 2)
+      (check "Share… opens the share dialog over Environments, which waits \
+              on it: the parent's names, filtered as typed"
+             (and (envs-picker? p) (eq? (window-modal-child w) pw)
+                  (equal? (envs-picker-shown p)
+                          '(smoke-share-a smoke-share-n smoke-share-n-set!))))
+      (click-ui! pw (check-of 0))
+      (click-ui! pw (check-of 1))
+      (click-ui! pw '(envs-picker via))
+      (type! "smoke-share-n-set!")
+      (steps 2)
+      (check "checked, a name is to be shared, the last checked chosen, its \
+              options under the list"
+             (equal? (envs-picker-picked p)
+                     '((smoke-share-a "" "")
+                       (smoke-share-n "" "smoke-share-n-set!"))))
+      (click-ui! pw '(envs-picker done))
+      (env-eval box '(set! smoke-share-n 5))
+      (check "Share shares them, the setter's through it, and closes"
+             (and (not (memq pw (windows)))
+                  (equal? (map car (env-shared-names box))
+                          '(smoke-share-a smoke-share-n))
+                  (= (eval 'smoke-share-n *world-env*) 5))))
+    (click-ui! w '(envs share))
+    (let ([pw (focused-window)])
+      (type! "smoke-share-a")
+      (press! 'escape)
+      (steps 2)
+      (check "a name shared already is checked, and takes no press"
+             (and (equal? (envs-picker-shown (picker)) '(smoke-share-a))
+                  (not (ui-find (window-ref pw 'ui) (check-of 0)))))
+      (press! 'escape)
+      (steps 2))
+    (envs-select! v (env-root))   ; a pure namespace forks nothing
+    (invalidate! w)
+    (steps 2)
+    (type! "f")
+    (steps 2)
+    (click-ui! w '(envs-sheet choose))
+    (let ([pw (focused-window)])
+      (type! "smoke-share-n-")
+      (press! 'escape)
+      (steps 2)
+      (click-ui! pw (check-of 0))
+      (click-ui! pw '(envs-picker done))
+      (check "the Fork sheet's Choose… picks its shares in the same dialog"
+             (and (not (memq pw (windows)))
+                  (equal? (envs-view-shares v) '("smoke-share-n-set!")))))
+    (press! 'escape)
+    (steps 2)
+    (envs-select! v (env-root))
+    (vat-drop-env! box)
+    (invalidate! w)
+    (steps 2))
   ;; Load…: the desktop's file dialog, Environments waiting on it
   (let* ([dir (string-append out-dir "/smoke-load")]
          [sub (string-append dir "/sub")]

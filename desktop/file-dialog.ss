@@ -471,7 +471,7 @@
                 [(tx) (- cx gap gap tw)]
                 [(lw lh) (ui-label-size '(dim) "Name" 0)]
                 [(fx) (+ x pad lw gap)])
-    (ui-draw-surface x y w h '(toolbar))
+    (ui-draw-surface x y w h '(footer))
     (ui-draw-label (+ x pad) cy lw ch '(dim) "Name")
     (ui-text-field ui '(file-dialog name) fx cy (max 0 (- tx gap fx)) ch
                    (file-dialog-name d)

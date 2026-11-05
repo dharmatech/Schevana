@@ -143,7 +143,9 @@ own. Its toolbar and a row's right-press menu act on it:
   (suggested as you type; `now-ms as clock` renames, `size via
   size-set!` goes through a setter), optionally with a REPL in it.
 - **REPL** (Return): a REPL in it.
-- **Share…**: more of its parent's names (not into a thread's sandbox).
+- **Share…**: more of its parent's names, ticked in a dialog, each
+  renamed or set through a setter (not into a thread's sandbox); the
+  Fork sheet's Choose… picks there too.
 - **Load…**: a file evaluated in it (`env-load`), picked in the
   desktop's file dialog, which stays above Environments while it waits
   (a style's `modal-above`).
