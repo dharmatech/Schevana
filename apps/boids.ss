@@ -143,13 +143,19 @@
 ;; separation, and the blocker rules off (their radius and cone are
 ;; Flake's).
 (define boids-default-rules
-  '(cohesion 0.01     cohesion-radius 50.0
-    alignment 0.05    alignment-radius 50.0
-    separation 0.001  separation-radius 5.0
+  '(cohesion 0.01
+    cohesion-radius 50.0
+    alignment 0.05
+    alignment-radius 50.0
+    separation 0.001
+    separation-radius 5.0
     view-angle 180.0
-    clear-view 0.0    back-off 0.0
-    blocker-radius 40.0  blocker-cone 90.0
-    min-speed 1.0     max-speed 4.0))
+    clear-view 0.0
+    back-off 0.0
+    blocker-radius 40.0
+    blocker-cone 90.0
+    min-speed 1.0
+    max-speed 4.0))
 
 (define (boids-rule rules key)
   (let ([at (memq key rules)])
@@ -158,13 +164,19 @@
 ;; Each rule's range, in the order the rules window shows them. A weight
 ;; starts at 0, and its useful values span orders of magnitude.
 (define boids-ranges
-  '((cohesion 0.0 0.2 weight)    (cohesion-radius 0.0 200.0)
-    (alignment 0.0 1.0 weight)   (alignment-radius 0.0 200.0)
-    (separation 0.0 1.0 weight)  (separation-radius 0.0 50.0)
+  '((cohesion 0.0 0.2 weight)
+    (cohesion-radius 0.0 200.0)
+    (alignment 0.0 1.0 weight)
+    (alignment-radius 0.0 200.0)
+    (separation 0.0 1.0 weight)
+    (separation-radius 0.0 50.0)
     (view-angle 0.0 360.0)
-    (clear-view 0.0 1.0 weight)  (back-off 0.0 1.0 weight)
-    (blocker-radius 0.0 100.0)   (blocker-cone 0.0 180.0)
-    (min-speed 0.0 5.0)          (max-speed 0.5 10.0)))
+    (clear-view 0.0 1.0 weight)
+    (back-off 0.0 1.0 weight)
+    (blocker-radius 0.0 100.0)
+    (blocker-cone 0.0 180.0)
+    (min-speed 0.0 5.0)
+    (max-speed 0.5 10.0)))
 
 ;; Rules picked at random within their ranges. A weight is picked on a
 ;; cube, so that small ones come up about as often as they would on a
@@ -434,7 +446,16 @@
 
 (define (boids-readout-width) (+ 12 (text-width "0.0000" 'ui)))
 
-(define boids-buttons '("Randomize (R)" "Defaults (D)" "Scatter (S)"))
+(define boids-buttons
+  '("Randomize (R)"
+    "Defaults (D)"
+    "Scatter (S)"))
+
+;; As wide as the widest label's button, in the style's own.
+(define (boids-button-width)
+  (apply max (map (lambda (label)
+                    (let-values ([(w h) (ui-button-size label #f)]) w))
+                  boids-buttons)))
 
 ;; The rules window's content size: room for its rows (as
 ;; boids-draw-rules lays them out), with sliders 140 wide, and for three
@@ -443,8 +464,7 @@
   (let ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)])
     (values (+ pad pad
                (max (+ (boids-label-width) 140 (boids-readout-width))
-                    (+ (* 3 (+ 32 (text-widest boids-buttons 'ui)))
-                       (* 2 gap))))
+                    (+ (* 3 (boids-button-width)) (* 2 gap))))
             (+ pad (+ sh gap) (+ (ui-control-height) (* 3 gap))
                (* (length boids-ranges) (+ sh gap))
                gap (font-line-height 'ui-small) pad))))
@@ -509,6 +529,7 @@
                     'draw (lambda (win w h)
                             (set! shown (now-shown))
                             (ui-begin! ui)
+                            (ui-draw-surface 0 0 w h '(page))
                             (boids-draw-rules ui flock-win w)
                             (ui-end! ui w h))
                     'close (lambda (win) (on-close))

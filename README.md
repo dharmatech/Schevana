@@ -498,8 +498,8 @@ Decisions worth keeping in mind for the real design:
   `(app-requests window draw timers)` loads into `/apps/<name>`
   (`services/grant.ss`), on the confined base, holding of the world's
   names only its bundles: titled lists ("Draw in its windows": `fill-rect`
-  and 48 more). The tree's Boids, Clock and Life are approved by a table; Sketch,
-  and every app of yours, asks the person, whose answers are kept in
+  and 48 more). The tree's Boids, Clock and Life are approved by a table;
+  Sketch, and every app of yours, asks the person, whose answers are kept in
   `~/.schevana.d/permissions.ss`. A bundle not allowed is there as stubs
   that raise, naming it ("Sketch needs Draw in its windows (fill-rect):
   denied"); a name in no bundle it requests is unbound. Its `define-app`

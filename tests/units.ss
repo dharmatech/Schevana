@@ -1091,6 +1091,21 @@
                                 (set! bottom (boids-draw-rules ui win w)))))])
              (cairo-surface-destroy s)
              (<= bottom h))))
+  (check "Boids: the rules window paints the style's page under its rows"
+         (let*-values ([(rw) (rules-win)] [(w h) (window-content-size rw)])
+           (let* ([surfaces '()]
+                  [real ui-draw-surface]
+                  [s (fluid-let ([ui-draw-surface
+                                  (lambda (x y w h flags)
+                                    (set! surfaces (cons flags surfaces))
+                                    (real x y w h flags))])
+                       (image (exact (ceiling w)) (exact (ceiling h)) 1
+                              (lambda ()
+                                (parameterize ([current-window rw])
+                                  ((hashtable-ref (window-handlers rw) 'draw #f)
+                                   rw w h)))))])
+             (cairo-surface-destroy s)
+             (and (member '(page) surfaces) #t))))
   (check "Boids: its slider sets the flock's rule, on a weight's cube"
          (begin
            (press! (rules-win) 'cohesion)
