@@ -4,7 +4,8 @@
 ;;;
 ;;; Every line of every source file fits in 80 columns; no top-level name
 ;;; is defined in two files; src/ stays within its size budget; outside
-;;; src/ nothing calls C; every file in a folder registers what it defines
+;;; src/ nothing calls C; only the REPL shares the whole world with an
+;;; environment; every file in a folder registers what it defines
 ;;; (a kit's names keep its prefix; desktop/, like src/, defines plain
 ;;; names); a style sets only settings that exist (built in, its options'
 ;;; or its own); in the kits, the desktop layer, Tasks and Settings only
@@ -272,6 +273,20 @@
                                                   (symbols-in
                                                    (file-forms f))))))
                           outside-src))))
+
+;;; ------------------------------------------------------------------
+;;; sharing the whole world
+;;; Code shares a list of names with an environment it makes; every name
+;;; of the world's, followed, is for the person at the REPL, who asks for
+;;; it on purpose (services/env.ss). So only the REPL calls for it.
+
+(check "only the REPL shares the whole world with an environment"
+       (none? (filter-map
+               (lambda (f)
+                 (and (not (member f '("services/env.ss" "apps/repl.ss")))
+                      (memq 'env-share-world! (symbols-in (file-forms f)))
+                      (format "~a calls env-share-world!" f)))
+               world-files)))
 
 ;;; ------------------------------------------------------------------
 ;;; folders

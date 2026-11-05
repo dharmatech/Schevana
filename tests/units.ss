@@ -6683,6 +6683,148 @@
          (and done (> steps0 3) (pair? (unbox ids))
               (not (memv (get-thread-id) (unbox ids))))))
 
+;;; Environments (services/env.ss): a child sees what its parent shares,
+;;; live, and changes none of it.
+
+(define units-env-value 1)
+(define (units-env-get) units-env-value)
+(define units-env-secret 'root)
+(define units-env-size 1)
+(define (units-env-size-set! v)
+  (unless (fixnum? v) (errorf 'units-env-size-set! "no fixnum: ~s" v))
+  (set! units-env-size v))
+
+(define units-env (env-fork (env-root) 'units 'chez))
+(env-share! units-env '(units-env-get (value . units-env-value)))
+(env-share-setter! units-env '(size . units-env-size) 'units-env-size-set!)
+
+(check "a child's path is its name under its parent's, and finds it; a \
+        sibling of the same name is numbered"
+       (let* ([twin (env-fork (env-root) 'units 'chez)]
+              [inner (env-fork units-env 'inner 'worklet)]
+              [ok (and (equal? (env-path (env-root)) "/")
+                       (equal? (env-path units-env) "/units")
+                       (equal? (env-path twin) "/units-2")
+                       (equal? (env-path inner) "/units/inner")
+                       (eq? (env-find "/units/inner") inner)
+                       (eq? (env-find "/") (env-root))
+                       (eq? (env-find "/worklets/") (env-find "/worklets"))
+                       (not (env-find "/units/none")))])
+         (env-drop! twin)
+         (env-drop! inner)
+         ok))
+
+(check "what a child is shared is live: a set! and a redefinition in the \
+        world reach it, a pair renames"
+       (let ([before (env-eval '(list (units-env-get) value) units-env)])
+         (set! units-env-value 2)
+         (set! units-env-get (lambda () (* 10 units-env-value)))
+         (let ([after (env-eval '(list (units-env-get) value) units-env)])
+           (set! units-env-get (lambda () units-env-value))
+           (and (equal? before '(1 1)) (equal? after '(20 2))))))
+
+(check "Chez refuses a child's set! of a shared name; a name not shared \
+        is unbound there, and the child's set! of it makes its own"
+       (and (guard (c [#t (syntax-violation? c)])
+              (env-eval '(set! value 5) units-env)
+              #f)
+            (guard (c [#t #t]) (env-eval 'units-env-secret units-env) #f)
+            (begin (env-eval '(set! units-env-secret 'child) units-env)
+                   (eq? (env-eval 'units-env-secret units-env) 'child))
+            (= units-env-value 2)
+            (eq? units-env-secret 'root)))
+
+(check "a child's define of a shared name makes its own; the world's is \
+        unchanged"
+       (let ([e (env-fork (env-root) 'units-own 'chez)])
+         (env-share! e '(units-env-get))
+         (env-eval '(define (units-env-get) 'mine) e)
+         (let ([ok (and (eq? (env-eval '(units-env-get) e) 'mine)
+                        (= (units-env-get) 2))])
+           (env-drop! e)
+           ok)))
+
+(check "a setter: the child's set! calls the world's setter, which may \
+        refuse"
+       (begin
+         (env-eval '(set! size 4) units-env)
+         (and (= units-env-size 4)
+              (= (env-eval 'size units-env) 4)
+              (guard (c [#t (= units-env-size 4)])
+                (env-eval '(set! size 'big) units-env)
+                #f))))
+
+(check "a grandchild shares its parent's own names, and its parent's \
+        shares, still read-only and live"
+       (let ([g (env-fork units-env 'grand 'chez)])
+         (env-eval '(define units-env-mine 'child) units-env)
+         (env-share! g '(units-env-mine value))
+         (set! units-env-value 3)
+         (let ([ok (and (equal? (env-eval '(list units-env-mine value) g)
+                                '(child 3))
+                        (guard (c [#t (syntax-violation? c)])
+                          (env-eval '(set! value 0) g)
+                          #f))])
+           (env-drop! g)
+           ok)))
+
+(check "env-binding follows a share to the world's binding"
+       (let-values ([(env name) (env-binding units-env 'value)]
+                    [(own own-name) (env-binding units-env 'units-env-secret)])
+         (and (eq? env *world-env*) (eq? name 'units-env-value)
+              (eq? own (env-environment units-env))
+              (eq? own-name 'units-env-secret))))
+
+(check "env-load loads into the child: a shared defvar defines there, and \
+        keeps its value at the next load"
+       (let ([f (string-append out-dir "/units-env-file.ss")])
+         (call-with-output-file f
+           (lambda (p) (write '(defvar units-env-loaded value) p))
+           'replace)
+         (env-share! units-env '(defvar))
+         (env-load f units-env)
+         (set! units-env-value 9)
+         (env-load f units-env)
+         (set! units-env-value 3)
+         (and (= (env-eval 'units-env-loaded units-env) 3)
+              (not (top-level-bound? 'units-env-loaded)))))
+
+(define units-env-world (env-fork (env-root) 'units-world 'chez))
+(env-share-world! units-env-world)
+(env-eval '(define units-env-later 'mine) units-env-world)
+(define units-env-later 'world)
+(define units-env-newer 'world)
+
+(check "a whole-world child has every name of the world's, and gains \
+        those the world defines later, but for those it defined itself"
+       (and (eqv? (env-eval '(length (windows)) units-env-world)
+                  (length (windows)))
+            (eq? (env-eval 'units-env-newer units-env-world) 'world)
+            (eq? (env-eval 'units-env-later units-env-world) 'mine)
+            (guard (c [#t (syntax-violation? c)])
+              (env-eval '(set! units-env-newer 0) units-env-world)
+              #f)))
+
+(check "a private REPL sees its list of the world's, live, and only it"
+       (let ([e (make-repl-environment 'private)])
+         (let ([ok (and (eq? (env-eval '(windows) e) (windows))
+                        (guard (c [#t #t]) (env-eval 'set-theme! e) #f)
+                        (guard (c [#t (syntax-violation? c)])
+                          (env-eval '(set! windows 0) e)
+                          #f))])
+           (env-drop! e)
+           ok)))
+
+(check "dropping a child takes it, and its children, out of the tree"
+       (let ([g (env-fork units-env-world 'grand 'chez)])
+         (env-drop! units-env-world)
+         (env-drop! units-env)
+         (and (not (env-find "/units-world/grand"))
+              (not (env-find "/units"))
+              (not (memq units-env (env-children (env-root))))
+              (equal? (map env-name (env-children (env-root)))
+                      '(worklets)))))
+
 ;;; The pacer: exactly one tick a period while the work fits.
 
 ;; The main loop for ms of a fake clock (ns), with a wait for host events

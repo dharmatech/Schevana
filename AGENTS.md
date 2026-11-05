@@ -43,7 +43,7 @@ before it:
 |---|---|
 | `src/` | The core: the world (windows, focus, the theme's layers, processes, timers, the canvas, the host), its registries, the hooks later layers fill, and the caches its own procedures need. |
 | `kits/` | Libraries, pure or almost. |
-| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the profiler, the saved look. |
+| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, the profiler, the saved look. |
 | `desktop/` | The screen's own surfaces and the desktop's behavior: wallpaper, bars, menu, toasts, keys, arranging windows. |
 | `styles/`, `palettes/`, `wallpapers/` | One definition per file, registered by its definer. |
 | `apps/` | One app per file, defined with `define-app`. |
@@ -84,6 +84,10 @@ before it:
   (`fork-thread`).
 - **S5. Names.** A global is earmuffed and carries its owner's prefix
   (`*status-segments*`, `*repl-inputs*`).
+- **S6. Environments.** Code that makes an environment shares it a list
+  of names (`env-share!`), each read-only, or through a setter that may
+  refuse. Every name of the world's is the Whole-World REPL's alone
+  (`tests/sources.ss`).
 
 ## Names
 

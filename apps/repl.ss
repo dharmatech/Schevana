@@ -3,13 +3,18 @@
 ;;; Each evaluation runs as a process (see proc.ss), so long computations
 ;;; keep the desktop alive and Ctrl+C interrupts them.
 ;;;
-;;; A REPL evaluates in one of three environments (its mode):
-;;;   world    the shared environment the whole system lives in, so a
-;;;            define here changes the running world
-;;;   private  a copy of the world: same names, but define and set! stay in
-;;;            this window and vanish with it, like private browsing.
-;;;            Calling the world's procedures still acts on the world.
-;;;   pure     plain Chez Scheme; none of Schevana's names are bound
+;;; A REPL evaluates in one of four environments (its mode), the world or
+;;; a child of it (services/env.ss):
+;;;   world        the shared environment the whole system lives in, so a
+;;;                define here changes the running world
+;;;   private      all of Chez, and of the world what it may read (the
+;;;                REPL's list), live; set! of those is refused, and
+;;;                defines stay in this window and vanish with it, like
+;;;                private browsing
+;;;   whole-world  as private, but with every name of the world's, those
+;;;                it gains later too. Calling the world's procedures still
+;;;                acts on the world.
+;;;   pure         plain Chez Scheme; none of Schevana's names are bound
 
 (define-record-type repl
   (nongenerative schevana-repl-2)
@@ -30,19 +35,20 @@
           (mutable cols)       ; layout from the last draw
           (mutable rows)
           (mutable queued?)    ; Enter was pressed while an evaluation ran
-          mode                 ; world, private or pure
-          env))                ; its environment, or #f for the world's
+          mode                 ; world, private, whole-world or pure
+          env))                ; its environment (services/env.ss)
 
 ;; (mode title prompt-color background-tint)
 (define repl-modes
   '((world "REPL" accent #f)
     (private "Private REPL" accent-2 accent-2)
+    (whole-world "Whole-World REPL" accent accent)
     (pure "Pure Scheme REPL" green green)))
 
 (define (repl-mode-info mode)
   (or (assq mode repl-modes)
-      (errorf 'repl
-              "unknown REPL mode ~s (expected world, private or pure)" mode)))
+      (errorf 'repl "unknown REPL mode ~s (expected world, private, \
+                     whole-world or pure)" mode)))
 
 (define (repl-title r) (cadr (repl-mode-info (repl-mode r))))
 
@@ -50,15 +56,36 @@
   (let ([tint (cadddr (repl-mode-info (repl-mode r)))])
     (if tint (mix 'bg-0 tint 0.06) 'bg-0)))
 
-(define (make-repl-environment mode)
-  (case mode
-    [(world) #f]
-    [(private) (copy-environment (interaction-environment) #t)]
-    [(pure) (copy-environment (scheme-environment) #t)]))
+;; The REPL's list: what a private REPL is shared of the world's, read-only
+;; and live. Reading the world; acting on it is the world REPL's.
+(define repl-private-names
+  '(windows
+    focused-window
+    find-window
+    window-title
+    window-ref
+    apps
+    procs
+    styles
+    current-style
+    palettes
+    wallpapers
+    theme
+    theme-keys
+    now-ms
+    uptime-ms
+    source-files))
 
-;; The world's environment is looked up at evaluation time, so a world REPL
-;; opened from inside a private one still talks to the real world.
-(define (repl-environment r) (or (repl-env r) (interaction-environment)))
+(define (make-repl-environment mode)
+  (if (eq? mode 'world)
+      (env-root)
+      (let ([e (env-fork (env-root) mode 'chez)])
+        (case mode
+          [(private) (env-share! e repl-private-names)]
+          [(whole-world) (env-share-world! e)])
+        e)))
+
+(define (repl-environment r) (env-environment (repl-env r)))
 
 (define repl-max-lines 4000)
 (define repl-prompt "λ> ")
@@ -193,15 +220,14 @@
     (repl-proc-set! r
       (spawn "repl"
              (lambda ()
-               (parameterize ([interaction-environment (repl-environment r)]
-                              [current-output-port port]
+               (parameterize ([current-output-port port]
                               [current-error-port port]
                               [current-input-port (open-input-string "")]
                               [pretty-line-length width])
                  (for-each
                   (lambda (form)
                     (call-with-values
-                      (lambda () (eval form (interaction-environment)))
+                      (lambda () (env-eval form (repl-env r)))
                       (lambda vals
                         (for-each (lambda (v)
                                     (unless (eq? v (void))
@@ -511,28 +537,30 @@
               [else #f]))
       (newest)))
 
-;; (values signature doc) for name in env: what the source of its value
-;; says, else what the value itself tells.
-(define (name-description name env)
-  (let* ([sym (string->symbol name)]
-         [bound? (top-level-bound? sym env)]
-         [v (and bound? (top-level-value sym env))]
-         [d (doc-for name v (hashtable-ref (name-docs) name '()))])
-    (cond
-      [d (values (caddr d) (cadddr d))]
-      [bound?
-       (if (procedure? v)
-           (values (format "(~a …)" name)
-                   (arity-description (procedure-arity-mask v)))
-           (values (string-append name " = "
-                                  (truncate-string
-                                   (parameterize ([print-length 6]
-                                                  [print-level 3])
-                                     (format "~s" v))
-                                   70))
-                   ""))]
-      [(top-level-syntax? sym env) (values (format "(~a …)" name) "Syntax.")]
-      [else (values name "")])))
+;; (values signature doc) for name in e: what the source of its value
+;; says (a shared name's: of what it forwards to), else what the value
+;; itself tells.
+(define (name-description name e)
+  (let-values ([(env sym) (env-binding e (string->symbol name))])
+    (let* ([name (symbol->string sym)]
+           [bound? (top-level-bound? sym env)]
+           [v (and bound? (top-level-value sym env))]
+           [d (doc-for name v (hashtable-ref (name-docs) name '()))])
+      (cond
+        [d (values (caddr d) (cadddr d))]
+        [bound?
+         (if (procedure? v)
+             (values (format "(~a …)" name)
+                     (arity-description (procedure-arity-mask v)))
+             (values (string-append name " = "
+                                    (truncate-string
+                                     (parameterize ([print-length 6]
+                                                    [print-level 3])
+                                       (format "~s" v))
+                                     70))
+                     ""))]
+        [(top-level-syntax? sym env) (values (format "(~a …)" name) "Syntax.")]
+        [else (values name "")]))))
 
 ;; "Takes 2 arguments." from a procedure-arity-mask: bit n set when n
 ;; arguments are accepted, negative when any number from some n up is.
@@ -555,8 +583,8 @@
                                      ", ")
                         (args (car (last-pair ns))))]))))
 
-(define (name-kind name env)
-  (let ([sym (string->symbol name)])
+(define (name-kind name e)
+  (let-values ([(env sym) (env-binding e (string->symbol name))])
     (cond
       [(top-level-bound? sym env)
        (if (procedure? (top-level-value sym env)) "proc" "var")]
@@ -624,9 +652,9 @@
                           (if (and (< i start) (symbol-char? (string-ref s i)))
                               (loop (+ i 1))
                               i))])
-               (string->symbol (substring s (+ open 1) end)))]
-         [env (repl-environment r)])
-    (and (top-level-bound? op env)
+               (string->symbol (substring s (+ open 1) end)))])
+    (and (let-values ([(env name) (env-binding (repl-env r) op)])
+           (top-level-bound? name env))
          (let ([entry (find (lambda (e)
                               (and (eq? (car e) op)
                                    (or (null? (cdddr e))
@@ -926,7 +954,7 @@
 ;; (values signature doc) for an item of c, r's list.
 (define (completion-description r c item)
   (case (complete-context c)
-    [(symbols) (name-description (car item) (repl-environment r))]
+    [(symbols) (name-description (car item) (repl-env r))]
     [(library)
      (let* ([s (repl-input r)] [start (complete-start c)]
             [lib (let-values ([(stack str?) (scan-parens s start)])
@@ -1254,10 +1282,10 @@
                            (* (- 1 size)
                               (- 1 (/ (repl-scroll r) (max 1 (- total rows)))))
                            size)))
-    (let ([c (complete-of r)] [env (repl-environment r)])
+    (let ([c (complete-of r)] [e (repl-env r)])
       (when c
         (complete-show c caret (* cw (- (repl-point r) (complete-start c)))
-                       lh w h (lambda (name) (name-kind name env))
+                       lh w h (lambda (name) (name-kind name e))
                        (lambda (item) (completion-description r c item)))))
     (repl-pointer! r win)))
 
@@ -1299,21 +1327,30 @@
      (repl-add! r (quote info) "F1 apps · Ctrl+Tab switch · Tab completes · \
                                 Shift+Enter newline · Ctrl+C stops")
      (repl-add! r 'info "To experiment without changing anything, \
-                         Ctrl+Shift+P opens a Private REPL.")]
+                         Ctrl+Shift+P opens a Private REPL;")
+     (repl-add! r 'info "(repl 'whole-world) opens one that sees every name \
+                         of the world's.")]
     [(private)
      (repl-add! r 'banner "Private REPL — like a private browsing window.")
-     (repl-add! r 'info "Your definitions and set!s stay in this window and \
-                         vanish when you close it;")
-     (repl-add! r 'info "the world keeps running its own code. Go ahead and \
-                         break something:")
+     (repl-add! r 'info "Your definitions stay in this window and vanish \
+                         when you close it. Of the world")
+     (repl-add! r 'info "it sees what it may read, live, and set! of that \
+                         is refused. Try:")
      (repl-examples!
       r
-      '("(define (draw-window win) (error 'oops \"broken\"))   ; harmless here"
-        "(set! *windows* '())                                ; so is this"))
+      '("(map window-title (windows))"
+        "(define (draw-window win) (error 'oops \"broken\"))  ; harmless here"))
+     (repl-add! r 'info "(exit) closes this REPL.")]
+    [(whole-world)
+     (repl-add! r 'banner "Whole-World REPL — the world's names, live, \
+                           under yours.")
+     (repl-add! r 'info "Every name of the world's is here, those it gains \
+                         later too, and set! of")
+     (repl-add! r 'info "one is refused. Your definitions stay in this \
+                         window and vanish with it.")
      (repl-add! r 'info "Calling the world's procedures still acts on the \
                          world: (set-theme! ...)")
-     (repl-add! r 'info "recolors it and (open-window ...) opens a window. \
-                         (exit) closes this REPL.")]
+     (repl-add! r 'info "recolors it. (exit) closes this REPL.")]
     [(pure)
      (repl-add! r 'banner (format "Pure Scheme REPL — plain ~a."
                                   (scheme-version)))
@@ -1331,10 +1368,10 @@
     (repl-port-set! r (make-repl-port r))
     (repl-banner! r)
     (let ([win (open-repl-window r)])
-      ;; In a private or pure REPL, (exit) closes the window, not the world.
-      (when (repl-env r)
+      ;; In a child of the world's, (exit) closes the window, not the world.
+      (unless (eq? (repl-env r) (env-root))
         (define-top-level-value 'exit (lambda args (close-window! win))
-                                (repl-env r)))
+                                (repl-environment r)))
       win)))
 
 (define-app (repl . mode) "REPL"
@@ -1366,7 +1403,9 @@
               (repl-blink-set! r (not (repl-blink r)))
               (repl-blink-at-set! r (now-ms))
               (invalidate! win)))
-    'close (lambda (win) (when (repl-proc r) (kill! (repl-proc r))))
+    'close (lambda (win)
+             (when (repl-proc r) (kill! (repl-proc r)))
+             (unless (eq? (repl-env r) (env-root)) (env-drop! (repl-env r))))
     'state r))
 
 ;; A REPL opened before a reload has no mouse or blur handler: it gets

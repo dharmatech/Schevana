@@ -224,7 +224,7 @@
   (steps 1)
   (check "inside a string it completes file names"
          (string-suffix? "/zz-complete-me.txt" (repl-input r)))
-  (let-values ([(sig doc) (name-description "after" (interaction-environment))])
+  (let-values ([(sig doc) (name-description "after" (env-root))])
     (check "a name shows its argument list and the comment above its definition"
            (and (string=? sig "(after ms thunk)")
                 (string-contains-ci? doc "a second later"))))
@@ -237,7 +237,7 @@
              (if (path-absolute? p)
                  p
                  (string-append (current-directory) "/" p)))]
-        [env (repl-environment r)])
+        [env (repl-env r)])
     (define (write-source! text)
       (call-with-output-file f (lambda (p) (display text p)) 'replace))
     (define (doc name)
@@ -260,7 +260,7 @@
            (wait-for (lambda ()
                        (equal? (doc "zz-twice")
                                '("(zz-twice a b)" "Adds them.")))))
-    (eval '(set! zz-twice car) env)
+    (env-eval '(set! zz-twice car) env)
     (check "set! to another procedure: what that procedure tells"
            (equal? (doc "zz-twice") '("(zz-twice …)" "Takes 1 argument.")))
     (check "an app's launcher, made by define-app, keeps its description"
@@ -4071,21 +4071,21 @@
     (set! *toasts* '())
     (steps 1)))
 
-;; (reload!) in a private REPL reloads the world, not the REPL's copy.
-(let ([p (private-repl)] [old render-frame!])
+;; (reload!) in a whole-world REPL reloads the world, not the REPL.
+(let ([p (repl 'whole-world)] [old render-frame!])
   (steps 2)
   (type! "(reload!)")
   (press! 'return)
   (let ([reloaded? (wait-for (lambda () (not (eq? render-frame! old))))])
     (wait-for (lambda () (not (repl-proc (repl-of p)))))
-    ;; private: the world's styles must not see it
+    ;; the REPL's own: the world's styles must not see it
     (type! "(define (title-height) 99)")
     (press! 'return)
     (wait-for (lambda () (not (repl-proc (repl-of p)))))
     (let ([w (plain-window "Plain" 300 200)])
       (let-values ([(l t r b) (frame-insets w)])
-        (check "(reload!) in a private REPL reloads the world, whose styles \
-                keep the world's names"
+        (check "(reload!) in a whole-world REPL reloads the world, whose \
+                styles keep the world's names"
                (and reloaded? (= t (title-height)) (not (= t 99)))))
       (close-window! w)))
   (close-window! p)

@@ -104,21 +104,26 @@ at the REPL shows what was typed there (input is read with its places,
 so errors in it say where too), and one `set!` to another procedure
 what that one tells.
 
-There are three kinds of REPL, each in its own environment:
+There are four kinds of REPL. The first evaluates in the world, the
+others each in a child environment of it (`services/env.ss`):
 
 | | Opens with | What a `define` does |
 | --- | --- | --- |
 | REPL | `(repl)`, Ctrl+Shift+R | changes the running world |
 | Private REPL | `(private-repl)`, Ctrl+Shift+P | stays in that window and vanishes with it, like private browsing |
+| Whole-World REPL | `(repl 'whole-world)` | the same, with every name of the world's |
 | Pure Scheme REPL | `(pure-repl)` | plain Chez Scheme, none of Schevana's names exist |
 
-A private REPL starts as a copy of the world (`copy-environment`), so it can
-use everything, and redefining `draw-window` there breaks nothing. Its
-protection covers names, not state: calling the world's procedures, such
-as `(set-theme! ...)`, `(open-window ...)` or `(reload!)`, still acts on
-the world. It is not a security sandbox either: the FFI is reachable from
-any REPL. In private and pure REPLs, `(exit)` closes the window instead
-of Schevana.
+A private REPL has all of Chez and, of the world, what reads it (the
+REPL's list: `(windows)`, `(theme 'accent)`, `(procs)` and the like),
+shared live: it sees the world as it is now. Chez refuses `set!` of a
+shared name, and redefining one, or `draw-window`, makes the REPL's own
+and breaks nothing. A whole-world REPL is shared every name of the
+world's, those the world gains later too, so there calling the world's
+procedures, such as `(set-theme! ...)`, `(open-window ...)` or
+`(reload!)`, still acts on the world. Neither is a security sandbox: the
+FFI is reachable from any REPL. In all but the world's, `(exit)` closes
+the window instead of Schevana.
 
 R6RS libraries work as in Chez: `(import (acme math))` in any REPL, in an
 app's file, or inside a body (`(let () (import (acme math)) …)`). Besides
@@ -328,8 +333,9 @@ desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows
 services/    long-lived state behind an API, no surface: crew, worker
-             threads for data-parallel loops; profile, the profiler;
-             theme-file, the saved look, written soon after each change
+             threads for data-parallel loops; env, the tree of
+             environments; profile, the profiler; theme-file, the saved
+             look, written soon after each change
 kits/        app: launching one by name, the color a name gets; color:
              hue, saturation and lightness, a color as one fixnum, the
              text color that reads on one; complete: a completion list
@@ -421,6 +427,19 @@ Decisions worth keeping in mind for the real design:
   worklet's `set!` of another. Of what
   it is handed, a worklet opens only pairs, vectors and boxes, and the
   crew refuses any procedure there that is no worklet.
+- **Environments are a tree.** The world is its root (`services/env.ss`).
+  A child is made on a base, all of Chez or the worklets', and is shared
+  only the names its parent lists, as in
+  `(env-share! e '(windows (clock . now-ms)))`. Each is a read-only
+  forwarder, a macro that makes code in the child refer to the parent's
+  binding itself: live, at no cost a call, and Chez refuses `set!` of it,
+  as R6RS refuses `set!` of an import. A setter may take the `set!` instead (`env-share-setter!`), and
+  the child's `define` makes its own. So a child changes its parent's
+  state only through what it was shared. Every name of the world's,
+  followed, is for the Whole-World REPL alone. A child on Chez's base
+  still reaches the world through Chez, so it organizes state and
+  confines nothing; the sandboxes that do confine come with apps in
+  their own environments.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
   (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
   of the range on worker threads, the caller among them, and returns when
@@ -925,8 +944,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Known gaps and open questions
 
-- Apps all share one environment. REPLs can be private or pure, but apps
-  can't yet be namespaced from each other the same way.
+- Apps all share one environment. REPLs evaluate in children of the
+  world's, but apps don't have environments of their own yet.
 - A frame draws everything under its rectangle on the main thread. The
   rectangle is one bounding box (the top bar's clock and a window near
   the bottom make a frame of all between them) and grows to hold whole
