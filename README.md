@@ -9,15 +9,17 @@ break it from a REPL that runs inside the world it changes.
 
 The only C code involved is SDL3 (host window and input) and Cairo (2D
 drawing), both called through Chez's FFI. There is no build step: the whole
-world compiles from source in about 0.1 s at startup.
+world compiles from source in about 0.8 s at startup, and again at each
+`(reload!)`.
 
 **WARNING:** Schevana is a toy. It's meant to be a happy place for Lisp
 enthusiasts, and it doesn't pretend to be a serious desktop replacement.
 Simplicity is priority #1. The desktop is just a function of the
-environment, drawn by the CPU in a single thread, and the apps see the
-whole environment. Future versions of Schevana might offload some work to
-threads, use the GPU for window composition, and make it possible to write
-sandboxed apps with limited permissions.
+environment, drawn by the CPU on the main thread. The apps that tune the
+world see all of it; the others run in sandboxes, with the permissions they
+ask for, and loops and background jobs can go to worker threads. Future
+versions of Schevana might draw on those threads too, and use the GPU for
+window composition.
 
 ## Running
 
@@ -54,8 +56,9 @@ the tests below on Apple silicon, type `chez` for `scheme` and put
 your own apps, styles, palettes and wallpapers in `~/.schevana.d/` (see
 "Your own apps, styles, palettes and wallpapers" below). The look you choose
 in the Settings app is saved to `~/.schevana-theme.ss` (plain data, never
-evaluated) and loaded at boot too. The host window's taskbar icon is the
-wallpaper's λ in your theme's colors, drawn by `draw-app-icon` (redefine
+evaluated) and loaded at boot too, and so is what you allow the apps in
+sandboxes, in `~/.schevana.d/permissions.ss`. The host window's taskbar
+icon is the wallpaper's λ in your theme's colors, drawn by `draw-app-icon` (redefine
 it, then call `(update-host-icon!)`). GNOME and similar desktops take app
 icons from `.desktop` files instead, so install one once (it goes under
 `~/.local/share`; `--uninstall-desktop` removes it):
@@ -161,8 +164,10 @@ through `(fork kind 'name n 'share names 'setters pairs)`: the world and
 world namespaces every kind, a sandbox sandboxes and threads, the others
 none; `(fork)` lists them.
 
-R6RS libraries work as in Chez: `(import (acme math))` in any REPL, in an
-app's file, or inside a body (`(let () (import (acme math)) …)`). Besides
+R6RS libraries work as in Chez: `(import (acme math))` in a REPL, in the
+file of an app that runs in the world, or inside a body (`(let () (import
+(acme math)) …)`). A sandbox has no `import`: a library may name anything,
+and a sandbox holds only what it is given. Besides
 Chez's usual places, import looks in `~/.schevana.d/lib` (so
 `~/.schevana.d/lib/acme/math.sls`) and in the tree's `lib/`, for libraries
 shipped with Schevana (none yet), and `(add-library-directory! dir)` adds
@@ -171,7 +176,7 @@ next to its source (Chez's `compile-imported-libraries` stays off). Two
 things differ from Schevana's own code. A library is loaded once per
 session: after editing one, `load` its file again and import it again;
 `(reload!)` doesn't. And an import adds names to the environment it runs
-in, the world's for apps and the REPL, so a library exporting a name
+in, the world's for its apps and a REPL at `/`, so a library exporting a name
 Schevana also defines changes what that name means in code you type
 afterwards; `(only …)` or `(prefix … acme:)` keep them apart.
 
@@ -295,7 +300,7 @@ the newest first; `(profile-tick-ms seq)`, `(profile-tick-phase-ms seq
 the most first), `(profile-tick-ref seq 'heap)` and
 `(profile-tick-uses seq)`
 (what each key spent: a window's handler, a surface, a process) read a
-tick, and `profile-second-ms`, ... a second; `(profile-totals seconds)`
+tick, and `profile-second-phase-ms`, ... a second; `(profile-totals seconds)`
 sums seconds by subject, the most first, each with its parts, and
 `(profile-totals ticks #t)` ticks. The same as Monitor's Ticks, for a
 reader without eyes (a headless agent, a test): `(profile-slow-ticks)`
@@ -347,24 +352,27 @@ and the new definition takes the old one's place.
 ```
 
 To keep one, drop it into a file of its own in `~/.schevana.d/`, under
-`apps/`, `styles/`, `palettes/` or `wallpapers/`, with any code your apps
-share under `kits/` (or `services/`, if it keeps state) and your own bars,
-menus or keys under `desktop/`. These folders load at boot after
+`apps/`, `styles/`, `palettes/` or `wallpapers/`, with any code your styles
+and bars share under `kits/` (or `services/`, if it keeps state) and your
+own bars, menus or keys under `desktop/`. These folders load at boot after
 Schevana's own (`kits` first, then `services`, `desktop`, `styles`,
 `palettes`, `wallpapers` and `apps`, each in
 file-name order) and again at every `(reload!)`. Settings lists your
 styles and palettes with the others, and the saved look may name them.
-An app of yours runs in a sandbox of its own: its file's first form says
-what it needs, `(app-requests window draw timers)`, and the launcher asks
-you before its first run (Settings, Permissions changes it later).
+An app of yours runs in a sandbox of its own, which holds only what it asks
+for, so not your kits, which are the world's. Its file is named after it, and
+its first form says what it needs, of the bundles `window`, `draw`, `ui`,
+`timers`, `toasts` and `launch`: the Counter above, in `counter.ss`, starts
+with `(app-requests window draw)`. The launcher asks you before its first
+run, and Settings, Permissions changes it later.
 `(apps)`, `(styles)`, `(palettes)`, `(wallpapers)` and
 `(surfaces)` list what is registered.
 
 ## Architecture
 
 ```
-apps/        ordinary procedures: repl  clock  envs  life  boids  sketch
-             monitor  settings  tasks
+apps/        in the world: repl  envs  monitor  settings  tasks
+             each in a sandbox of its own: boids  clock  life  sketch
 wallpapers/  desktop fills: gradient  flat  shade
 palettes/    named colors: catppuccin  crayons  forest  genera  gruvbox
              interlisp  neon  nord  paper  phosphor  sakura  sunset
@@ -374,10 +382,12 @@ styles/      styles: cadr  cons  curses  draft  fold  genera  halo
 desktop/     the screen's own surfaces: wallpaper  taskbar  topbar  menu
              toasts; status segments, the crash panel, the app icon, the
              default keys, the commands that arrange the windows, the
-             file dialog (`open-file-dialog`)
+             file dialog (`open-file-dialog`), the window that asks what
+             an app may do (`open-permissions-dialog`)
 services/    long-lived state behind an API, no surface: crew, worker
              threads for data-parallel loops; env, the tree of
-             environments; profile, the profiler; theme-file, the saved
+             environments; grant, the apps' sandboxes, their bundles and
+             what is allowed; profile, the profiler; theme-file, the saved
              look, written soon after each change; vat, threads with a
              mailbox and a sandbox, and their background jobs
 kits/        app: launching one by name, the color a name gets; color:
@@ -391,11 +401,14 @@ kits/        app: launching one by name, the color a name gets; color:
              text: the widest of some strings, a string centered, cut to
              fit or wrapped; theme: which layer gives a setting, what a
              palette would show; ui: immediate-mode widgets (buttons,
-             text fields and areas, dropdowns, tabs, checkboxes, a
-             table, a tree, chips, a date picker, scroll views,
-             tooltips, a dialog, charts: stacked bars, lines, a
-             sparkline, a legend), keyboard focus
+             text fields and areas, dropdowns, tabs, checkboxes, radios,
+             steppers, a table, a tree, chips, a date picker, scroll
+             views, a toolbar, a form, a movable split, breadcrumbs,
+             tooltips, dialogs and sheets, windows that wait on one
+             another, charts: stacked bars, lines, a sparkline, a
+             legend), keyboard focus
 src/system   main loop, timers, inject!, boot, reload!, loading the folders
+             (an app's file through a hook, which grant sets)
 src/wm       window records, z-order, focus, hit testing, drag/resize,
              dispatch; the registries of surfaces and strips
 src/proc     processes + watchdog (Chez engines); notify, report-error!;
@@ -444,7 +457,8 @@ at each call, so redefining it at the REPL shows on the next frame.
 Decisions worth keeping in mind for the real design:
 
 - **Everything is top-level.** No R6RS libraries on purpose. Every
-  definition lives in the interaction environment, so redefining
+  definition lives in the interaction environment (an app in a sandbox's, at
+  the top level of its own), so redefining
   `draw-window` or `draw-wallpaper` at the REPL changes the running system
   on the next frame. State that must survive `(reload!)` is declared with
   `defvar`, and record types are `nongenerative`.
@@ -473,9 +487,10 @@ Decisions worth keeping in mind for the real design:
   that is no worklet.
 - **Environments are a tree.** The world is its root (`services/env.ss`).
   A child is of a kind, `(env-fork e 'sandbox 'name 'tally 'share
-  '(add!))`, which says its base, all of Chez or its pure core, what it
-  is shared at once and what it may fork in turn (a registry, which vats
-  add threads to); `(env-child e name base)` makes a bare one. It is
+  '(add!))`, which says its base (all of Chez, what is always safe, or
+  Scheme's pure core), what it is shared at once and what it may fork in
+  turn (a registry, which vats and apps add to);
+  `(env-child e name base)` makes a bare one. It is
   shared only the names its parent lists, as in
   `(env-share! e '(windows (clock . now-ms)))`. Each is a read-only
   forwarder, a macro that makes code in the child refer to the parent's
@@ -484,9 +499,9 @@ Decisions worth keeping in mind for the real design:
   assign read-only variable farewell". A setter may take the `set!`
   instead (`env-share-setter!`), and the child's `define` makes its own.
   So a child changes its parent's state only through what it was shared.
-  A sandbox's children are sandboxes on its base, shared what it holds:
-  it narrows what it hands down, never widens it. Every name of the
-  world's, followed, is a world namespace's alone, which a person asks
+  A sandbox's children are sandboxes on its base or a smaller one, shared
+  what it holds: it narrows what it hands down, never widens it. Every name
+  of the world's, followed, is a world namespace's alone, which a person asks
   for. A dropped one is marked so (`env-dropped?`): what holds it knows.
   A child on Chez's base still reaches the world through Chez, so it
   organizes state and confines nothing. The confined base is what is
@@ -505,8 +520,8 @@ Decisions worth keeping in mind for the real design:
   denied"); a name in no bundle it requests is unbound. Its `define-app`
   registers that app alone, and what it defines stays in its sandbox
   (Boids' `vec` is no name of the world's): only `(clock)` at the world's
-  REPL reaches in, to open Clock. Settings, Monitor, Tasks, the REPL and Environments request
-  nothing and run in the world, which they tune.
+  REPL reaches in, to open Clock. Settings, Monitor, Tasks, the REPL and
+  Environments request nothing and run in the world, which they tune.
 - **A crew of threads for loops.** `(crew-for start end worklet arg ...)`
   (`services/crew.ss`) calls `(worklet lo hi arg ...)` on disjoint slices
   of the range on worker threads, the caller among them, and returns when
@@ -787,14 +802,15 @@ Decisions worth keeping in mind for the real design:
   behind its back. The next frame paints it again first when one of those
   changes, and is the whole screen; nothing else does: a `draw-wallpaper`
   that reads the clock shows a still picture.
-- **Drawing is single-threaded.** Everything runs on the main thread,
-  drawing included. A frame is drawn into a second screen buffer; then
+- **Drawing is single-threaded.** Drawing and the world's state stay on
+  the main thread; worker threads run only worklets and what a vat's sandbox
+  holds. A frame is drawn into a second screen buffer; then
   each row of its rectangle is compared with the screen's, and only the
   rows that changed are copied onto the screen and uploaded, each run of
   them as one full-width rectangle. The other rows need no look: after
   every frame the second buffer equals the screen, and a new canvas asks
   for the whole screen. A frame that changes nothing uploads and
-  presents nothing. Monitor shows where each tick's time goes (below),
+  presents nothing. Monitor shows where each tick's time goes (above),
   or, with profiling off, the last frame's time (drawing it and
   comparing its rows) and the rows it uploaded. A process may be
   switched out at any call while frames go on, so typed in a REPL (or
@@ -802,8 +818,8 @@ Decisions worth keeping in mind for the real design:
   for an area is atomic, and freeing the canvas or a cache of surfaces
   runs with interrupts off: no frame sees it half done. Next on the
   compositor plan: every window drawn into an image of its own when it
-  changes, and the images composed, on the CPU and then on the GPU;
-  threads only when measured.
+  changes, and the images composed, on the CPU and then on the GPU, with
+  the worker threads drawing and composing where that is measured to help.
 - **The profiler hooks into the core.** `src/proc.ss` keeps one hook,
   `*profile-span*` (`#f`, or a pair of procedures, begin and end), and
   `with-profile-span`, in which five places run their work: the step
@@ -865,8 +881,9 @@ deleted there, the keys listed; a reload that changes the task record
 and keeps every task) and from the REPL's procedures, uses Monitor (the
 profiler collecting with it closed, its graphs, a window's name and a
 process's Kill, Profiling off, the rows that focus and kill then, and on
-again), reloads the sources (the profiler's history kept), runs the
-host's SDL code (uploads, presents, resize events, the window's size)
+again), uses Environments (a fork of each kind, sharing, loading through
+the file dialog, syncing, dropping, an app's bundles), reloads the sources
+(the profiler's history kept), runs the host's SDL code (uploads, presents, resize events, the window's size)
 against a stand-in that replaces every SDL call, so no window opens, and
 writes screenshots to the given folder. It asks Sketch's permissions
 through the launcher and Settings, never touches your real
@@ -915,7 +932,11 @@ inside an engine, on another thread or past the stack's depth untimed,
 a raise out of a span, a collector made to fail turning itself off with
 one error while the world draws on, a closed window and an ended
 process not kept alive, two windows of one title told apart, the
-history's lengths, and the charts' colors in every style.
+history's lengths, and the charts' colors in every style. And what runs
+apart: worklets and what they are refused, the crew, environments and what
+a child may do with its shares, the confined base, vats and their jobs,
+and apps in sandboxes (their bundles and stubs, a decision saved, read back
+and denied, an app of yours that requests nothing).
 
 ```bash
 scheme --script tests/frame.ss out
@@ -961,15 +982,19 @@ scheme --script tests/sources.ss
 
 This checks the sources themselves, and quickly: every line of every
 source file is at most 80 characters, no top-level name is defined in
-two files, `src/` stays within its size budget, counted in tokens so
-that comments, names and line breaks are free (raise it on purpose),
-every file in a folder registers what it defines, under its own name
-(a kit's with its prefix, the desktop's plain), every style sets only
-settings that exist, in the kits, the desktop layer, Tasks and Settings
-only the drawing procedures (parts, `draw-…`, `ui-draw-…`,
-`complete-draw-…`, `tasks-draw-…`, `settings-draw-…`) draw or name a
-theme color, the edit kit never does, and only styles call a part's
-built-in body.
+two files (an app in a sandbox's names are its own), `src/` stays within
+its size budget, counted in tokens so that comments, names and line breaks
+are free (raise it on purpose), outside `src/` no file sets a global another
+defines, but the core's hooks, nothing reaches C, and only a world namespace
+shares the whole world, every file in a folder registers what it defines,
+under its own name (a kit's with its prefix, the desktop's plain), every
+style sets only settings that exist, in the kits, the services, the desktop
+layer, Tasks, Settings and Environments only the drawing procedures (parts,
+`draw-…`, `ui-draw-…`, `complete-draw-…`, `tasks-draw-…`, `settings-draw-…`,
+`envs-draw-…`) draw or name a theme color, the edit kit never does, only
+styles call a part's built-in body, what an app in a sandbox defines stays
+there, a bundle names what the world has, each name in one bundle, and a
+tree app requests what the table approves.
 
 ```bash
 scheme --script tests/bench.ss out               # [frames]
@@ -1038,8 +1063,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Known gaps and open questions
 
-- Apps all share one environment. REPLs evaluate in children of the
-  world's, but apps don't have environments of their own yet.
+- Every start and `(reload!)` compiles the whole tree again, about 0.8 s,
+  nearly all of it the compiler's: load time grows with the source, about
+  0.63 ms a KB. Loading compiled files takes about 0.1 s, were there a cache
+  of them.
+- An app in a sandbox keeps no files and writes only to its log (`env-log`):
+  the bundles for files and the console are still to come. Environments opens
+  a REPL in its sandbox; its window's menu does not yet.
 - A frame draws everything under its rectangle on the main thread. The
   rectangle is one bounding box (the top bar's clock and a window near
   the bottom make a frame of all between them) and grows to hold whole
@@ -1049,18 +1079,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   ones do, are drawn again with the clock every second: with 30 tiled
   Life windows, paused, that frame takes about 3.4 ms at 100% and 7.5 ms
   at 200% (0.7 ms cascaded). With 30 animating Life windows a frame takes
-  about 4.3 ms at 100% and 8.9 ms at 200%; 30 overlapping windows at 200%
-  take about 39 ms a frame, and a keystroke in a REPL among four other
-  windows shows about 9 ms later at 200%. A REPL alone shows it 2 ms
-  later (2.5 ms on a 4K screen), and the clock's second on an empty 4K
+  about 4.8 ms at 100% and 11 ms at 200%; 30 overlapping windows at 200%
+  take about 43 ms a frame, and a keystroke in a REPL among four other
+  windows shows about 17 ms later at 200%. A REPL alone shows it 2.6 ms
+  later (2.9 ms on a 4K screen), and the clock's second on an empty 4K
   screen takes 0.1 ms (`tests/bench.ss`). Meanwhile a busy REPL
   evaluation runs only between frames: with 30 Life windows animating
   at 200% it gets about half of what it gets with them paused. Next on
   the compositor plan: each window drawn into an image of its own, only
   when it changes, and the images composed on the CPU, then on the GPU.
 - Every theme change paints the wallpaper again: a theme change takes
-  about 18 ms at 100% and 67 ms at 200% until its frame is drawn, so
-  dragging a color slider in Settings shows about 15 frames a second at
+  about 19 ms at 100% and 71 ms at 200% until its frame is drawn, so
+  dragging a color slider in Settings shows about 14 frames a second at
   200%.
 - The built-in styles change mostly the windows (Genera and the CADR
   every widget too, Interlisp its scroll bars), though everything is a
@@ -1075,7 +1105,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   color list and its pane's scrolling are still its own. The
   "stable GUI API" question stays open: keep growing these immediate-mode
   procedures, or describe retained widget trees as data?
-- Tasks redraws its whole window for a keystroke: about 9 ms on a 4K
+- Tasks redraws its whole window for a keystroke: about 11 ms on a 4K
   screen at 200%, maximized (half of it is any maximized window's frame:
   the wallpaper under it, its rows compared). In a description of 65,536
   characters a keystroke costs within a millisecond of that: a text's
@@ -1114,6 +1144,5 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   and files come next).
 - No persistence. Windows and state vanish on exit (`fasl-write` of app
   state is a natural first step).
-- Portability: library names for macOS and Windows are in `ffi.ss` but have
-  not been tried. macOS will need the loop on the main thread, which it
-  already is.
+- Portability: it runs on Linux and on a Mac. The library names for Windows
+  are in `src/ffi.ss` but have not been tried.

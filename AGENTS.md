@@ -44,14 +44,14 @@ before it:
 |---|---|
 | `src/` | The core: the world (windows, focus, the theme's layers, processes, timers, the canvas, the host), its registries, the hooks later layers fill, and the caches its own procedures need. |
 | `kits/` | Libraries, pure or almost. |
-| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, vats and their jobs, the profiler, the saved look. |
+| `services/` | Long-lived state with an API and no surface: the crew of worker threads, the tree of environments, the apps' sandboxes and what they are allowed, vats and their jobs, the profiler, the saved look. |
 | `desktop/` | The screen's own surfaces and the desktop's behavior: wallpaper, bars, menu, toasts, keys, arranging windows. |
 | `styles/`, `palettes/`, `wallpapers/` | One definition per file, registered by its definer. |
 | `apps/` | One app per file, defined with `define-app`; one whose first form is `app-requests` runs in a sandbox of its own (`services/grant.ss`). |
 
 - **The core never depends on a later layer.** It reaches them only
   through registries, parts and settings they fill, and hooks they set
-  (`*profile-span*`, `*theme-saver*`, `*window-gone*`).
+  (`*profile-span*`, `*theme-saver*`, `*window-gone*`, `*app-loader*`).
 - **The core has a budget**, 14,200 tokens (atoms as read; comments,
   whitespace and names' lengths are free), in `tests/sources.ss`. Don't
   join lines or shorten names to fit it. Code the core doesn't need moves
