@@ -1162,7 +1162,47 @@
 
 ;;; ------------------------------------------------------------------ Springies
 ;;; The springs' laws as XSpringies has them, Runge-Kutta against motion
-;;; known exactly, the walls, and the ball.
+;;; known exactly, the walls, the models, and the window and its controls.
+
+;; Springies runs in its sandbox (services/grant.ss): its names,
+;; forwarded here.
+(define springies-box (grant-env 'springies))
+
+(check "Springies runs in its sandbox, holding its bundles, allowed by the \
+        table, and its names stay there: pt is none of the world's; its \
+        controls window is no app's"
+       (let* ([held (environment-symbols (env-environment springies-box))]
+              [world (environment-symbols *world-env*)]
+              [win (springies)]
+              [cw (find-window "Springies — Controls")]
+              [ok (and (equal? (env-path springies-box) "/apps/springies")
+                       (equal? (grant-requested 'springies)
+                               '(window draw ui timers))
+                       (null? (grant-undecided 'springies))
+                       (memq 'ui-checkbox held) (not (memq 'notify held))
+                       (memq 'pt held) (memq 'springies-step held)
+                       (not (memq 'pt world)) (not (memq 'pt+ world))
+                       (not (memq 'springies-step world))
+                       (eq? (window-app win) 'springies)
+                       (not (window-app cw)))])
+         (close-window! win)
+         ok))
+
+;; For the checks below, here and not in the world they test: this suite's
+;; own view of the sandbox.
+(for-each (lambda (n)
+            (define-top-level-syntax n
+              (forwarder-to (datum->syntax (env-anchor springies-box) n))))
+          '(make-pt pt-x pt-y pt-zero pt+ pt- pt* pt-norm make-particle
+            particle? particle-position particle-velocity particle-mass
+            particle-radius particle-bounce make-spring spring-a spring-b
+            spring-rest-length spring-force make-tether tether-particle
+            tether-point tether-force springies-forces springies-rate
+            springies-rk4 springies-step springies-setting
+            springies-set-setting springies-frame springies-model-particles
+            springies-model-springs springies-model-settings springies-kick
+            springies-ball springies-models springies-build springies-nearest
+            springies-box-size springies-draw-controls))
 
 (define (test-particle x y vx vy m e)
   (make-particle (make-pt x y) (make-pt vx vy) m e))
@@ -1558,9 +1598,12 @@
          (let-values ([(w h) (window-content-size (controls))]
                       [(dx dy dw dh) (desktop-rect)])
            (define (grown-by! dw)
-             (fluid-let ([springies-controls-size
-                          (lambda () (values (+ w dw) h))])
-               (steps 1))
+             (let* ([env (env-environment springies-box)]
+                    [real (top-level-value 'springies-controls-size env)])
+               (set-top-level-value! 'springies-controls-size
+                                     (lambda () (values (+ w dw) h)) env)
+               (steps 1)
+               (set-top-level-value! 'springies-controls-size real env))
              (let-values ([(w2 h2) (window-content-size (controls))])
                (and (= w2 (+ w dw)) (= h2 h))))
            (and (grown-by! 40)

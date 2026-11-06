@@ -9,11 +9,16 @@
 ;;; new one. The world is y-up, as XSpringies' is; only drawing flips it.
 ;;; The window keeps the model, its particles, springs and settings, as
 ;;; plain data:
-;;; (window-ref win 'particles) => #(#<particle at 214.3 260.0 ...> ...)
+;;; (particle-position (vector-ref (window-ref win 'particles) 0)) => a pt
 ;;; (springies-set! win 'time-step 0.002)
 ;;; 1 2 3: ball, tire, snake · R: start over · K: kick · G: gravity
 ;;; Space: pause · drag: pull a mass
 ;;; H: the controls window, beside the box (it closes with the box)
+;;;
+;;; It runs in a sandbox (services/grant.ss), where the names above are: a
+;;; REPL in /apps/springies has them.
+
+(app-requests window draw ui timers)
 
 ;;; ------------------------------------------------------------------ points
 
@@ -22,9 +27,6 @@
 (define-record-type pt
   (nongenerative schevana-springies-pt)
   (fields x y))
-
-(record-writer (record-type-descriptor pt)
-  (lambda (p port wr) (fprintf port "#<pt ~a ~a>" (pt-x p) (pt-y p))))
 
 (define pt-zero (make-pt 0.0 0.0))
 
@@ -42,12 +44,6 @@
 (define-record-type particle
   (nongenerative schevana-springies-particle)
   (fields position velocity mass elasticity))
-
-(record-writer (record-type-descriptor particle)
-  (lambda (p port wr)
-    (let ([x (particle-position p)] [v (particle-velocity p)])
-      (fprintf port "#<particle at ~a ~a moving ~a ~a>"
-               (pt-x x) (pt-y x) (pt-x v) (pt-y v)))))
 
 ;; Its size on the screen and against the walls: the heavier, the bigger.
 (define (particle-radius p) (* 3.0 (sqrt (particle-mass p))))
@@ -83,11 +79,6 @@
 (define-record-type spring
   (nongenerative schevana-springies-spring)
   (fields a b stiffness damping rest-length))
-
-(record-writer (record-type-descriptor spring)
-  (lambda (s port wr)
-    (fprintf port "#<spring ~a-~a at rest ~a>"
-             (spring-a s) (spring-b s) (spring-rest-length s))))
 
 ;; The force spring s pulls its particle a with (b feels the opposite):
 ;; Hooke's, along the spring, and damping, against how fast its ends move
@@ -193,8 +184,8 @@
 ;; (gravity 980.0 gravity? #t time-step 0.004 steps 4)
 
 (define (springies-setting settings key)
-  (let ([v (plist-ref settings key 'none)])
-    (if (eq? v 'none) (errorf 'springies-setting "no setting ~s" key) v)))
+  (let ([at (memq key settings)])
+    (if at (cadr at) (errorf 'springies-setting "no setting ~s" key))))
 
 ;; Settings with key's value v, the others as they were, in their order.
 (define (springies-set-setting settings key v)
@@ -496,14 +487,15 @@
                   (lambda () (set! controls-win #f))))))
     (define (frame! win)
       (let-values ([(w h) (springies-box-size win)])
-        (let ([t0 (current-time 'time-monotonic)]
+        (let ([t0 (now-ns)]
               [springs (window-ref win 'springs)]
               [tether (window-ref win 'tether)])
           (window-set! win 'particles
             (springies-frame (window-ref win 'particles)
                              (if tether (cons tether springs) springs)
                              (window-ref win 'settings) w h))
-          (set! frame-ms (+ (* frame-ms 0.95) (* (ms-since t0) 0.05))))))
+          (set! frame-ms (+ (* frame-ms 0.95)
+                            (* (/ (- (now-ns) t0) 1e6) 0.05))))))
     (let ([win
            (open-window "Springies"
              'size (cons w (+ h (springies-bar-height)))
@@ -679,30 +671,34 @@
       (list (window-ref box-win 'model) (window-ref box-win 'settings)
             (window-ref box-win 'running?)))
     (let-values ([(w h) (springies-controls-size)])
-      (parameterize ([new-window-position
-                      (cons (+ (window-x box-win) (window-w box-win) 12)
-                            (window-y box-win))])
-        (apply open-window "Springies — Controls"
-               'size (cons w h)
-               'app #f
-               'draw (lambda (win w h)
-                       (set! shown (now-shown))
-                       (ui-begin! ui)
-                       (springies-draw-controls ui box-win w)
-                       (ui-end! ui w h))
-               'close (lambda (win) (on-close))
-               (append
-                (ui-handlers ui 'key (lambda (win key mods)
-                                       (window-call box-win 'key key mods)
-                                       #t))
-                ;; the kit's tick, then: a change from elsewhere shows, and
-                ;; fonts grown in Settings get room for the rows
-                (list 'tick (lambda (win)
-                              (ui-tick ui win)
-                              (let-values ([(w h) (springies-controls-size)])
-                                (springies-grow-to! win w h))
-                              (unless (equal? shown (now-shown))
-                                (invalidate! win))))))))))
+      (let ([win
+             (apply open-window "Springies — Controls"
+                    'size (cons w h)
+                    'pos (cons (+ (window-x box-win) (window-w box-win) 12)
+                               (window-y box-win))
+                    'app #f
+                    'draw (lambda (win w h)
+                            (set! shown (now-shown))
+                            (ui-begin! ui)
+                            (springies-draw-controls ui box-win w)
+                            (ui-end! ui w h))
+                    'close (lambda (win) (on-close))
+                    (append
+                     (ui-handlers ui 'key (lambda (win key mods)
+                                            (window-call box-win 'key key
+                                                         mods)
+                                            #t))
+                     ;; the kit's tick, then: a change from elsewhere shows,
+                     ;; and fonts grown in Settings get room for the rows
+                     (list 'tick (lambda (win)
+                                   (ui-tick ui win)
+                                   (let-values ([(w h)
+                                                 (springies-controls-size)])
+                                     (springies-grow-to! win w h))
+                                   (unless (equal? shown (now-shown))
+                                     (invalidate! win))))))])
+        (springies-keep-on-desktop! win)
+        win))))
 
 ;; Grows win's content to at least w × h, moved left or up as far as it
 ;; takes to stay on the desktop. It never shrinks: a size set by hand
@@ -711,7 +707,11 @@
   (let-values ([(cw ch) (window-content-size win)])
     (when (and (or (> w cw) (> h ch)) (not (shaded? win)))
       (resize-window! win (max w cw) (max h ch))
-      (let-values ([(dx dy dw dh) (desktop-rect)])
-        (move-window! win
-          (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
-          (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))))
+      (springies-keep-on-desktop! win))))
+
+;; Moves win left or up as far as it takes to stay on the desktop.
+(define (springies-keep-on-desktop! win)
+  (let-values ([(dx dy dw dh) (desktop-rect)])
+    (move-window! win
+      (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
+      (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))
