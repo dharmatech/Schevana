@@ -1558,6 +1558,22 @@
                                       (springies-draw-controls ui win w)))))])
              (cairo-surface-destroy s)
              (<= bottom h))))
+  (check "Springies: the controls window paints the style's page under its \
+          rows"
+         (let*-values ([(cw) (controls)] [(w h) (window-content-size cw)])
+           (let* ([surfaces '()]
+                  [real ui-draw-surface]
+                  [s (fluid-let ([ui-draw-surface
+                                  (lambda (x y w h flags)
+                                    (set! surfaces (cons flags surfaces))
+                                    (real x y w h flags))])
+                       (image (exact (ceiling w)) (exact (ceiling h)) 1
+                              (lambda ()
+                                (parameterize ([current-window cw])
+                                  ((hashtable-ref (window-handlers cw) 'draw #f)
+                                   cw w h)))))])
+             (cairo-surface-destroy s)
+             (and (member '(page) surfaces) #t))))
   (check "Springies: its model buttons choose the model"
          (begin
            (press! (controls) 'snake)

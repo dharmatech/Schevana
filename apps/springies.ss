@@ -295,7 +295,10 @@
     (make-springies-model
      particles
      (springies-springs particles (springies-ladder 0 n n #t) 10000.0 12.0)
-     '(gravity 980.0 gravity? #t time-step 0.004 steps 4))))
+     '(gravity 980.0
+       gravity? #t
+       time-step 0.004
+       steps 4))))
 
 ;; A tire: its tread a band between two rings of 16, and a heavy hub at
 ;; the center on a spoke to each particle of the inner ring. The tread is
@@ -319,7 +322,10 @@
                                 (map (lambda (i) (list (* 2 n) (+ n i)))
                                      (iota n))
                                 20000.0 15.0))
-     '(gravity 980.0 gravity? #t time-step 0.003 steps 5))))
+     '(gravity 980.0
+       gravity? #t
+       time-step 0.003
+       steps 5))))
 
 ;; A snake: a ladder of 12 rungs, each half again as long as the gap
 ;; between them. No gravity, and a kick to set it going, so it floats and
@@ -343,10 +349,16 @@
     (make-springies-model
      particles
      (springies-springs particles (springies-ladder 0 k k #f) 3000.0 5.0)
-     '(gravity 980.0 gravity? #f time-step 0.005 steps 4))))
+     '(gravity 980.0
+       gravity? #f
+       time-step 0.005
+       steps 4))))
 
 ;; The models by name, in the order of their keys: 1, 2 and 3.
-(define springies-models '(ball tire snake))
+(define springies-models
+  '(ball
+    tire
+    snake))
 
 ;; The model named name, made to fit a w × h box.
 (define (springies-build name w h)
@@ -565,7 +577,8 @@
 ;; The sliders' settings, their ranges and the labels of their rows. The
 ;; time step stops at 10 ms: at 15 the ball and the tire blow up.
 (define springies-ranges
-  '((time-step 0.0005 0.01 "time step") (steps 1 16 "steps a frame")))
+  '((time-step 0.0005 0.01 "time step")
+    (steps 1 16 "steps a frame")))
 
 (define (springies-readout key v)
   (case key
@@ -576,9 +589,18 @@
 (define (springies-slider-value key v)
   (if (eq? key 'steps) (exact (round v)) v))
 
-(define springies-model-labels '("Ball (1)" "Tire (2)" "Snake (3)"))
-(define springies-buttons '("Start over (R)" "Kick (K)"))
-(define springies-switches '("Gravity (G)" "Pause (Space)"))
+(define springies-model-labels
+  '("Ball (1)"
+    "Tire (2)"
+    "Snake (3)"))
+
+(define springies-buttons
+  '("Start over (R)"
+    "Kick (K)"))
+
+(define springies-switches
+  '("Gravity (G)"
+    "Pause (Space)"))
 
 (define (springies-label-width)
   (+ 12 (text-widest (map cadddr springies-ranges) 'ui)))
@@ -586,24 +608,22 @@
 (define (springies-readout-width) (+ 12 (text-width "00.0 ms" 'ui)))
 
 ;; The controls window's content size: room for its rows, as
-;; springies-draw-controls lays them out, with sliders 140 wide.
+;; springies-draw-controls lays them out, with sliders 140 wide, and its
+;; buttons and switches as wide as the widest of their row, in the
+;; style's own sizes.
 (define (springies-controls-size)
   (let ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)]
         [ch (ui-control-height)])
-    (define (in-a-row labels)   ; as wide as the widest label, each
-      (+ (* (length labels) (+ 32 (text-widest labels 'ui)))
-         (* (- (length labels) 1) gap)))
+    (define (button-w label) (let-values ([(w h) (ui-button-size label #f)]) w))
+    (define (switch-w label) (let-values ([(w h) (ui-checkbox-size label)]) w))
+    (define (in-a-row widths)
+      (+ (* (length widths) (apply max widths))
+         (* (- (length widths) 1) gap)))
     (values (+ pad pad
                (max (+ (springies-label-width) 140 (springies-readout-width))
-                    (in-a-row springies-model-labels)
-                    (in-a-row springies-buttons)
-                    (* 2 (+ gap (fold-left max 0
-                                           (map (lambda (label)
-                                                  (let-values
-                                                      ([(w h) (ui-checkbox-size
-                                                               label)])
-                                                    w))
-                                                springies-switches))))))
+                    (in-a-row (map button-w springies-model-labels))
+                    (in-a-row (map button-w springies-buttons))
+                    (in-a-row (map switch-w springies-switches))))
             (+ pad (* 3 (+ ch gap)) (* 2 gap)
                (* (length springies-ranges) (+ sh gap))
                gap (font-line-height 'ui-small) pad))))
@@ -680,6 +700,7 @@
                     'draw (lambda (win w h)
                             (set! shown (now-shown))
                             (ui-begin! ui)
+                            (ui-draw-surface 0 0 w h '(page))
                             (springies-draw-controls ui box-win w)
                             (ui-end! ui w h))
                     'close (lambda (win) (on-close))
