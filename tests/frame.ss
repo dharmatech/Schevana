@@ -617,6 +617,20 @@
 ;;; 200%; unfocused, or with the dialog over a field that had the keyboard
 ;;; (no caret blinks under it), Tasks asks for none.
 
+;; Tasks sized by its own measures, at the screen's left: wide, from where
+;; its details sit beside its view; narrow, its least width. And a point
+;; outside it, on the desktop below it.
+(define (frame-tasks-wide! w)
+  (let-values ([(mw mh) (tasks-min-size)])
+    (resize-window! w (max mw (tasks-wide-width (window-ref w 'state)))
+                    (max 600 mh))
+    (move-window! w 0 70)))
+(define (frame-tasks-narrow! w)
+  (let-values ([(mw mh) (tasks-min-size)])
+    (resize-window! w mw (max 600 mh))))
+(define (frame-tasks-outside w)
+  (values 640 (min (- (screen-h) 40) (+ (window-y w) (window-h w) 20))))
+
 (define (tasks-scene pct)
   (set-theme! 'scale pct)
   (test-clear-world!)
@@ -650,8 +664,7 @@
       (steps 1)
       (try! label))
     (fixed-status!)
-    (resize-window! w 1100 600)
-    (move-window! w 20 70)
+    (frame-tasks-wide! w)
     (steps 1)
     (try! 'open)
     (click! 'select '(card 9))
@@ -668,8 +681,9 @@
     (key! 'search-left 'escape)
     ;; unfocused, the caret goes and no frame shows Tasks
     (click! 'title-again 'title)
-    (inject! '(mouse-move 1240 400) '(mouse-down 1240 400 left 1)
-             '(mouse-up 1240 400 left))
+    (let-values ([(x y) (frame-tasks-outside w)])
+      (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+               `(mouse-up ,x ,y left)))
     (steps 1)
     (try! 'unfocused)
     (when (asks-while-waiting? w 500)
@@ -682,7 +696,8 @@
     (move! 'hover-new 'new)
     (steps 1 700)
     (try! 'tooltip)
-    (inject! '(mouse-move 1240 400))
+    (let-values ([(x y) (frame-tasks-outside w)])
+      (inject! `(mouse-move ,x ,y)))
     (steps 1)
     (try! 'pointer-left)
     (let-values ([(x0 y0) (point '(card 16))]
@@ -732,7 +747,7 @@
     (set-task! 9 'title "Changed from the REPL")
     (steps 1)
     (try! 'repl)
-    (resize-window! w 760 600)
+    (frame-tasks-narrow! w)
     (steps 1)
     (try! 'narrow)
     (click! 'page '(card 10))
@@ -800,8 +815,7 @@
       (steps 1)
       (try! label))
     (fixed-status!)
-    (resize-window! w 1100 600)
-    (move-window! w 20 70)
+    (frame-tasks-wide! w)
     (steps 1)
     (click! 'tree '(view tree))
     (move! 'hover-row (row-id 11))
@@ -834,7 +848,7 @@
     (set-task! 12 'blocked-by '(16))
     (steps 1)
     (try! 'repl)
-    (resize-window! w 760 600)
+    (frame-tasks-narrow! w)
     (steps 1)
     (try! 'narrow)
     (click! 'page (row-id 13))
@@ -873,8 +887,7 @@
                 (apply string-append (make-list 60 "x\n")))]
          [t (add-task! "Scanned" 'status 'review 'description text)])
     (fixed-status!)
-    (resize-window! w 1100 600)
-    (move-window! w 20 70)
+    (frame-tasks-wide! w)
     (steps 1)
     (tasks-select! v t)
     (invalidate! w)

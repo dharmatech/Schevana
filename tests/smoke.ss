@@ -1557,6 +1557,19 @@
 (define (next-to t) (cadr (memq (find-task t) *tasks*)))
 (define (shot name) (png-write-screen (format "~a/tasks-~a.png" out-dir name)))
 
+;; Tasks sized by its own measures, not a number one font's widths decide:
+;; wide, from where its details sit beside its view (tasks-wide-width), at
+;; the screen's left; narrow, its least width, which never fits them.
+(define (tasks-wide!)
+  (let-values ([(mw mh) (tasks-min-size)])
+    (move-window! tw 0 (window-y tw))
+    (resize-window! tw (max mw (tasks-wide-width tv)) (max 660 mh))
+    (steps 2)))
+(define (tasks-narrow!)
+  (let-values ([(mw mh) (tasks-min-size)])
+    (resize-window! tw mw (max 600 mh))
+    (steps 2)))
+
 ;; Presses and releases at a point of the window's content.
 (define (tasks-click! x y . more)   ; more: button, clicks
   (let-values ([(cx cy cw ch) (content-rect tw)])
@@ -2223,8 +2236,9 @@
 
 ;; Dependencies. The details: what a task waits for, chips a × removes,
 ;; Add's menu of what makes no cycle; what waits for it; a chip selects.
-(resize-window! tw 1205 660)
+(tasks-wide!)
 (tasks-select! tv (find-task 14))
+(invalidate! tw)   ; a selection from here asks for no frame
 (steps 2)
 (check "the details show what a task waits for and what waits for it"
        (and (ui-find tui '(blocked-by 33)) (ui-find tui '(blocks 22))
@@ -2235,7 +2249,8 @@
          (and (string-prefix? "Blocked by TASK-31 Each window" tip)
               (string-contains-ci? tip ", TASK-10 Threads spec")
               (not (tasks-tip (find-task 12) #f))
-              (or (not card) (equal? (ui-region-tip card) tip)))))
+              ;; after the title, where the card cuts it
+              (or (not card) (string-suffix? tip (ui-region-tip card))))))
 (click-ui! tw '(blocked-by add))
 (let ([labels (if (menu-open?)
                   (map car (filter pair? (menu-entries *menu*)))
@@ -2369,7 +2384,8 @@
         (let-values ([(x y) (region-center '(tree body))]
                      [(cx cy cw ch) (content-rect tw)])
           (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y)))
-                   `(wheel 0 ,(if (< i (apply min shown)) 1 -1)))
+                   ;; up for one at the top, cut there, or above it
+                   `(wheel 0 ,(if (<= i (apply min shown)) 1 -1)))
           (steps 1)
           (loop (+ n 1)))))))
 (define (tree-click! node . twisty?)   ; on its row, or on its twisty
@@ -2595,7 +2611,7 @@
 (steps 2)
 
 ;; A narrow window: the details are a page.
-(resize-window! tw 760 600)
+(tasks-narrow!)
 (steps 2)
 (let-values ([(x y) (region-center (list 'card 9))])
   (tasks-click! x y))
@@ -2606,10 +2622,10 @@
 (steps 2)
 (check "and Escape goes back" (and (not (ui-find tui 'back)) (card-of 9)
                                    (eq? (selected) (find-task 9))))
-(resize-window! tw 1205 660)
+(tasks-wide!)
 (steps 2)
 (click-ui! tw 'assignee)
-(resize-window! tw 760 600)
+(tasks-narrow!)
 (steps 2)
 (type! "n")
 (steps 2)
@@ -2625,7 +2641,7 @@
 
 ;; A row the toolbar's items fill exactly is one row: the toolbar's
 ;; (tests/units/ui-toolbar.ss).
-(resize-window! tw 1205 660)
+(tasks-wide!)
 (steps 2)
 
 ;; 100,000 characters: words, then one word as long.
@@ -2700,7 +2716,10 @@
                 search: every step of the Board, the details, the menus, \
                 the dialog, the List and the Tree under 300 ms, and Tasks \
                 never crashed"
-               (and (null? slow) menu? dialog? menu-w (< menu-w 400)
+               ;; the menu: a name of 20 line heights at most, and the
+               ;; menu's own room
+               (and (null? slow) menu? dialog? menu-w
+                    (< menu-w (* 24 (font-line-height 'ui)))
                     (= (string-length (task-title t)) 100001)
                     ;; a name is cut to 64 characters
                     (equal? (task-assignee t) (substring long-text 0 64))
@@ -2952,7 +2971,7 @@
   (set! tw (tasks))
   (set! tv (window-ref tw 'state))
   (set! tui (window-ref tw 'ui))
-  (resize-window! tw 1205 660)
+  (tasks-wide!)
   (steps 2))
 (delete-task! long-task)
 (steps 2)
