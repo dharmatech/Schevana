@@ -1,0 +1,117 @@
+;;; tests/units/ui-text-box.ss — the kit's text field and text area
+;;; (kits/ui.ss, ui-text-box), by themselves: typing, selecting, the
+;;; clipboard, a double click, Return, and the keyboard taken away.
+
+;; A field and an area, each text kept where its on-change puts it, and
+;; how many times the field's Return called its on-enter.
+(define (ui-text-box-test-window)
+  (let ([field (box "")] [area (box "")] [entered (box 0)])
+    (values
+     (test-kit-window "Text"
+       (lambda (ui w h)
+         (ui-text-field ui 'f 20 20 300 30 (unbox field)
+                        (lambda (t) (set-box! field t))
+                        'on-enter (lambda () (set-box! entered
+                                                       (+ 1 (unbox entered)))))
+         (ui-text-area ui 'a 20 70 300 80 (unbox area)
+                       (lambda (t) (set-box! area t))))
+       '(400 . 240))
+     field area entered)))
+
+(define (ui-text-box-test-type! s)
+  (for-each (lambda (c) (inject! (list 'text (string c)))) (string->list s))
+  (steps 1))
+
+(define (ui-text-box-test-press! key . mods)
+  (inject! (list 'key-down key mods))
+  (steps 1))
+
+(check "a text field takes typing once clicked, its on-change given the \
+        text, the caret at its end"
+       (let-values ([(win field area entered) (ui-text-box-test-window)])
+         (steps 2)
+         (test-click! win 'f)
+         (ui-text-box-test-type! "Fix the toolbar")
+         (let* ([ui (window-ref win 'ui)] [e (ui-state-edit ui)])
+           (close-window! win)
+           (and (equal? (unbox field) "Fix the toolbar")
+                (edit? e)
+                (= (edit-caret e) (string-length "Fix the toolbar"))))))
+
+(check "Shift+Left selects and Ctrl+C copies the selection; End and Ctrl+V \
+        paste it at the caret; Backspace erases; Ctrl+A and typing replace \
+        it all"
+       (let-values ([(win field area entered) (ui-text-box-test-window)])
+         (steps 2)
+         (test-click! win 'f)
+         (ui-text-box-test-type! "Fix the toolbar")
+         (ui-text-box-test-press! 'left 'shift)
+         (ui-text-box-test-press! 'left 'shift)
+         (ui-text-box-test-press! 'left 'shift)
+         (ui-text-box-test-press! #\c 'ctrl)
+         (let ([copied (clipboard-get)])
+           (ui-text-box-test-press! 'end)
+           (ui-text-box-test-press! #\v 'ctrl)
+           (let ([pasted (unbox field)])
+             (ui-text-box-test-press! 'backspace)
+             (ui-text-box-test-press! 'backspace)
+             (ui-text-box-test-press! 'backspace)
+             (let ([erased (unbox field)])
+               (ui-text-box-test-press! #\a 'ctrl)
+               (ui-text-box-test-type! "Fix the menu")
+               (close-window! win)
+               (printf "  ~s\n" (list copied pasted erased (unbox field)))
+               (and (equal? copied "bar")
+                    (equal? pasted "Fix the toolbarbar")
+                    (equal? erased "Fix the toolbar")
+                    (equal? (unbox field) "Fix the menu")))))))
+
+(check "a double click selects the word under it, wherever the font puts \
+        it"
+       (let-values ([(win field area entered) (ui-text-box-test-window)])
+         (steps 2)
+         (test-click! win 'f)
+         (ui-text-box-test-type! "Fix the menu")
+         (let* ([ui (window-ref win 'ui)]
+                [r (test-region ui 'f)]
+                [a (car (ui-text-box-areas (ui-region-x r) (ui-region-y r)
+                                           (ui-region-w r) (ui-region-h r)
+                                           '(field)))]
+                ;; inside "menu", by the field's own font
+                [x (+ (- (list-ref a 1) (ui-region-x r))
+                      (text-width "Fix the me" (list-ref a 5)))])
+           (test-click! win 'f 2 'at (exact (round x)))
+           (let ([s (edit-selection (ui-state-edit ui))])
+             (close-window! win)
+             (equal? s "menu")))))
+
+(check "Return calls a field's on-enter and changes nothing; in an area it \
+        makes a new line"
+       (let-values ([(win field area entered) (ui-text-box-test-window)])
+         (steps 2)
+         (test-click! win 'f)
+         (ui-text-box-test-type! "one")
+         (ui-text-box-test-press! 'return)
+         (test-click! win 'a)
+         (ui-text-box-test-type! "one")
+         (ui-text-box-test-press! 'return)
+         (ui-text-box-test-type! "two")
+         (close-window! win)
+         (and (= (unbox entered) 1) (equal? (unbox field) "one")
+              (equal? (unbox area) "one\ntwo"))))
+
+(check "a press elsewhere takes the keyboard from the field: typing then \
+        goes nowhere"
+       (let-values ([(win field area entered) (ui-text-box-test-window)])
+         (steps 2)
+         (test-click! win 'f)
+         (ui-text-box-test-type! "kept")
+         (let-values ([(cx cy cw ch) (content-rect win)])
+           (let ([x (+ cx 360)] [y (+ cy 220)])   ; on no widget
+             (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                      `(mouse-up ,x ,y left))))
+         (steps 1)
+         (ui-text-box-test-type! "lost")
+         (let ([focus (ui-focused (window-ref win 'ui))])
+           (close-window! win)
+           (and (not focus) (equal? (unbox field) "kept")))))

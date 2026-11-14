@@ -137,6 +137,35 @@
                    (ui-begin! ui) (draw ui w h) (ui-end! ui w h))
            (ui-handlers ui))))
 
+;; Region id of win's ui: its middle on the screen, dx to its right, or at
+;; x within it (a number from the region's left) if given as 'at x.
+(define (test-point win id . dx)
+  (let ([r (test-region (window-ref win 'ui) id)])
+    (let-values ([(cx cy cw ch) (content-rect win)])
+      (values (+ cx (ui-region-x r)
+                 (if (and (pair? dx) (eq? (car dx) 'at))
+                     (cadr dx)
+                     (+ (quotient (ui-region-w r) 2)
+                        (if (pair? dx) (car dx) 0))))
+              (+ cy (ui-region-y r) (quotient (ui-region-h r) 2))))))
+
+;; The pointer moved over region id (test-point's dx), a step.
+(define (test-move! win id . dx)
+  (let-values ([(x y) (apply test-point win id dx)])
+    (inject! `(mouse-move ,x ,y))
+    (steps 1)))
+
+;; A left click on region id, clicks times at once (2: a double click),
+;; at test-point's dx; a step.
+(define (test-click! win id . more)
+  (let ([clicks (if (and (pair? more) (fixnum? (car more))) (car more) 1)]
+        [dx (if (and (pair? more) (fixnum? (car more))) (cdr more) more)])
+    (let-values ([(x y) (apply test-point win id dx)])
+      (do ([k 1 (+ k 1)]) ((> k clicks))
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left ,k)
+                 `(mouse-up ,x ,y left)))
+      (steps 1))))
+
 ;; The world as a scene starts from: no window, toast, hover, drag or menu.
 (define (test-clear-world!)
   (for-each close-window! (windows))

@@ -1767,29 +1767,6 @@
 (check "and its card, last in a long column, scrolled into view"
        (let ([r (card-of nt)])
          (and r (= (ui-region-h r) (cadddr (ui-region-frame r))))))
-(press! 'left 'shift) (press! 'left 'shift) (press! 'left 'shift)
-(press! #\c 'ctrl)
-(steps 1)
-(check "Shift+Left selects and Ctrl+C copies" (equal? (clipboard-get) "bar"))
-(press! 'end)
-(press! #\v 'ctrl)
-(steps 1)
-(check "End and Ctrl+V paste" (equal? (task-title nt) "Fix the toolbarbar"))
-(press! 'backspace) (press! 'backspace) (press! 'backspace)
-(press! #\a 'ctrl)
-(type! "Fix the menu")
-(steps 2)
-(check "Backspace, Ctrl+A and typing over everything: the title and the card"
-       (and (equal? (task-title nt) "Fix the menu") (card-of nt)))
-(let* ([r (ui-find tui 'title)]
-       [a (car (ui-text-box-areas (ui-region-x r) (ui-region-y r)
-                                  (ui-region-w r) (ui-region-h r) '(large)))]
-       [x (+ (list-ref a 1) (text-width "Fix the me" 'heading))]
-       [y (+ (list-ref a 2) 8)])
-  (tasks-click! x y 'left 1)
-  (tasks-click! x y 'left 2)
-  (check "a double click selects a word"
-         (equal? (edit-selection (edit)) "menu")))
 (shot "title")
 
 ;; Tab to Status; its menu by keys. Priority by mouse.

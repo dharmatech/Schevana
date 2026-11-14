@@ -19,25 +19,6 @@
           (+ top (* ui-tooltip-test-rows 20)))))
     '(400 . 300)))
 
-;; Region id's middle on the screen, dx to its right.
-(define (ui-tooltip-test-at win id . dx)
-  (let ([r (test-region (window-ref win 'ui) id)])
-    (let-values ([(cx cy cw ch) (content-rect win)])
-      (values (+ cx (ui-region-x r) (quotient (ui-region-w r) 2)
-                 (if (pair? dx) (car dx) 0))
-              (+ cy (ui-region-y r) (quotient (ui-region-h r) 2))))))
-
-(define (ui-tooltip-test-move! win id . dx)
-  (let-values ([(x y) (apply ui-tooltip-test-at win id dx)])
-    (inject! `(mouse-move ,x ,y))
-    (steps 1)))
-
-(define (ui-tooltip-test-click! win id)
-  (let-values ([(x y) (ui-tooltip-test-at win id)])
-    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
-             `(mouse-up ,x ,y left))
-    (steps 1)))
-
 ;; How many tooltips are drawn in the next ms of the held clock.
 (define (ui-tooltip-test-drawn ms)
   (let ([n 0] [plain ui-draw-tooltip])
@@ -52,7 +33,7 @@
         ui-tip-ms, and not before"
        (let ([win (ui-tooltip-test-window)])
          (steps 2)
-         (ui-tooltip-test-move! win 'b)
+         (test-move! win 'b)
          (let* ([early (ui-tooltip-test-drawn (- ui-tip-ms 50))]
                 [late (ui-tooltip-test-drawn 100)])
            (close-window! win)
@@ -63,11 +44,11 @@
         keyboard, where typing pauses"
        (let ([win (ui-tooltip-test-window)])
          (steps 2)
-         (ui-tooltip-test-move! win 'f)
+         (test-move! win 'f)
          (let ([idle (ui-tooltip-test-drawn (* 2 ui-tip-ms))])
-           (ui-tooltip-test-click! win 'f)
-           (ui-tooltip-test-move! win 'b)
-           (ui-tooltip-test-move! win 'f 2)
+           (test-click! win 'f)
+           (test-move! win 'b)
+           (test-move! win 'f 2)
            (let ([focused (ui-tooltip-test-drawn (* 2 ui-tip-ms))]
                  [has (equal? (ui-focused (window-ref win 'ui)) 'f)])
              (close-window! win)
@@ -77,17 +58,17 @@
         them shows none until the pointer moves and rests again"
        (let ([win (ui-tooltip-test-window)])
          (define (used-then-moved use!)
-           (ui-tooltip-test-move! win 'b)
+           (test-move! win 'b)
            (use!)
            (steps 1)
            (let ([after (ui-tooltip-test-drawn (* 2 ui-tip-ms))])
-             (ui-tooltip-test-move! win 'b 2)
+             (test-move! win 'b 2)
              (let ([moved (ui-tooltip-test-drawn (* 2 ui-tip-ms))])
-               (ui-tooltip-test-move! win 'f)   ; off, for the next
+               (test-move! win 'f)   ; off, for the next
                (list after moved))))
          (steps 2)
          (let ([pressed (used-then-moved
-                         (lambda () (ui-tooltip-test-click! win 'b)))]
+                         (lambda () (test-click! win 'b)))]
                [keyed (used-then-moved
                        (lambda () (inject! '(key-down down ()))))]
                [typed (used-then-moved
@@ -101,9 +82,9 @@
         wheel used it up"
        (let ([win (ui-tooltip-test-window)])
          (steps 2)
-         (ui-tooltip-test-move! win '(row 3))
+         (test-move! win '(row 3))
          (let ([rested (ui-tooltip-test-drawn (* 2 ui-tip-ms))])
-           (let-values ([(x y) (ui-tooltip-test-at win '(row 3))])
+           (let-values ([(x y) (test-point win '(row 3))])
              (inject! `(wheel 0 -1)))
            (steps 1)
            (let ([scrolled (ui-tooltip-test-drawn (* 2 ui-tip-ms))]
