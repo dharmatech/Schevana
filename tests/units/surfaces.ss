@@ -100,30 +100,31 @@
 
 (check "the top bar takes its numbers once a second, however many frames \
         are drawn between, and a segment added at once"
-       (let ([asked 0]
-             [second (lambda () (time-second (current-time)))])
+       ;; the test's clock held: the bar's timer, the second's, waits, so
+       ;; the frames drawn ask nothing (but a second already due); then
+       ;; the bar shown asks once
+       (let ([asked 0])
          (add-status-segment! 'asked
                               (lambda ()
                                 (set! asked (+ asked 1))
                                 (format "asked ~a" asked)))
-         (let ([added asked] [from (second)])
-           (do ([i 0 (+ i 1)]) ((= i 5))
-             (request-frame!)
-             (steps 1))
-           ;; the clock's seconds may turn meanwhile: no more than that,
-           ;; in the steps and in the one that shows the bar
-           (let ([between (- asked added)] [turned (- (second) from)])
-             (status-show!)
-             (let ([before (second)])
-               (steps 1)
-               (let ([shown (shown-status-strings)] [last asked]
-                     [late (- (second) before)])
-                 (remove-status-segment! 'asked)
-                 (and (= added 1)
-                      (<= between turned)
-                      (member (format "asked ~a" last) shown)
-                      (<= (+ added between 1) last
-                          (+ added between 1 late)))))))))
+         (test-clock-hold!)
+         (test-finally
+          (lambda ()
+            (let ([added asked])
+              (do ([i 0 (+ i 1)]) ((= i 5))
+                (request-frame!)
+                (steps 1))
+              (let ([between (- asked added)])
+                (status-show!)
+                (steps 1)
+                (let ([shown (shown-status-strings)] [last asked])
+                  (and (= added 1) (<= between 1)
+                       (member (format "asked ~a" last) shown)
+                       (= last (+ added between 1)))))))
+          (lambda ()
+            (test-clock-release!)
+            (remove-status-segment! 'asked)))))
 
 ;;; frames
 

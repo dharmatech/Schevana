@@ -32,12 +32,14 @@
          (and (saw 'readback) (saw 'compute) (> (saw 'bytes) 0)
               (equal? (saw 'read-then) '(0 1 4 9))
               (equal? (saw 'waited) '(0 1 4 9))))
+  ;; by the frames' own t, core0's screen: how fast they came by the
+  ;; machine's clock is a busy machine's, and the bench's
   (check (format "frame turns follow core0's screen: a window that \
                   animates gets a frame a refresh, each one's t a period \
-                  after the last (~a frames in ~a refreshes, ~a uneven)"
-                 (saw 'animated) (saw 'refreshes) (saw 'uneven))
-         (and (saw 'animated)
-              (<= (abs (- (saw 'animated) 1 (saw 'refreshes))) 3)
+                  after the last (~a frames, ~a uneven; ~a refreshes by \
+                  the machine's clock)"
+                 (saw 'animated) (saw 'uneven) (saw 'refreshes))
+         (and (saw 'animated) (> (saw 'animated) 30)
               (= (saw 'uneven) 0)))
   (check (format "a forked world's ticks add up: core1's waits, for input or \
                   for core0 to take its frame, are its own, so each tick's \

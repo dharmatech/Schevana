@@ -701,7 +701,12 @@
         (check "and its stepper steps over the records left out"
                (= (pipeline-view-upto v) first)))
       (press! '(pipeline hold))
-      (press! (list 'pipeline 'shows node))
+      ;; on again as the checkbox puts it, whose press is the check's
+      ;; above: its row, past the steps, may be scrolled out of view
+      (pipeline-view-off-set! v '())
+      (pipeline-view-kept-of-set! v #f)
+      (invalidate! w)
+      (steps 2)
       (check "on again, they're back"
              (and (null? (pipeline-view-off v))
                   (= (vector-length (pipeline-kept v))

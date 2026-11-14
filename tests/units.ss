@@ -144,9 +144,18 @@
   (printf "SCHEVANA_CHECK needs its topic: tests/units.ss out topic\n")
   (exit 1))
 
+;; The topics that time the world against core0's screen on the machine's
+;; clock (a forked world's frame a refresh): a machine the other topics
+;; keep busy misses refreshes, so these run after them, by themselves.
+(define units-alone '("fork"))
+
 (unless (= (length units-asked) 1)
-  (let ([failed (units-run-all
-                 (if (null? units-asked) (units-topics) units-asked))])
+  (let* ([topics (if (null? units-asked) (units-topics) units-asked)]
+         [alone (filter (lambda (t) (member t units-alone)) topics)]
+         [failed (append (units-run-all
+                          (remp (lambda (t) (member t units-alone)) topics))
+                         (fluid-let ([units-jobs 1])
+                           (units-run-all alone)))])
     (if (null? failed)
         (printf "all topics passed\n")
         (printf "~a topic(s) FAILED: ~a\n" (length failed) failed))
