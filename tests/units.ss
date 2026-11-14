@@ -5,6 +5,8 @@
 ;;;   scheme --script tests/units.ss [output-dir [topic ...]]
 ;;;   scheme --script tests/units.ss out              every file there
 ;;;   scheme --script tests/units.ss out life boids   those
+;;;   SCHEVANA_CHECK=text scheme --script tests/units.ss out life
+;;;                                         life up to its check named so
 ;;;
 ;;; This file is what they share: the checks, the images, the helpers more
 ;;; than one of them uses. output-dir only receives scratch files.
@@ -18,6 +20,14 @@
 
 (define units-asked
   (if (pair? (command-line-arguments)) (cdr (command-line-arguments)) '()))
+
+;; With SCHEVANA_CHECK set, a run stops after the first check whose name
+;; has its text: what ran before it is what a whole run runs, so the check
+;; sees what it would there, and the run's verdict is theirs. A long name,
+;; and one left empty means none, lest a stray one end every run early.
+(define test-only
+  (let ([text (getenv "SCHEVANA_CHECK")])
+    (and text (not (string=? text "")) text)))
 
 ;; Every file of tests/units.
 (define (units-topics)
@@ -74,6 +84,11 @@
                              out-dir topic))))
 
 ;; All of them, or those asked for: here only the topics' verdicts.
+;; SCHEVANA_CHECK finds a check in the topics asked for: a run names one.
+(when (and test-only (null? units-asked))
+  (printf "SCHEVANA_CHECK needs its topic: tests/units.ss out topic\n")
+  (exit 1))
+
 (unless (= (length units-asked) 1)
   (let ([failed (remp units-run
                       (if (null? units-asked) (units-topics) units-asked))])
@@ -95,6 +110,11 @@
 
 (define failures 0)
 
+(define (test-only-done name)
+  (when (and test-only (string-contains-ci? name test-only))
+    (printf "stopped after the check SCHEVANA_CHECK names\n")
+    (exit (if (zero? failures) 0 1))))
+
 (define-syntax check
   (syntax-rules ()
     [(_ name expr)
@@ -102,7 +122,34 @@
                              #f])
                  expr)])
        (unless ok (set! failures (+ failures 1)))
-       (printf "~a ~a\n" (if ok "ok  " "FAIL") name))]))
+       (printf "~a ~a\n" (if ok "ok  " "FAIL") name)
+       (test-only-done name))]))
+
+;; A form outside a check that raises fails, at its line, and the suite goes
+;; on with the next: a region a font leaves out of view ends only what needs
+;; it. What the form itself loads or evaluates (an app, a reload) raises as
+;; it would.
+(define test-form-running #f)
+(define test-form-eval
+  (let ([eval* (current-eval)])
+    (lambda (x . env)
+      (if test-form-running
+          (apply eval* x env)
+          (guard (c [#t (set! failures (+ failures 1))
+                        (printf "FAIL a form at ~a raised: ~a\n"
+                                (test-form-place x) (condition->string c))])
+            (fluid-let ([test-form-running #t]) (apply eval* x env)))))))
+
+;; Where the loader read x: "tests/smoke.ss:120".
+(define (test-form-place x)
+  (or (and (annotation? x)
+           (call-with-values
+            (lambda ()
+              (locate-source-object-source (annotation-source x) #t #t))
+            (case-lambda
+              [(path line char) (format "~a:~a" path line)]
+              [r #f])))
+      "a line not known"))
 
 (define (steps n) (do ([i 0 (+ i 1)]) ((= i n)) (schevana-step! 0)))
 
@@ -305,11 +352,15 @@
 
 (schevana-boot! 'headless 1280 800)
 
-(load (format "~a/tests/units/~a.ss" *schevana-root* (car units-asked)))
+(load (format "~a/tests/units/~a.ss" *schevana-root* (car units-asked))
+      test-form-eval)
 
 (steps 2)
 (check "the world still renders after all this" (begin (render-frame!) #t))
 
+(when test-only
+  (printf "no check's name has ~s\n" test-only)
+  (exit 1))
 (if (zero? failures)
     (printf "all checks passed\n")
     (printf "~a check(s) FAILED\n" failures))

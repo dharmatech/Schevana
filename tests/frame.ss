@@ -50,13 +50,52 @@
 
 (define failures 0)
 
+;; With SCHEVANA_CHECK set, a run stops after the first check whose name
+;; has its text: what ran before it is what a whole run runs, so the check
+;; sees what it would there, and the run's verdict is theirs. A long name,
+;; and one left empty means none, lest a stray one end every run early.
+(define test-only
+  (let ([text (getenv "SCHEVANA_CHECK")])
+    (and text (not (string=? text "")) text)))
+(define (test-only-done name)
+  (when (and test-only (string-contains-ci? name test-only))
+    (printf "stopped after the check SCHEVANA_CHECK names\n")
+    (exit (if (zero? failures) 0 1))))
+
 (define-syntax check
   (syntax-rules ()
     [(_ name expr)
      (let ([ok (guard (c [#t (printf "  error: ~a\n" (condition->string c)) #f])
                  expr)])
        (unless ok (set! failures (+ failures 1)))
-       (printf "~a ~a\n" (if ok "ok  " "FAIL") name))]))
+       (printf "~a ~a\n" (if ok "ok  " "FAIL") name)
+       (test-only-done name))]))
+
+;; A form outside a check that raises fails, at its line, and the suite goes
+;; on with the next: a region a font leaves out of view ends only what needs
+;; it. What the form itself loads or evaluates (an app, a reload) raises as
+;; it would.
+(define test-form-running #f)
+(define test-form-eval
+  (let ([eval* (current-eval)])
+    (lambda (x . env)
+      (if test-form-running
+          (apply eval* x env)
+          (guard (c [#t (set! failures (+ failures 1))
+                        (printf "FAIL a form at ~a raised: ~a\n"
+                                (test-form-place x) (condition->string c))])
+            (fluid-let ([test-form-running #t]) (apply eval* x env)))))))
+
+;; Where the loader read x: "tests/smoke.ss:120".
+(define (test-form-place x)
+  (or (and (annotation? x)
+           (call-with-values
+            (lambda ()
+              (locate-source-object-source (annotation-source x) #t #t))
+            (case-lambda
+              [(path line char) (format "~a:~a" path line)]
+              [r #f])))
+      "a line not known"))
 
 ;; A clock that moves only when told, so that Life steps when a check says.
 ;; Checks that need time to pass go back to the real one.
@@ -66,6 +105,8 @@
 (fake-clock!)
 (random-seed 4242)
 (schevana-boot! 'headless 1280 800)
+;; From here, a form that raises fails and the next goes on.
+(current-eval test-form-eval)
 
 (define (steps n . ms)
   (do ([i 0 (+ i 1)]) ((= i n))
@@ -1153,6 +1194,9 @@
                   (eqv? (inspect-frame-report i 1) 0)
                   (not (inspect-frame-screen i)))))))
 
+(when test-only
+  (printf "no check's name has ~s\n" test-only)
+  (exit 1))
 (if (zero? failures)
     (printf "all checks passed\n")
     (printf "~a check(s) FAILED\n" failures))

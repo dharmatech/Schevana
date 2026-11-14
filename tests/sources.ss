@@ -22,6 +22,18 @@
 
 (define failures 0)
 
+;; With SCHEVANA_CHECK set, a run stops after the first check whose name
+;; has its text: what ran before it is what a whole run runs, so the check
+;; sees what it would there, and the run's verdict is theirs. A long name,
+;; and one left empty means none, lest a stray one end every run early.
+(define test-only
+  (let ([text (getenv "SCHEVANA_CHECK")])
+    (and text (not (string=? text "")) text)))
+(define (test-only-done name)
+  (when (and test-only (string-contains-ci? name test-only))
+    (printf "stopped after the check SCHEVANA_CHECK names\n")
+    (exit (if (zero? failures) 0 1))))
+
 (define-syntax check
   (syntax-rules ()
     [(_ name expr)
@@ -29,7 +41,8 @@
                              #f])
                  expr)])
        (unless ok (set! failures (+ failures 1)))
-       (printf "~a ~a\n" (if ok "ok  " "FAIL") name))]))
+       (printf "~a ~a\n" (if ok "ok  " "FAIL") name)
+       (test-only-done name))]))
 
 ;; Prints the problems found, one per line; true when there are none.
 (define (none? problems)
@@ -958,10 +971,7 @@
 (check "the tests never load ~/.schevana.d"
        (and (not *user-folders?*) (not (exists path-absolute? (source-files)))))
 
-(if (zero? failures)
-    (printf "all checks passed\n")
-    (printf "~a check(s) FAILED\n" failures))
-(exit ;; Chez reads a script a form at a time, so a run has to end by exiting:
+;; Chez reads a script a form at a time, so a run has to end by exiting:
 ;; world.ss may have been edited during it, and what's read next would be
 ;; nonsense.
 (let ()
@@ -976,4 +986,22 @@
           itself"
          (exists run-then-exit? (file-forms "world.ss"))))
 
-(if (zero? failures) 0 1))
+;; This file run again with SCHEVANA_CHECK set: its exit status.
+(define (sources-run-checking text)
+  (system (format "SCHEVANA_CHECK='~a' \"$(command -v chez || echo scheme)\" \
+                   --script ~a/tests/sources.ss > /dev/null 2>&1"
+                  text *schevana-root*)))
+
+(unless test-only
+  (check "SCHEVANA_CHECK stops a run after the first check whose name has \
+          its text, as a pass, and a run where none has it fails"
+         (and (zero? (sources-run-checking "OUTSIDE SRC/, no file sets"))
+              (= 1 (sources-run-checking "no check is named so")))))
+
+(when test-only
+  (printf "no check's name has ~s\n" test-only)
+  (exit 1))
+(if (zero? failures)
+    (printf "all checks passed\n")
+    (printf "~a check(s) FAILED\n" failures))
+(exit (if (zero? failures) 0 1))
