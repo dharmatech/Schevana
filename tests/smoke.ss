@@ -2918,75 +2918,13 @@
               (wait-for (lambda () (null? (ui-state-scans tui))))
               (edit-layout-done? lay)
               (eq? lay (ui-memo tui '(description rows) #f)))))
-(define (description-top) (ui-memo tui 'description 0))
-(define (caret-shown?)   ; the caret's row is in the description's view
-  (let* ([r (ui-find tui 'description)]
-         [a (car (apply ui-text-box-areas
-                        (append (ui-region-frame r) '(()))))]
-         [lh (font-line-height 'ui)]
-         [row (edit-row-at (ui-memo tui '(description rows) #f)
-                           (ui-caret tui))]
-         [top (- (* lh row) (description-top))])
-    (and (>= top 0) (<= (+ top lh) (list-ref a 4)))))
-(let-values ([(x y) (region-center 'description)]
-             [(cx cy cw ch) (content-rect tw)])
-  (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))) '(wheel 0 -3))
-  (steps 2)
-  (check "the wheel scrolls a long description" (> (description-top) 0)))
-(let-values ([(x0 y0) (ui-point tw '(description bar) 0.5)]
-             [(cx cy cw ch) (content-rect tw)])
-  (let* ([r (ui-find tui '(description bar))]
-         [top (+ cy (round (ui-region-y r)) 2)]
-         [bottom (+ cy (round (+ (ui-region-y r) (ui-region-h r))))])
-    (inject! `(mouse-move ,x0 ,top) `(mouse-down ,x0 ,top left 1)
-             `(mouse-move ,x0 ,bottom) `(mouse-up ,x0 ,bottom left))
-    (steps 2)
-    (let* ([lay (ui-memo tui '(description rows) #f)]
-           [d (ui-find tui 'description)]
-           [th (list-ref (car (apply ui-text-box-areas
-                                     (append (ui-region-frame d) '(()))))
-                         4)])
-      (check "its thumb dragged to the bottom shows the last row"
-             (>= (+ (description-top) th)
-                 (- (* (font-line-height 'ui) (edit-layout-count lay)) 1))))))
-(click-ui! tw 'description)
-(press! 'home 'ctrl)
-(steps 2)
-(check "Ctrl+Home: the caret at the start, in view"
-       (and (= 0 (ui-caret tui)) (= 0 (description-top)) (caret-shown?)))
-(press! 'end 'ctrl)
-(steps 2)
-(check "Ctrl+End: the caret at the end, in view"
-       (and (= 65000 (ui-caret tui)) (> (description-top) 0)
-            (caret-shown?)))
-(shot "long-description")
-(define (description-page)   ; the rows a page moves
-  (let* ([r (ui-find tui 'description)]
-         [a (car (apply ui-text-box-areas
-                        (append (ui-region-frame r) '(()))))])
-    (max 1 (exact (floor (/ (list-ref a 4) (font-line-height 'ui)))))))
-(define (caret-row)
-  (edit-row-at (ui-memo tui '(description rows) #f) (ui-caret tui)))
-(press! 'home 'ctrl)
-(press! 'down)
-(press! 'down)
-(steps 2)
-(let ([row (caret-row)] [top (description-top)]
-      [page (description-page)] [lh (font-line-height 'ui)])
-  (press! 'page-down)
-  (steps 2)
-  (let ([row-down (caret-row)] [top-down (description-top)])
-    (press! 'page-up)
-    (steps 2)
-    (check "Page Down scrolls a long description a page and moves the \
-            caret as many rows, so it keeps its place; Page Up goes back"
-           (and (= 2 row) (= row-down (+ row page))
-                (< (abs (- top-down (+ top (* page lh)))) 0.01)
-                (= (caret-row) row)
-                (< (abs (- (description-top) top)) 0.01)))))
+
+;; Its wheel, bar, Page Down, Ctrl+Home and Ctrl+End are a text area's
+;; (tests/units/ui-scroll.ss).
 
 ;; A keystroke's edit says where it changed the text, so its rows follow
 ;; without comparing texts; a change from the REPL compares them.
+(click-ui! tw 'description)   ; the keys below are the description's
 (define compared 0)
 (define plain-difference edit-difference)
 (set! edit-difference
