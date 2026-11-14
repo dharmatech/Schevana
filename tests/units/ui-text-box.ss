@@ -115,3 +115,27 @@
          (let ([focus (ui-focused (window-ref win 'ui))])
            (close-window! win)
            (and (not focus) (equal? (unbox field) "kept")))))
+
+(check "a box of 'max characters full: a key types nothing, nor does \
+        Return in an area; a paste is cut to fit"
+       (let* ([text (box (make-string 20 #\a))]
+              [win (test-kit-window "Max"
+                     (lambda (ui w h)
+                       (ui-text-area ui 'a 20 20 300 80 (unbox text)
+                                     (lambda (t) (set-box! text t))
+                                     'max 20))
+                     '(400 . 200))])
+         (steps 2)
+         (test-click! win 'a)
+         (ui-text-box-test-press! 'end 'ctrl)
+         (ui-text-box-test-type! "b")
+         (ui-text-box-test-press! 'return)
+         (let ([full (unbox text)])
+           (do ([i 0 (+ i 1)]) ((= i 5)) (ui-text-box-test-press! 'backspace))
+           (clipboard-set! (make-string 100 #\c))
+           (ui-text-box-test-press! #\v 'ctrl)
+           (close-window! win)
+           (and (equal? full (make-string 20 #\a))
+                (equal? (unbox text)
+                        (string-append (make-string 15 #\a)
+                                       (make-string 5 #\c)))))))

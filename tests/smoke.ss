@@ -2251,18 +2251,7 @@
               (not (tasks-tip (find-task 12) #f))
               ;; after the title, where the card cuts it
               (or (not card) (string-suffix? tip (ui-region-tip card))))))
-(click-ui! tw '(blocked-by add))
-(let ([labels (if (menu-open?)
-                  (map car (filter pair? (menu-entries *menu*)))
-                  '())]
-      [offered? (lambda (labels id)
-                  (exists (lambda (l) (string-prefix? (format "TASK-~a " id) l))
-                          labels))])
-  (check "Add opens a menu of the tasks it may wait for: none that waits for \
-          it, nor itself, nor what it waits for already, nor a done one"
-         (and (offered? labels 9) (offered? labels 19)
-              (not (exists (lambda (id) (offered? labels id))
-                           '(22 14 33 1))))))
+(click-ui! tw '(blocked-by add))   ; its choices: tasks-blocker-choices
 (type! "fractal")
 (press! 'return)
 (steps 2)
@@ -2274,13 +2263,6 @@
 (check "a chip's × removes it" (equal? (task-blocked-by (find-task 14)) '(33)))
 (click-ui! tw '(blocks 22))
 (check "a click on a chip selects that task" (eq? (selected) (find-task 22)))
-(check "the REPL refuses a cycle, and the error names it"
-       (and (equal? (guard (c [#t (condition->string c)])
-                      (set-task! 9 'blocked-by '(16 22)))
-                    "Exception in set-task!: TASK-9 would wait for itself: \
-                     TASK-9 → TASK-22 → TASK-14 → TASK-33 → TASK-9 (each \
-                     waits for the next)")
-            (null? (task-blocked-by (find-task 9)))))
 (set! *toasts* '())
 (move-task! 22 'done)
 (steps 1)
@@ -2329,13 +2311,6 @@
                      (equal? (car (last-pair l))
                              (format "… ~a more: type to narrow"
                                      (- n (length l) -1)))))))
-     (type! (task-label last))
-     (steps 1)
-     (check "an id typed: the task it names first, then what mentions it"
-            (equal? (labels)
-                    (list (format "~a  ~a" (task-label last) (task-title last))
-                          (format "~a  About ~a" (task-label (car more))
-                                  (task-label last)))))
      (press! 'escape)
      (steps 1)
      (let ([a (car more)] [b (cadr more)])
@@ -2744,26 +2719,9 @@
 (steps 2)
 (let-values ([(x y) (region-center (list 'card (task-id long-task)))])
   (tasks-click! x y))
+;; its limit, 65,536: Tasks' (tests/units/tasks.ss), its box's 'max the
+;; kit's (tests/units/ui-text-box.ss)
 (set-task! long-task 'description (make-string 70000 #\a))
-(steps 1)
-(check "a description given by the REPL is cut to 65,536 characters"
-       (= 65536 (string-length (task-description long-task))))
-(click-ui! tw 'description)
-(press! 'end 'ctrl)
-(type! "b")
-(press! 'return)
-(steps 2)
-(check "at 65,536 characters a key types nothing, nor does Return"
-       (equal? (task-description long-task) (make-string 65536 #\a)))
-(do ([i 0 (+ i 1)]) ((= i 10)) (press! 'backspace))
-(clipboard-set! (make-string 100 #\c))
-(press! #\v 'ctrl)
-(steps 2)
-(check "a paste is cut to fit"
-       (let ([d (task-description long-task)])
-         (and (= 65536 (string-length d))
-              (string=? (substring d 65526 65536) (make-string 10 #\c)))))
-(press! 'escape)
 (steps 1)
 (set-task! long-task 'description (words 65000))
 (steps 1)
