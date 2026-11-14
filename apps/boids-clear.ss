@@ -31,8 +31,9 @@
 ;;; ------------------------------------------------------------------ flat
 ;;; Flat records: flonums side by side in an flvector, named once. A flock
 ;;; is boids end to end; the rules a step reads are one record of numbers.
-;;; A name costs nothing: where it is used, it becomes the flvector-ref at
-;;; its field's offset.
+;;; Where a name is used, it becomes the flvector-ref at its field's
+;;; offset. That costs nothing but an accessor's index, multiplied again
+;;; at each use: Chez shares no common subexpressions (docs/BOIDS-CLEAR.md).
 ;;;
 ;;;   (define-flat-record boid (boid-x boid-x-set!) ...)
 ;;;       records end to end: (boid-x flock i), (boid-x-set! flock i x)
@@ -368,9 +369,10 @@
 ;; Boids [lo, hi) of flock steered into next, each by everyone's current
 ;; state: its velocity plus each rule's push times its weight, and its
 ;; position moved by that. Every pair of boids is looked at, so the loop
-;; over them keeps its flonums unboxed: nothing crosses a call or sits in
-;; a variable a loop closes over, and what adds up lives in sums, the one
-;; thing a call allocates.
+;; over them keeps its flonums unboxed: nothing crosses a call, and what
+;; adds up lives in sums, the one thing a call allocates, since a flonum
+;; variable set! in a loop would box. The steered boid's numbers, bound
+;; once, stay unboxed: nothing sets them.
 (define-flat-worklet (boid (steering rules))
   (boids-steer! lo hi flock next rules)
   (define n (fxquotient (flvector-length flock) (flat-size boid)))
@@ -399,76 +401,76 @@
        (if (fl> count 0.0) (fl* (fl- (fl/ sum count) own) weight) 0.0)]))
   (do ([i lo (fx+ i 1)]) ((fx= i hi))
     (flvector-fill! sums 0.0)
-    (do ([j 0 (fx+ j 1)]) ((fx= j n))
-      (let* ([dx (fl- (boid-x flock j) (boid-x flock i))]
-             [dy (fl- (boid-y flock j) (boid-y flock i))]
-             [d2 (fl+ (fl* dx dx) (fl* dy dy))])
-        ;; not itself, and in somebody's reach: most pairs stop here
-        (when (and (fl> d2 0.0) (fl< d2 longest-reach))
-          (let* ([vx (boid-vx flock i)]
-                 [vy (boid-vy flock i)]
-                 [h2 (fl+ (fl* vx vx) (fl* vy vy))]
-                 [ahead (fl+ (fl* vx dx) (fl* vy dy))]
-                 [lengths (flsqrt (fl* h2 d2))]
-                 [away-x (fl- 0.0 dx)]
-                 [away-y (fl- 0.0 dy)])
-            ;; in the field of view whose half-cosine is cosine: a boid
-            ;; standing still sees everything
-            (let-syntax ([sees? (syntax-rules ()
-                                  [(_ cosine)
-                                   (or (fl= h2 0.0)
-                                       (fl> ahead (fl* cosine lengths)))])])
-              ;; toward the center of the neighbors
-              (when (and (fl< d2 cohesion-reach) (sees? view-cosine))
-                (add! center-x (boid-x flock j))
-                (add! center-y (boid-y flock j))
-                (add! centered 1.0))
-              ;; toward their average velocity
-              (when (and (fl< d2 alignment-reach) (sees? view-cosine))
-                (add! heading-x (boid-vx flock j))
-                (add! heading-y (boid-vy flock j))
-                (add! headed 1.0))
-              ;; away from every boid this close, seen or not: you feel
-              ;; a bump from behind
-              (when (fl< d2 separation-reach)
-                (add! crowd-x away-x)
-                (add! crowd-y away-y))
-              ;; a unit step sideways out from behind each blocker:
-              ;; square to the line between them, on the side it heads
-              (when (and (fl< d2 clear-view-reach) (sees? blocker-cosine))
-                (let* ([turn-x (fl- 0.0 away-y)]
-                       [side (if (fl< (fl+ (fl* vx turn-x) (fl* vy away-x))
-                                      0.0)
-                                 -1.0
-                                 1.0)]
-                       [d (flsqrt d2)])
-                  (add! aside-x (fl/ (fl* turn-x side) d))
-                  (add! aside-y (fl/ (fl* away-x side) d))))
-              ;; a unit step straight away from each blocker
-              (when (and (fl< d2 back-off-reach) (sees? blocker-cosine))
-                (let ([d (flsqrt d2)])
-                  (add! back-x (fl/ away-x d))
-                  (add! back-y (fl/ away-y d)))))))))
+    ;; the boid steered: where it is, how it moves, its speed squared
     (let* ([x (boid-x flock i)]
            [y (boid-y flock i)]
            [vx (boid-vx flock i)]
            [vy (boid-vy flock i)]
-           [nvx (fl+ (fl+ (fl+ (fl+ (fl+ vx (toward center-x centered
-                                                    x cohesion))
-                                    (toward heading-x headed vx alignment))
-                               (fl* crowd-x separation))
-                          (fl* aside-x clear-view))
-                     (fl* back-x back-off))]
-           [nvy (fl+ (fl+ (fl+ (fl+ (fl+ vy (toward center-y centered
-                                                    y cohesion))
-                                    (toward heading-y headed vy alignment))
-                               (fl* crowd-y separation))
-                          (fl* aside-y clear-view))
-                     (fl* back-y back-off))])
-      (boid-x-set! next i (fl+ x nvx))
-      (boid-y-set! next i (fl+ y nvy))
-      (boid-vx-set! next i nvx)
-      (boid-vy-set! next i nvy))))
+           [h2 (fl+ (fl* vx vx) (fl* vy vy))])
+      (do ([j 0 (fx+ j 1)]) ((fx= j n))
+        (let* ([dx (fl- (boid-x flock j) x)]
+               [dy (fl- (boid-y flock j) y)]
+               [d2 (fl+ (fl* dx dx) (fl* dy dy))])
+          ;; not itself, and in somebody's reach: most pairs stop here
+          (when (and (fl> d2 0.0) (fl< d2 longest-reach))
+            (let* ([ahead (fl+ (fl* vx dx) (fl* vy dy))]
+                   [lengths (flsqrt (fl* h2 d2))]
+                   [away-x (fl- 0.0 dx)]
+                   [away-y (fl- 0.0 dy)])
+              ;; in the field of view whose half-cosine is cosine: a boid
+              ;; standing still sees everything
+              (let-syntax ([sees? (syntax-rules ()
+                                    [(_ cosine)
+                                     (or (fl= h2 0.0)
+                                         (fl> ahead (fl* cosine lengths)))])])
+                ;; toward the center of the neighbors
+                (when (and (fl< d2 cohesion-reach) (sees? view-cosine))
+                  (add! center-x (boid-x flock j))
+                  (add! center-y (boid-y flock j))
+                  (add! centered 1.0))
+                ;; toward their average velocity
+                (when (and (fl< d2 alignment-reach) (sees? view-cosine))
+                  (add! heading-x (boid-vx flock j))
+                  (add! heading-y (boid-vy flock j))
+                  (add! headed 1.0))
+                ;; away from every boid this close, seen or not: you feel
+                ;; a bump from behind
+                (when (fl< d2 separation-reach)
+                  (add! crowd-x away-x)
+                  (add! crowd-y away-y))
+                ;; a unit step sideways out from behind each blocker:
+                ;; square to the line between them, on the side it heads
+                (when (and (fl< d2 clear-view-reach) (sees? blocker-cosine))
+                  (let* ([turn-x (fl- 0.0 away-y)]
+                         [side (if (fl< (fl+ (fl* vx turn-x)
+                                             (fl* vy away-x))
+                                        0.0)
+                                   -1.0
+                                   1.0)]
+                         [d (flsqrt d2)])
+                    (add! aside-x (fl/ (fl* turn-x side) d))
+                    (add! aside-y (fl/ (fl* away-x side) d))))
+                ;; a unit step straight away from each blocker
+                (when (and (fl< d2 back-off-reach) (sees? blocker-cosine))
+                  (let ([d (flsqrt d2)])
+                    (add! back-x (fl/ away-x d))
+                    (add! back-y (fl/ away-y d)))))))))
+      (let ([nvx (fl+ (fl+ (fl+ (fl+ (fl+ vx (toward center-x centered
+                                                     x cohesion))
+                                     (toward heading-x headed vx alignment))
+                                (fl* crowd-x separation))
+                           (fl* aside-x clear-view))
+                      (fl* back-x back-off))]
+            [nvy (fl+ (fl+ (fl+ (fl+ (fl+ vy (toward center-y centered
+                                                     y cohesion))
+                                     (toward heading-y headed vy alignment))
+                                (fl* crowd-y separation))
+                           (fl* aside-y clear-view))
+                      (fl* back-y back-off))])
+        (boid-x-set! next i (fl+ x nvx))
+        (boid-y-set! next i (fl+ y nvy))
+        (boid-vx-set! next i nvx)
+        (boid-vy-set! next i nvy)))))
 
 ;; Boids a call of the crew: at least this many pairs, about 80 µs. So a
 ;; small flock runs on the caller alone, where waking the crew would cost
