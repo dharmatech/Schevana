@@ -82,6 +82,8 @@ Measured, before writing any of it:
 
 ## T1: names that cost nothing
 
+As of commit `427cfbb`; T2 changed the worklet's side of these forms.
+
 **What.** Four `syntax-rules` forms, at the top of the app:
 
 ```scheme no-run
@@ -208,6 +210,122 @@ the other boid's index again, `(fx* 4 j)` for its x and again for its y.
 Done once, as Boids does by hand, the names are free. A loop form that
 binds a record's offset once, in T2, can do that without the hand.
 
+## T2: vec code, lowered by macros
+
+**What.** A library of macros for worklets, `vec`, with the first
+port's operations: `vec-x`, `vec-y`, `make-vec`, `vec-zero`, `vec+`,
+`vec-`, `vec*`, `vec/`, `vec-dot`, `vec-mean`, and `let-vec*` to bind
+vecs. A vec is never made. A vec form is asked for one component at a
+time and becomes that component's flonum expression:
+
+```scheme no-run
+(vec-x (vec+ a b))   ; is (vec+ vec-x a b): (fl+ (vec-x a) (vec-x b))
+```
+
+So the three shapes Chez's optimizer leaves boxed don't come up. A vec
+chosen by a test, `(vec-if test a b)`, is `(if test ax bx)` for x and
+again for y. A vec variable bound by `let-vec*` is two flonum variables.
+A vec form of one's own is a macro, `define-vec-syntax`, always inlined,
+not a procedure that would have to return one. What adds up over the
+neighbors is a vec sum, `(add! crowd away)`, or a mean that counts too,
+`(vec-mean center)`, stored in an flvector as before.
+
+Records are reached through references. `(for-each-flat boid (other
+flock) ...)` steps through the flock four numbers at a time, and
+`(boid-x other)` reads at an offset worked out once. That takes back the
+index multiplies that cost T1.
+
+`define-worklet-library` declares a library like a record: once, at
+the app's top level, and listed by the worklets that use it,
+`(define-flat-worklet (vec boid (steering rules)) ...)`. Its macro hands
+the library on with its ellipses escaped, `(... template)`, so library
+code is written with ordinary ellipses. T1's worklet side became such a
+library, `flat`, which every flat worklet gets.
+
+The step now reads:
+
+```scheme no-run
+(for-each-flat boid (me flock lo hi)
+  (flvector-fill! sums 0.0)
+  (let-vec* ([p (boid-position me)]
+             [v (boid-velocity me)])
+    (let ([h2 (vec-dot v v)])
+      (for-each-flat boid (other flock)
+        (let-vec* ([to-other (vec- (boid-position other) p)])
+          (let ([d2 (vec-dot to-other to-other)])
+            ;; not itself, and in somebody's reach: most pairs stop here
+            (when (and (fl> d2 0.0) (fl< d2 longest-reach))
+              ...
+                ;; toward the center of the neighbors
+                (when (and (fl< d2 cohesion-reach) (sees? view-cosine))
+                  (add! center (boid-position other)))
+                ...
+                ;; a unit step sideways out from behind each blocker
+                (when (and (fl< d2 clear-view-reach)
+                           (sees? blocker-cosine))
+                  (let-vec* ([quarter-turn (make-vec (fl- 0.0 (vec-y away))
+                                                     (vec-x away))]
+                             [side (vec-if (fl< (vec-dot v quarter-turn)
+                                                0.0)
+                                           (vec* quarter-turn -1.0)
+                                           quarter-turn)])
+                    (let ([d (flsqrt d2)])
+                      (add! aside (vec/ side d)))))
+                ...))))
+      (let-vec* ([velocity (vec+ v
+                                 (vec* (toward center p) cohesion)
+                                 (vec* (toward heading v) alignment)
+                                 (vec* crowd separation)
+                                 (vec* aside clear-view)
+                                 (vec* back back-off))])
+        (boid-set! next me (vec+ p velocity) velocity)))))
+```
+
+The first port ended its step with `(fold-left vec+ (boid-velocity b)
+(list (push 'cohesion ...) ...))`, and its `boid-step-aside` has the
+same `quarter-turn` and `side`.
+
+**Readability.** Gained: the step is in vecs and boids, as the original
+was: position, velocity, to-other, away, a quarter turn and its side,
+what each rule adds up (center, heading, crowd, aside, back), and the
+velocity as v plus the five pushes, in the original's order. No
+component is written twice, and no number names a place. Paid:
+
+- The `vec` library, 125 lines with its comments (98 of code), on top of
+  `flat`'s 221 (146). The step itself is 61 lines of code, Boids' 77.
+- A vec isn't a value. `let-vec*` binds vecs and `let` numbers, a vec
+  chosen by a test is `vec-if`, not `if`, and a vec form where a number
+  is wanted is a syntax error, reported from inside an expansion.
+- A vec form of one's own is a macro, not a procedure: nothing to pass
+  around or call from the REPL.
+- The rules are still fused into one loop over the others, as in Boids:
+  each is a `when` adding one vec, not the original's procedure over a
+  list of neighbors (`filter`, `map`, `fold-left`). `sees?` still works
+  from `ahead` and `lengths`, worked out once a pair, as Boids does.
+
+**Speed.** 17 to 31% faster than Boids, and the same from run to run:
+
+| boids | default rules, alone | crew | heaviest, alone | crew |
+|---|---|---|---|---|
+| 150 | 0.71 | 0.72 | 0.81 | 0.81 |
+| 450 | 0.70 | 0.70 | 0.81 | 0.79 |
+| 2,000 | 0.69 | 0.71 | 0.80 | 0.83 |
+| 5,000 | 0.70 | 0.70 | 0.80 | 0.81 |
+
+Like for like, alone, two runs each, against Boids' own step given T2's
+two changes, the steered boid bound once and the loop over offsets:
+
+| step | default rules, 450 to 5,000 | heaviest, 450 and 2,000 |
+|---|---|---|
+| Boids, the steered boid bound once | 0.735 to 0.741 | 0.833 to 0.844 |
+| Boids, that and the loop over offsets | 0.699 to 0.711 | 0.790 to 0.824 |
+| Boids (clear), T2 | 0.690 to 0.695 | 0.801 to 0.808 |
+
+So T2 runs at Boids' own speed for the same loop, within 2% either way:
+the vecs and the names cost nothing. Its lead over Boids is the two
+changes, which a flat step could make too. A step allocates what Boids'
+does, its sums: 2,240 bytes in 20 steps of 300 boids.
+
 ## Along the way
 
 - `flmod` is called out of line and boxes, 32 bytes a call, so each
@@ -219,11 +337,12 @@ binds a record's offset once, in T2, can do that without the hand.
 
 ## Next
 
-- **T2: vec code lowered by macros.** `vec+`, `vec-`, `vec-dot`,
-  `vec-mean`, `boid-sees?` as macros that compute one component at a
-  time, so that `(vec+ a b c)` keeps the reference's order of operations
-  and its numbers. A vec chosen by an `if` is pushed into its components,
-  and a vec in a loop variable is split into two flonums: the three
-  shapes Chez's optimizer leaves boxed.
 - **T3: Chez itself.** What scalar replacement through `if`, loop
   variables and calls would take, as notes and the measurements above.
+- **The sums as loop variables.** Twelve flonum loop variables cost
+  nothing and ran in half the time of an flvector of sums; a fold over
+  the others with vec-valued accumulators would drop the step's one
+  allocation. Each pair would then name every sum it leaves alone.
+- **The rules apart again.** The first port's per-rule procedures over
+  lists of neighbors, fused into one loop by a macro: a bigger
+  compiler, in `syntax-rules`.

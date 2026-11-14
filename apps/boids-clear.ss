@@ -1,5 +1,5 @@
 ;;; apps/boids-clear.ss — Boids (apps/boids.ss), its step written with
-;;; names instead of numbers. A study in keeping the flat step's speed and
+;;; names and vecs, not numbers. A study in keeping the flat step's speed and
 ;;; getting back the original's clarity (apps/boids.ss as first ported,
 ;;; with vec and boid records): the same flock, to the last digit, at the
 ;;; same speed. docs/BOIDS-CLEAR.md has what was tried and measured.
@@ -31,9 +31,6 @@
 ;;; ------------------------------------------------------------------ flat
 ;;; Flat records: flonums side by side in an flvector, named once. A flock
 ;;; is boids end to end; the rules a step reads are one record of numbers.
-;;; Where a name is used, it becomes the flvector-ref at its field's
-;;; offset. That costs nothing but an accessor's index, multiplied again
-;;; at each use: Chez shares no common subexpressions (docs/BOIDS-CLEAR.md).
 ;;;
 ;;;   (define-flat-record boid (boid-x boid-x-set!) ...)
 ;;;       records end to end: (boid-x flock i), (boid-x-set! flock i x)
@@ -43,23 +40,24 @@
 ;;;   (flat-size boid)      its numbers, 4
 ;;;
 ;;; A worklet reaches none of the app's names, so define-flat-worklet
-;;; declares again in it the records it names, from their one declaration
-;;; here; there they are macros:
+;;; declares again in it the records it lists, from their one declaration
+;;; here, with the libraries of macros it lists (define-worklet-library):
 ;;;
-;;;   (define-flat-worklet (boid (steering rules)) (step! lo hi flock rules)
+;;;   (define-flat-worklet (vec boid (steering rules)) (step! lo hi f rules)
 ;;;     ...)
-;;;       in it, (boid-x flock i) is (flvector-ref flock (fx* 4 i)), and
-;;;       cohesion is (flvector-ref rules 0)
-;;;   (define-flat-variables sums center-x ...)
-;;;       in a worklet's body: an flvector, sums, whose numbers are the
-;;;       variables center-x ..., which set! sets. A flonum variable set!
-;;;       in a loop would box.
+;;;
+;;; In it, cohesion is (flvector-ref rules 0), and a record is reached
+;;; through a reference: (for-each-flat boid (b f lo hi) ...) binds b to
+;;; each of boids [lo, hi) of f in turn, (boid-x b) is its x, and
+;;; (boid-x-set! next b x) sets the x of the boid in next where b is in f.
+;;; Each name becomes the flvector-ref at its field's offset, and a
+;;; reference's offset is worked out once: Chez shares no common
+;;; subexpressions, so (boid-x flock i) would multiply i at each use
+;;; (docs/BOIDS-CLEAR.md).
 ;;;
 ;;; The app is given syntax-rules alone, which makes no name from another
 ;;; (boid and x into boid-x): an accessor's name is written out, as in
-;;; R6RS's define-record-type. Lists are matched as a pair's tail, (x .
-;;; more), not with an ellipsis: these macros are written again inside a
-;;; template, where an ellipsis would have to be escaped.
+;;; R6RS's define-record-type.
 
 ;; How many things follow: (flat-count a b c) is (fx+ 1 (fx+ 1 (fx+ 1
 ;; 0))), which the compiler folds to 3.
@@ -128,12 +126,26 @@
       (check (cddr l))))
   (apply flvector (map (lambda (field) (value-of field plist)) fields)))
 
+;; (define-worklet-library name form ...): definitions for worklets, not
+;; for here: a flat worklet that lists name has them. Its macro hands them
+;; on as a record's does, its ellipses escaped: (... template) is template,
+;; its ellipses as they are.
+(define-syntax define-worklet-library
+  (syntax-rules ()
+    [(_ name form ...)
+     (define-syntax name
+       (syntax-rules ()
+         [(_ library-k library-arg (... ...))
+          (library-k ((... ...) (begin form ...)) library-arg (... ...))]))]))
+
 ;; (define-flat-worklet (record ...) (name . formals) body ...): a worklet
-;; in which the records listed are named as here; a record of names
-;; listed with a variable, (steering rules), is read from it.
+;; in which the records and libraries listed are named as here, and the
+;; library flat always; a record of names listed with a variable,
+;; (steering rules), is read from it.
 (define-syntax define-flat-worklet
   (syntax-rules ()
-    [(_ records head . body) (flat-worklet-gather records () head . body)]))
+    [(_ (record ...) head . body)
+     (flat-worklet-gather (flat record ...) () head . body)]))
 
 ;; The records' declarations, asked of each in turn.
 (define-syntax flat-worklet-gather
@@ -159,63 +171,208 @@
                           (gathered ... (flat-variables variable 0 . fields))
                           head . body)]))
 
-;; The worklet: these macros, as macros of its own, then the records'
-;; declarations, then its body. define-worklet compiles it as plain text,
-;; where they find each other by name.
+;; The worklet: the declarations, then its body. define-worklet compiles
+;; it as plain text, where they find each other by name.
 (define-syntax flat-worklet
   (syntax-rules ()
     [(_ (declaration ...) head . body)
-     (define-worklet head
-       (define-syntax flat-count
+     (define-worklet head declaration ... . body)]))
+
+;; A worklet's side of flat records, which every flat worklet has.
+(define-worklet-library flat
+  (define-syntax flat-count
+    (syntax-rules ()
+      [(_) 0]
+      [(_ x more ...) (fx+ 1 (flat-count more ...))]))
+  ;; the record's macro, as here, and each field's accessor and setter
+  (define-syntax define-flat-record
+    (syntax-rules ()
+      [(_ name field ...)
+       (begin
+         (define-syntax name
+           (syntax-rules ()
+             [(_ k arg (... ...))
+              (k (define-flat-record name field ...) arg (... ...))]))
+         (flat-record-macros 0 field ...))]))
+  (define-syntax flat-record-macros
+    (syntax-rules ()
+      [(_ offset) (begin)]
+      [(_ offset (get set) more ...)
+       (begin
+         (define-syntax get
+           (syntax-rules ()
+             [(_ b) (b offset)]))
+         (define-syntax set
+           (syntax-rules ()
+             [(_ v b x) (flvector-set! v (flat-offset (b) offset) x)]))
+         (flat-record-macros (fx+ offset 1) more ...))]))
+  (define-syntax flat-size
+    (syntax-rules ()
+      [(_ name) (name flat-size-of)]))
+  (define-syntax flat-size-of
+    (syntax-rules ()
+      [(_ (declare name field ...)) (flat-count field ...)]))
+  ;; a field's place: a record's offset, and the field's past it
+  (define-syntax flat-offset
+    (syntax-rules ()
+      [(_ at 0) at]
+      [(_ at k) (fx+ at k)]))
+  ;; (for-each-flat record (b v lo hi) body ...): body for each of records
+  ;; [lo, hi) of v, all of them without lo and hi, b a macro of the one at
+  ;; hand: (b k) its field k past its offset, (b) its offset. v is a
+  ;; variable.
+  (define-syntax for-each-flat
+    (syntax-rules ()
+      [(_ record (b v) body ...)
+       (flat-loop record b v 0 (flvector-length v) body ...)]
+      [(_ record (b v lo hi) body ...)
+       (let ([size (flat-size record)])
+         (flat-loop record b v (fx* size lo) (fx* size hi) body ...))]))
+  (define-syntax flat-loop
+    (syntax-rules ()
+      [(_ record b v start end body ...)
+       (let ([size (flat-size record)] [stop end])
+         (do ([at start (fx+ at size)]) ((fx= at stop))
+           (let-syntax ([b (syntax-rules ()
+                             [(_) at]
+                             [(_ k) (flvector-ref v (flat-offset at k))])])
+             body ...)))]))
+  ;; each field a variable: its slot of the flvector v
+  (define-syntax flat-variables
+    (syntax-rules ()
+      [(_ v offset) (begin)]
+      [(_ v offset field more ...)
+       (begin
+         (define-syntax field
+           (identifier-syntax
+            [_ (flvector-ref v offset)]
+            [(set! _ x) (flvector-set! v offset x)]))
+         (flat-variables v (fx+ offset 1) more ...))])))
+
+;;; ------------------------------------------------------------------ vecs
+;;; Vecs for worklets: 2D vectors of flonums, x and y, with the first
+;;; port's operations (vec+, vec-dot, vec-mean, ...), never made. Chez
+;;; boxes a flonum that crosses a call, and folds a record away only where
+;;; nothing chooses between it and another (an if), keeps it in a loop or
+;;; hands it to a call. So a vec form here is asked for one component at a
+;;; time and becomes that component's flonum expression: (vec-x (vec+ a
+;;; b)) is (vec+ vec-x a b), which is (fl+ (vec-x a) (vec-x b)). A vec form
+;;; takes the component wanted first; define-vec-syntax writes that part.
+;;; A vec variable, bound by let-vec*, is two flonum variables, and a
+;;; macro of the component wanted. A vec is never a value: where a number
+;;; is wanted, a vec form is a syntax error.
+;;;
+;;; Each operation does its flonum operations in the order written, so
+;;; (vec+ v a b) is (v + a) + b, component by component: the reference's
+;;; numbers, to the last digit.
+
+(define-worklet-library vec
+  (define-syntax vec-x
+    (syntax-rules ()
+      [(_ (form arg ...)) (form vec-x arg ...)]
+      [(_ v) (v vec-x)]))
+  (define-syntax vec-y
+    (syntax-rules ()
+      [(_ (form arg ...)) (form vec-y arg ...)]
+      [(_ v) (v vec-y)]))
+  (define-syntax make-vec
+    (syntax-rules (vec-x vec-y)
+      [(_ vec-x x y) x]
+      [(_ vec-y x y) y]))
+  (define-syntax vec-zero
+    (syntax-rules ()
+      [(_ c) 0.0]))
+  ;; (vec+ a b c) is (a + b) + c
+  (define-syntax vec+
+    (syntax-rules ()
+      [(_ c a b) (fl+ (c a) (c b))]
+      [(_ c a b more ...) (vec+ c (vec+ a b) more ...)]))
+  (define-syntax vec-
+    (syntax-rules ()
+      [(_ c a b) (fl- (c a) (c b))]))
+  (define-syntax vec*
+    (syntax-rules ()
+      [(_ c v k) (fl* (c v) k)]))
+  (define-syntax vec/
+    (syntax-rules ()
+      [(_ c v k) (fl/ (c v) k)]))
+  (define-syntax vec-dot
+    (syntax-rules ()
+      [(_ a b) (fl+ (fl* (vec-x a) (vec-x b)) (fl* (vec-y a) (vec-y b)))]))
+  ;; a or b as test is true or not; a vec can't be an if's
+  (define-syntax vec-if
+    (syntax-rules ()
+      [(_ c test a b) (if test (c a) (c b))]))
+  ;; (define-vec-syntax (name arg ...) vec-form): a vec form of its own
+  (define-syntax define-vec-syntax
+    (syntax-rules ()
+      [(_ (name arg ...) vec-form)
+       (define-syntax name
          (syntax-rules ()
-           [(_) 0]
-           [(_ x . more) (fx+ 1 (flat-count . more))]))
-       (define-syntax define-flat-record
-         (syntax-rules ()
-           [(_ name . fields)
-            (begin
-              (define-syntax name
-                (syntax-rules ()
-                  [(_ k . args)
-                   (k (define-flat-record name . fields) . args)]))
-              (flat-record-macros (flat-count . fields) 0 . fields))]))
-       (define-syntax flat-record-macros
-         (syntax-rules ()
-           [(_ size offset) (begin)]
-           [(_ size offset (get set) . more)
-            (begin
-              (define-syntax get
-                (syntax-rules ()
-                  [(_ v i) (flvector-ref v (fx+ (fx* size i) offset))]))
-              (define-syntax set
-                (syntax-rules ()
-                  [(_ v i x) (flvector-set! v (fx+ (fx* size i) offset) x)]))
-              (flat-record-macros size (fx+ offset 1) . more))]))
-       (define-syntax flat-size
-         (syntax-rules ()
-           [(_ name) (name flat-size-of)]))
-       (define-syntax flat-size-of
-         (syntax-rules ()
-           [(_ (declare name . fields)) (flat-count . fields)]))
-       ;; each field a variable: its slot of the flvector v
-       (define-syntax flat-variables
-         (syntax-rules ()
-           [(_ v offset) (begin)]
-           [(_ v offset field . more)
-            (begin
-              (define-syntax field
-                (identifier-syntax
-                 [_ (flvector-ref v offset)]
-                 [(set! _ x) (flvector-set! v offset x)]))
-              (flat-variables v (fx+ offset 1) . more))]))
-       (define-syntax define-flat-variables
-         (syntax-rules ()
-           [(_ v . fields)
-            (begin
-              (define v (make-flvector (flat-count . fields) 0.0))
-              (flat-variables v 0 . fields))]))
-       declaration ...
-       . body)]))
+           [(_ component arg ...) (component vec-form)]))]))
+  ;; let* for vecs: each v a vec variable, its components worked out once
+  (define-syntax let-vec*
+    (syntax-rules ()
+      [(_ () body ...) (let () body ...)]
+      [(_ ([v e] more ...) body ...)
+       (let ([x (vec-x e)] [y (vec-y e)])
+         (let-syntax ([v (syntax-rules (vec-x vec-y)
+                           [(_ vec-x) x]
+                           [(_ vec-y) y])])
+           (let-vec* (more ...) body ...)))]))
+  ;; (define-vec-sums sums (center mean) (crowd sum) ...): what a loop adds
+  ;; up, vecs in an flvector, sums: a flonum variable set! in a loop would
+  ;; box. (add! crowd e) adds the vec e to crowd; a mean counts what it
+  ;; adds, (count-of center), and (vec-mean center) is its sum over that.
+  ;; (vec-x crowd) is the sum's x.
+  (define-syntax define-vec-sums
+    (syntax-rules ()
+      [(_ v spec ...)
+       (begin
+         (define v (make-flvector (vec-sums-size spec ...) 0.0))
+         (vec-sums v 0 spec ...))]))
+  (define-syntax vec-sums-size
+    (syntax-rules (sum mean)
+      [(_) 0]
+      [(_ (name sum) more ...) (fx+ 2 (vec-sums-size more ...))]
+      [(_ (name mean) more ...) (fx+ 3 (vec-sums-size more ...))]))
+  (define-syntax vec-sums
+    (syntax-rules (sum mean)
+      [(_ v at) (begin)]
+      [(_ v at (name sum) more ...)
+       (begin
+         (define-syntax name
+           (syntax-rules (vec-x vec-y add!)
+             [(_ vec-x) (flvector-ref v at)]
+             [(_ vec-y) (flvector-ref v (fx+ at 1))]
+             [(_ add! e)
+              (begin (vec-sums-add! v at (vec-x e))
+                     (vec-sums-add! v (fx+ at 1) (vec-y e)))]))
+         (vec-sums v (fx+ at 2) more ...))]
+      [(_ v at (name mean) more ...)
+       (begin
+         (define-syntax name
+           (syntax-rules (vec-x vec-y add! count-of)
+             [(_ vec-x) (flvector-ref v at)]
+             [(_ vec-y) (flvector-ref v (fx+ at 1))]
+             [(_ count-of) (flvector-ref v (fx+ at 2))]
+             [(_ add! e)
+              (begin (vec-sums-add! v at (vec-x e))
+                     (vec-sums-add! v (fx+ at 1) (vec-y e))
+                     (vec-sums-add! v (fx+ at 2) 1.0))]))
+         (vec-sums v (fx+ at 3) more ...))]))
+  (define-syntax vec-sums-add!
+    (syntax-rules ()
+      [(_ v at x) (flvector-set! v at (fl+ (flvector-ref v at) x))]))
+  (define-syntax add!
+    (syntax-rules ()
+      [(_ s e) (s add! e)]))
+  (define-syntax count-of
+    (syntax-rules ()
+      [(_ s) (s count-of)]))
+  (define-syntax vec-mean
+    (syntax-rules ()
+      [(_ c s) (fl/ (s c) (count-of s))])))
 
 ;;; ------------------------------------------------------------------ boids
 
@@ -368,109 +525,85 @@
 
 ;; Boids [lo, hi) of flock steered into next, each by everyone's current
 ;; state: its velocity plus each rule's push times its weight, and its
-;; position moved by that. Every pair of boids is looked at, so the loop
-;; over them keeps its flonums unboxed: nothing crosses a call, and what
-;; adds up lives in sums, the one thing a call allocates, since a flonum
-;; variable set! in a loop would box. The steered boid's numbers, bound
-;; once, stay unboxed: nothing sets them.
-(define-flat-worklet (boid (steering rules))
+;; position moved by that. Every pair of boids is looked at, in one loop
+;; over the others for all the rules, which keeps its flonums unboxed:
+;; vecs are never made, and what adds up lives in sums, the one thing a
+;; call allocates.
+(define-flat-worklet (vec boid (steering rules))
   (boids-steer! lo hi flock next rules)
-  (define n (fxquotient (flvector-length flock) (flat-size boid)))
-  ;; what a boid's neighbors add up to, rule by rule: for cohesion, where
-  ;; they are and how many; for alignment, how they move and how many;
-  ;; the pushes away from them, aside and back
-  (define-flat-variables sums
-    center-x
-    center-y
-    centered
-    heading-x
-    heading-y
-    headed
-    crowd-x
-    crowd-y
-    aside-x
-    aside-y
-    back-x
-    back-y)
-  (define-syntax add!
-    (syntax-rules () [(_ sum v) (set! sum (fl+ sum v))]))
-  ;; toward the mean of what is summed, over count
-  (define-syntax toward
+  ;; where a boid is and where it's heading
+  (define-vec-syntax (boid-position b) (make-vec (boid-x b) (boid-y b)))
+  (define-vec-syntax (boid-velocity b) (make-vec (boid-vx b) (boid-vy b)))
+  (define-syntax boid-set!
     (syntax-rules ()
-      [(_ sum count own weight)
-       (if (fl> count 0.0) (fl* (fl- (fl/ sum count) own) weight) 0.0)]))
-  (do ([i lo (fx+ i 1)]) ((fx= i hi))
+      [(_ v b position velocity)
+       (begin (boid-x-set! v b (vec-x position))
+              (boid-y-set! v b (vec-y position))
+              (boid-vx-set! v b (vec-x velocity))
+              (boid-vy-set! v b (vec-y velocity)))]))
+  ;; what a boid's neighbors add up to, rule by rule
+  (define-vec-sums sums
+    (center mean)     ; cohesion: where they are
+    (heading mean)    ; alignment: how they move
+    (crowd sum)       ; separation: away from each
+    (aside sum)       ; clear view: a step aside from each blocker
+    (back sum))       ; back off: a step back from each
+  ;; toward the mean of what s adds up, from own: nowhere, for nothing
+  (define-vec-syntax (toward s own)
+    (vec-if (fl> (count-of s) 0.0) (vec- (vec-mean s) own) vec-zero))
+  (for-each-flat boid (me flock lo hi)
     (flvector-fill! sums 0.0)
-    ;; the boid steered: where it is, how it moves, its speed squared
-    (let* ([x (boid-x flock i)]
-           [y (boid-y flock i)]
-           [vx (boid-vx flock i)]
-           [vy (boid-vy flock i)]
-           [h2 (fl+ (fl* vx vx) (fl* vy vy))])
-      (do ([j 0 (fx+ j 1)]) ((fx= j n))
-        (let* ([dx (fl- (boid-x flock j) x)]
-               [dy (fl- (boid-y flock j) y)]
-               [d2 (fl+ (fl* dx dx) (fl* dy dy))])
-          ;; not itself, and in somebody's reach: most pairs stop here
-          (when (and (fl> d2 0.0) (fl< d2 longest-reach))
-            (let* ([ahead (fl+ (fl* vx dx) (fl* vy dy))]
-                   [lengths (flsqrt (fl* h2 d2))]
-                   [away-x (fl- 0.0 dx)]
-                   [away-y (fl- 0.0 dy)])
-              ;; in the field of view whose half-cosine is cosine: a boid
-              ;; standing still sees everything
-              (let-syntax ([sees? (syntax-rules ()
-                                    [(_ cosine)
-                                     (or (fl= h2 0.0)
-                                         (fl> ahead (fl* cosine lengths)))])])
-                ;; toward the center of the neighbors
-                (when (and (fl< d2 cohesion-reach) (sees? view-cosine))
-                  (add! center-x (boid-x flock j))
-                  (add! center-y (boid-y flock j))
-                  (add! centered 1.0))
-                ;; toward their average velocity
-                (when (and (fl< d2 alignment-reach) (sees? view-cosine))
-                  (add! heading-x (boid-vx flock j))
-                  (add! heading-y (boid-vy flock j))
-                  (add! headed 1.0))
-                ;; away from every boid this close, seen or not: you feel
-                ;; a bump from behind
-                (when (fl< d2 separation-reach)
-                  (add! crowd-x away-x)
-                  (add! crowd-y away-y))
-                ;; a unit step sideways out from behind each blocker:
-                ;; square to the line between them, on the side it heads
-                (when (and (fl< d2 clear-view-reach) (sees? blocker-cosine))
-                  (let* ([turn-x (fl- 0.0 away-y)]
-                         [side (if (fl< (fl+ (fl* vx turn-x)
-                                             (fl* vy away-x))
-                                        0.0)
-                                   -1.0
-                                   1.0)]
-                         [d (flsqrt d2)])
-                    (add! aside-x (fl/ (fl* turn-x side) d))
-                    (add! aside-y (fl/ (fl* away-x side) d))))
-                ;; a unit step straight away from each blocker
-                (when (and (fl< d2 back-off-reach) (sees? blocker-cosine))
-                  (let ([d (flsqrt d2)])
-                    (add! back-x (fl/ away-x d))
-                    (add! back-y (fl/ away-y d)))))))))
-      (let ([nvx (fl+ (fl+ (fl+ (fl+ (fl+ vx (toward center-x centered
-                                                     x cohesion))
-                                     (toward heading-x headed vx alignment))
-                                (fl* crowd-x separation))
-                           (fl* aside-x clear-view))
-                      (fl* back-x back-off))]
-            [nvy (fl+ (fl+ (fl+ (fl+ (fl+ vy (toward center-y centered
-                                                     y cohesion))
-                                     (toward heading-y headed vy alignment))
-                                (fl* crowd-y separation))
-                           (fl* aside-y clear-view))
-                      (fl* back-y back-off))])
-        (boid-x-set! next i (fl+ x nvx))
-        (boid-y-set! next i (fl+ y nvy))
-        (boid-vx-set! next i nvx)
-        (boid-vy-set! next i nvy)))))
+    (let-vec* ([p (boid-position me)]
+               [v (boid-velocity me)])
+      (let ([h2 (vec-dot v v)])
+        (for-each-flat boid (other flock)
+          (let-vec* ([to-other (vec- (boid-position other) p)])
+            (let ([d2 (vec-dot to-other to-other)])
+              ;; not itself, and in somebody's reach: most pairs stop here
+              (when (and (fl> d2 0.0) (fl< d2 longest-reach))
+                (let ([ahead (vec-dot v to-other)]
+                      [lengths (flsqrt (fl* h2 d2))])
+                  ;; other is in the field of view whose half-cosine is
+                  ;; cosine: a boid standing still sees everything
+                  (define-syntax sees?
+                    (syntax-rules ()
+                      [(_ cosine)
+                       (or (fl= h2 0.0) (fl> ahead (fl* cosine lengths)))]))
+                  (let-vec* ([away (vec- p (boid-position other))])
+                    ;; toward the center of the neighbors
+                    (when (and (fl< d2 cohesion-reach) (sees? view-cosine))
+                      (add! center (boid-position other)))
+                    ;; toward their average velocity
+                    (when (and (fl< d2 alignment-reach) (sees? view-cosine))
+                      (add! heading (boid-velocity other)))
+                    ;; away from every boid this close, seen or not: you
+                    ;; feel a bump from behind
+                    (when (fl< d2 separation-reach)
+                      (add! crowd away))
+                    ;; a unit step sideways out from behind each blocker:
+                    ;; square to the line between them, on the side it
+                    ;; heads
+                    (when (and (fl< d2 clear-view-reach)
+                               (sees? blocker-cosine))
+                      (let-vec* ([quarter-turn (make-vec (fl- 0.0 (vec-y away))
+                                                         (vec-x away))]
+                                 [side (vec-if (fl< (vec-dot v quarter-turn)
+                                                    0.0)
+                                               (vec* quarter-turn -1.0)
+                                               quarter-turn)])
+                        (let ([d (flsqrt d2)])
+                          (add! aside (vec/ side d)))))
+                    ;; a unit step straight away from each blocker
+                    (when (and (fl< d2 back-off-reach) (sees? blocker-cosine))
+                      (let ([d (flsqrt d2)])
+                        (add! back (vec/ away d))))))))))
+        (let-vec* ([velocity (vec+ v
+                                   (vec* (toward center p) cohesion)
+                                   (vec* (toward heading v) alignment)
+                                   (vec* crowd separation)
+                                   (vec* aside clear-view)
+                                   (vec* back back-off))])
+          (boid-set! next me (vec+ p velocity) velocity))))))
 
 ;; Boids a call of the crew: at least this many pairs, about 80 µs. So a
 ;; small flock runs on the caller alone, where waking the crew would cost
@@ -501,27 +634,27 @@
 ;; still, a boid has no heading, so it stays put. A worklet for the
 ;; boid's names, which a procedure here has only as procedures: it runs
 ;; on the caller.
-(define-flat-worklet (boid) (boids-keep-on-screen! lo hi flock least most w h)
-  ;; the velocity of boid i times k
-  (define-syntax scale!
+(define-flat-worklet (vec boid)
+  (boids-keep-on-screen! lo hi flock least most w h)
+  (define-vec-syntax (boid-velocity b) (make-vec (boid-vx b) (boid-vy b)))
+  (define-syntax boid-velocity-set!
     (syntax-rules ()
-      [(_ i k)
-       (let ([k* k])
-         (boid-vx-set! flock i (fl* (boid-vx flock i) k*))
-         (boid-vy-set! flock i (fl* (boid-vy flock i) k*)))]))
-  (do ([i lo (fx+ i 1)]) ((fx= i hi))
-    (boid-x-set! flock i (flmod (boid-x flock i) w))
-    (boid-y-set! flock i (flmod (boid-y flock i) h))
-    (let* ([vx (boid-vx flock i)]
-           [vy (boid-vy flock i)]
-           [s2 (fl+ (fl* vx vx) (fl* vy vy))])
-      (when (and (fl> s2 0.0) (fl< s2 (fl* least least)))
-        (scale! i (fl/ least (flsqrt s2)))))
-    (let* ([vx (boid-vx flock i)]
-           [vy (boid-vy flock i)]
-           [s2 (fl+ (fl* vx vx) (fl* vy vy))])
-      (when (fl> s2 (fl* most most))
-        (scale! i (fl/ most (flsqrt s2)))))))
+      [(_ b velocity)
+       (begin (boid-vx-set! flock b (vec-x velocity))
+              (boid-vy-set! flock b (vec-y velocity)))]))
+  (for-each-flat boid (b flock lo hi)
+    (boid-x-set! flock b (flmod (boid-x b) w))
+    (boid-y-set! flock b (flmod (boid-y b) h))
+    (let-vec* ([v (boid-velocity b)])
+      (let ([s2 (vec-dot v v)])
+        (when (and (fl> s2 0.0) (fl< s2 (fl* least least)))
+          (let ([k (fl/ least (flsqrt s2))])
+            (boid-velocity-set! b (vec* v k))))))
+    (let-vec* ([v (boid-velocity b)])
+      (let ([s2 (vec-dot v v)])
+        (when (fl> s2 (fl* most most))
+          (let ([k (fl/ most (flsqrt s2))])
+            (boid-velocity-set! b (vec* v k))))))))
 
 ;; One frame on a w × h screen: a sim step, then the speed limits and
 ;; the wrap.
