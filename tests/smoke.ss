@@ -852,27 +852,8 @@
                       (eq? (focused-window) fd)
                       (eq? (car (windows)) fd)
                       (eq? (cadr (windows)) w)))))
-      (let-values ([(x y) (ui-point fd (row 0) 0.5)])
-        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
-                 `(mouse-up ,x ,y left) `(mouse-down ,x ,y left 2)
-                 `(mouse-up ,x ,y left))
-        (steps 2))
-      (check "a double click goes into a folder"
-             (equal? (file-dialog-folder d) sub))
-      (press! 'backspace)
-      (steps 2)
-      (let ([up (file-dialog-folder d)])
-        (press! 'left 'alt)
-        (steps 2)
-        (let ([back (file-dialog-folder d)])
-          (press! 'right 'alt)
-          (steps 2)
-          (check "Backspace goes up, Alt+Left back, Alt+Right forward"
-                 (and (equal? up dir) (equal? back sub)
-                      (equal? (file-dialog-folder d) dir)))))
+      ;; its rows, keys and paths: tests/units/file-dialog.ss
       (click-ui! fd (row 1))
-      (check "a click selects a file and names it"
-             (equal? (file-dialog-name d) "smoke-load.ss"))
       (click-ui! fd '(file-dialog pick))
       (check "Load picks it: the dialog closes, Environments goes on, and \
               the file is loaded into the environment"
