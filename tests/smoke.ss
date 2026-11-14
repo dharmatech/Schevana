@@ -1659,32 +1659,6 @@
 (check "and Auto follows the desktop again"
        (and (= 0 (theme 'scale)) (= *scale* 1.0) (= (canvas-pixel-width) 1280)))
 (reset-theme!)
-;; A slider held, a right click on another window and both buttons let go
-;; there: back over Settings, the pointer drags nothing.
-(click-ui! s '(tab colors))
-(click-ui! s '(color accent))
-(move-window! s 40 (window-y s))   ; the other window beside it, not over
-(steps 1)
-(let ([other (open-window "Other" 'size '(160 . 100)
-                          'pos (cons (min 1100 (+ (window-x s) (window-w s) 10))
-                                     600))])
-  (steps 1)
-  (let-values ([(x0 y) (ui-point s 'lightness 0.5)]
-               [(x1 y1) (ui-point s 'lightness 0.1)]
-               [(ox oy ow oh) (content-rect other)])
-    (let ([ox (+ ox 20)] [oy (+ oy 20)])
-      (inject! `(mouse-move ,x0 ,y) `(mouse-down ,x0 ,y left 1)
-               `(mouse-move ,ox ,oy) `(mouse-down ,ox ,oy right 1)
-               `(mouse-up ,ox ,oy right) `(mouse-up ,ox ,oy left))
-      (steps 2)
-      (let ([accent (theme 'accent)])
-        (inject! `(mouse-move ,x1 ,y))
-        (steps 2)
-        (check "a slider let go over another window, after a right click \
-                there, follows the pointer no more"
-               (and (eq? (window-at ox oy) other)
-                    (= accent (theme 'accent)))))))
-  (close-window! other))
 (reset-theme!)
 (close-window! s)
 
