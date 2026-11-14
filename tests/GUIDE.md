@@ -23,8 +23,11 @@ scheme --script tests/sources.ss
   reloads the sources. It writes screenshots to `out/`.
 - **units** runs every file of `tests/units/`, a topic each (an app's, a
   kit's, a service's, a part of the core's), in a process of its own, so
-  that none leans on what another left behind. `scheme --script
-  tests/units.ss out life boids` runs those two alone.
+  that none leans on what another left behind, many at once: as many as
+  `SCHEVANA_TEST_JOBS` says, else the CPUs less two. Each writes in a
+  folder of its own, `out/topic`, and says what it says there; the suite
+  prints it in the topics' order. `scheme --script tests/units.ss out
+  life boids` runs those two alone.
 - **frame** draws frames on lavapipe, or on Metal on a Mac, with no window
   but one offscreen. It compares the screen bit for bit with the world
   drawn into an image, in every style and at several scales, and checks
@@ -89,6 +92,31 @@ loop `n` times, `(raises? thunk)` says whether a call raises, and
   the suite at its line, and the suite goes on, but what the form left
   undone fails the checks after it.
 
+## Levels
+
+Tests form a hierarchy: the basics are checked at the bottom, and each
+level above tests only what it adds, trusting the levels below.
+
+1. The sources (`tests/sources.ss`): the rules the code itself follows.
+2. The core and the kits (units: `ui`, `edit`, `text`, `drawing`, …):
+   measuring, wrapping, and each widget by itself, in a synthetic window
+   of its own: its layout in the size it's given, its keys, its mouse.
+3. An app's API (units: `add-task!`, `tasks-match?`, `tasks-layout`): its
+   rules as procedures of what they're given. An app's tests don't test a
+   widget: every widget is tested at level 2, so an app needs no test of
+   its screen beyond that it opens.
+4. The world driven by events (smoke): what only the whole world does, a
+   window's life, focus between windows, a reload, the menus and bars of
+   the desktop, each from a state the check sets up.
+5. Frames (`tests/frame.ss`): that what changes shows, drawn as the world
+   draws it.
+
+- A check belongs to the lowest level that can see what it says. One that
+  says again what a lower level says is dropped, or moved down to it.
+- A sequence of checks starts from a state it sets itself (a window sized
+  by the app's own measures, the selection it needs), not from what an
+  earlier sequence left, so one failure doesn't take the rest with it.
+
 ## What a test may touch
 
 - Tests and scripts never touch the user's `~/.schevana-theme.ss`,
@@ -108,6 +136,11 @@ loop `n` times, `(raises? thunk)` says whether a call raises, and
   limit raised says what it now means.
 - What varies is fixed: a seed for what's random (`random-seed`), the fake
   clock for what's timed, a size given for each window a check measures.
+- Topics run at once, so each holds on a busy machine: no check leans on
+  how fast a step is, or reads the real clock where it means a step. A
+  check that fails only under load is flaky; reproduce it beside spinning
+  shells at the suites' own priority (nice 19), never above it, where the
+  check would starve rather than share.
 
 ## Both Chez versions
 
