@@ -17,23 +17,10 @@ scheme --script tests/frame.ss out
 scheme --script tests/sources.ss
 ```
 
-- Both versions, because they count differently: from 10.4.0 a copy
-  counts against an engine's ticks by its size, so a check can pass under
-  one and fail under the other. A suite runs under the `scheme` first on
-  `PATH`, and `tests/units.ss` runs its topics by `chez` if `PATH` has
-  one, else by `scheme`: to run them under the other version, build it
-  from its release tag and put its `bin` first on `PATH`.
-- A change in behavior comes with a test of it.
-- A unit check goes in its topic's file in `tests/units/` (an app's, a
-  kit's, a service's, a part of the core's), which `tests/units.ss` runs in a
-  process of its own: it leans on no other topic, and what several use is
-  in `tests/units.ss`. `scheme --script tests/units.ss out life` runs one.
-- Tests and scripts never touch the user's `~/.schevana-theme.ss`,
-  `~/.schevana.ss` or `~/.schevana.d`. Point `*theme-file-path*` and
-  `*grant-file-path*` at scratch files, as the suites do, or run with
-  `HOME` set to a scratch folder.
-- Nothing opens a real window: the suites run headless, on lavapipe, the
-  Vulkan driver on the CPU (`mesa-vulkan-drivers`).
+- A change in behavior comes with a test of it, written by the rules in
+  [tests/GUIDE.md](tests/GUIDE.md): where a check goes, what it may touch,
+  and how it holds under both Chez versions, with any font and on any
+  platform (and how to run the suites under the other Chez).
 - A new internal structure isn't finished until an `inspect-…` procedure in
   `kits/inspect.ss` reads it: what the Pipeline shows, a REPL and a test can
   read.

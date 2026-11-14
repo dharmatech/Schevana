@@ -91,7 +91,8 @@ A programmer's guide, taught at the REPL, in reading order:
 - [Monitoring](docs/MONITORING.md): Monitor, the Pipeline, the profiler,
   the Debug REPL
 - [Internals](docs/INTERNALS.md): the boot chain, frames, the pacer
-- [Testing](docs/TESTING.md): the suites, and adding a check
+- [Testing](docs/TESTING.md): running the suites; writing tests is in
+  [tests/GUIDE.md](tests/GUIDE.md)
 - [Platforms](docs/PLATFORMS.md): what has run where;
   [NVIDIA on Linux](docs/LINUX_NVIDIA_TUNING.md)
 
@@ -105,8 +106,8 @@ scheme --script tests/frame.ss out
 scheme --script tests/sources.ss
 ```
 
-What each suite covers, how to add a check, and the bench are in
-[docs/TESTING.md](docs/TESTING.md).
+What each suite covers, how to run one check, how to write a test, and
+the bench are in [tests/GUIDE.md](tests/GUIDE.md).
 
 ## Conventions
 
