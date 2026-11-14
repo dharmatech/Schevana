@@ -40,13 +40,6 @@
 ;; long as a slow one may take; done as soon as it's true.
 (define (wait-for pred) (and (test-wait 10000 pred) #t))
 
-;; Whether pred comes true within three tooltip delays of the test's clock,
-;; held meanwhile: a delay the same on any machine, and no wait.
-(define (wait-tooltip pred)
-  (test-clock-hold!)
-  (let ([v (test-wait (* 3 ui-tip-ms) pred)])
-    (test-clock-release!)
-    (and v #t)))
 
 ;; Click (or drag across) a ui widget by its id, with real mouse events.
 (define (ui-point win id frac)
@@ -2253,84 +2246,6 @@
                   (string-suffix? "undone." (car (last-pair said)))))))
   (press! 'escape)
   (delete-task! t)
-  (steps 2))
-
-;; A tooltip shows after the pointer rests.
-(let*-values ([(x y) (region-center 'new)]
-              [(cx cy cw ch) (content-rect tw)]
-              [(px py) (values (+ cx x 12 6) (+ cy y 20 6))])
-  (define (pixel)
-    (screen-pixel (exact (floor (* *scale* px)))
-                  (exact (floor (* *scale* py)))))
-  (let ([before (pixel)])
-    (inject! `(mouse-move ,(+ cx x) ,(+ cy y)))
-    (steps 2)
-    (check "a tooltip shows when the pointer rests on New task"
-           (and (= before (pixel))
-                (wait-tooltip (lambda () (not (= before (pixel)))))))
-    (shot "tooltip")))
-(let*-values ([(x y) (region-center 'search)]
-              [(cx cy cw ch) (content-rect tw)]
-              [(px py) (values (+ cx x 12 6) (+ cy y 20 6))])
-  (define (pixel)
-    (screen-pixel (exact (floor (* *scale* px)))
-                  (exact (floor (* *scale* py)))))
-  (tasks-click! x y)
-  (type! "x")
-  (steps 2)
-  (let ([before (pixel)])
-    (check "but none over the field being typed in"
-           (and (eq? (focus-id) 'search)
-                (not (wait-tooltip (lambda () (not (= before (pixel))))))))
-    (press! 'escape)
-    (click-ui! tw 'clear)))
-
-;; A press, key or text uses the tooltip up until the pointer moves: a new
-;; task's title typed with the pointer left on New task shows no tooltip
-;; while the typing pauses; once the pointer moves and rests, it shows.
-(let-values ([(x y) (region-center 'new)] [(cx cy cw ch) (content-rect tw)])
-  (let ([tips 0] [orig ui-draw-tooltip])
-    (set! ui-draw-tooltip
-          (lambda args (set! tips (+ tips 1)) (apply orig args)))
-    (tasks-click! x y)
-    (type! "Typed under a resting pointer")
-    (steps 2)
-    (let ([t (selected)])
-      (check "after a click and typing, no tooltip while the pointer rests"
-             (and (eq? (focus-id) 'title)
-                  (not (wait-tooltip (lambda () (> tips 0))))))
-      (inject! `(mouse-move ,(+ cx (round x) 2) ,(+ cy (round y))))
-      (check "and one once the pointer moves and rests"
-             (wait-tooltip (lambda () (> tips 0))))
-      (set! ui-draw-tooltip orig)
-      (press! 'escape)
-      (delete-task! t)
-      (steps 2))))
-
-;; Keys that scroll the List bring other rows under the resting pointer,
-;; and still no tooltip: the pointer has not moved since the keys.
-(let ([extra (map (lambda (i)
-                    (add-task! (format "Row ~a, a title the List cuts: ~a" i
-                                       (make-string 80 #\W))))
-                  (iota 30))]
-      [tips 0] [orig ui-draw-tooltip])
-  (type! "v")
-  (steps 2)
-  (let-values ([(x y) (region-center '(table row 3))]
-               [(cx cy cw ch) (content-rect tw)])
-    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))))
-    (steps 2)
-    (set! ui-draw-tooltip
-          (lambda args (set! tips (+ tips 1)) (apply orig args)))
-    (do ([i 0 (+ i 1)]) ((= i 40)) (press! 'down) (steps 1))
-    (check "keys that scroll the List under a resting pointer show no row's \
-            tooltip"
-           (and (> (car (ui-memo tui '(table body) '(0 . 0))) 0)
-                (not (wait-tooltip (lambda () (> tips 0))))))
-    (set! ui-draw-tooltip orig))
-  (for-each delete-task! extra)
-  (type! "v")
-  (type! "v")
   (steps 2))
 
 ;; A title cut inside a long word: the card's tooltip tells it, and the

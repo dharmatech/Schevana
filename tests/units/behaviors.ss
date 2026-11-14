@@ -508,14 +508,6 @@
     (bytevector-copy! bv (* row stride) out 0 stride)
     out))
 
-;; A window of kit widgets, drawn by draw (ui w h).
-(define (kit-window title draw)
-  (let ([ui (make-ui)])
-    (apply open-window title 'size '(400 . 200) 'pos '(300 . 200)
-           'draw (lambda (win w h)
-                   (ui-begin! ui) (draw ui w h) (ui-end! ui w h))
-           (ui-handlers ui))))
-
 (define (doc-at x y)
   (inject! `(mouse-move ,x ,y))
   (steps 1)
@@ -524,7 +516,7 @@
 (check "(mouse-doc) is what each button does under the pointer: on a \
         title, a close button, a kit button (its label), a text box, a \
         taskbar button, the desktop"
-       (let ([w (kit-window "Docs"
+       (let ([w (test-kit-window "Docs"
                             (lambda (ui w h)
                               (ui-button ui 'b 20 20 100 30 "Button" void)
                               (ui-text-field ui 't 20 70 200 30 "text"
@@ -564,7 +556,7 @@
                       (lambda (row key x y w h flags)
                         (when (eqv? row 1)
                           (set! cells (cons (list id key x w) cells)))))]
-              [w (kit-window "Columns"
+              [w (test-kit-window "Columns"
                              (lambda (u w h)
                                (set! ui u)
                                (set! cells '())
@@ -620,7 +612,7 @@
         click sets back both; Mac and Windows shift the rest along, as the \
         Finder and Explorer do, the others resize the pair"
        (let* ([columns '((a "A" 100) (b "B" 100) (c "C" 100))] [ui #f]
-              [w (kit-window "Pair"
+              [w (test-kit-window "Pair"
                              (lambda (u w h)
                                (set! ui u)
                                (ui-table u 't 0 0 w 50 columns '(1 2) #f void
@@ -789,7 +781,7 @@
               (lambda (x y w h flags label dir)
                 (set! heads (cons (list label flags dir) heads))))
             (set-style! 'test-heads)
-            (let ([w (kit-window "Heads"
+            (let ([w (test-kit-window "Heads"
                        (lambda (u w h)
                          (set! ui u)
                          (set! heads '())
@@ -850,7 +842,7 @@
 (check "with mouse-doc on the top bar shows it, and a move between regions \
         of other words changes the bar's rows alone, one between regions of \
         the same words nothing"
-       (let ([w (kit-window "Areas"
+       (let ([w (test-kit-window "Areas"
                             (lambda (ui w h)
                               (ui-area ui 'a 0 0 100 100 void #f
                                        'doc '((L . "One")))
@@ -1157,7 +1149,7 @@
                        (image 20 20 1 (lambda ()
                                         (ui-draw-glyph 2 2 16 16 '() name))))]
               [same (lambda (a b) (zero? (max-diff (glyph a) (glyph b))))]
-              [w (kit-window "Old calls"
+              [w (test-kit-window "Old calls"
                              (lambda (ui w h)
                                (ui-pressable! ui 'p 20 20 100 30 void '() '())
                                (ui-text-field ui 't 20 70 200 30 "text" void

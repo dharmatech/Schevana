@@ -28,11 +28,16 @@
   (let ([text (getenv "SCHEVANA_CHECK")])
     (and text (not (string=? text "")) text)))
 
-;; Every file of tests/units.
+;; Every topic in tests/units: its .ss files, by name, but those an editor
+;; or a Mac's Finder leaves (a name starting with a dot).
 (define (units-topics)
   (map path-root
        (sort string<?
-             (directory-list (string-append *schevana-root* "/tests/units")))))
+             (filter (lambda (f)
+                       (and (string=? (path-extension f) "ss")
+                            (not (char=? (string-ref f 0) #\.))))
+                     (directory-list
+                      (string-append *schevana-root* "/tests/units"))))))
 
 ;; s as one word of /bin/sh's, whatever it holds.
 (define (units-sh-word s)

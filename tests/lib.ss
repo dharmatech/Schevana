@@ -126,6 +126,17 @@
   (or (ui-find ui id)
       (errorf 'test-region "no region ~s laid out" id)))
 
+;; A window of kit widgets drawn by draw (ui w h), size (w . h) if given:
+;; one widget, or a few, by themselves, as a widget's topic tests them. Its
+;; ui is (window-ref win 'ui).
+(define (test-kit-window title draw . size)
+  (let ([ui (make-ui)])
+    (apply open-window title 'size (if (pair? size) (car size) '(400 . 200))
+           'pos '(300 . 200)
+           'draw (lambda (win w h)
+                   (ui-begin! ui) (draw ui w h) (ui-end! ui w h))
+           (ui-handlers ui))))
+
 ;; The world as a scene starts from: no window, toast, hover, drag or menu.
 (define (test-clear-world!)
   (for-each close-window! (windows))
