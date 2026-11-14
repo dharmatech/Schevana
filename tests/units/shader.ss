@@ -996,10 +996,13 @@
              (gpu-buffer-release! out)
              ok))))
 
-;; Every shader the world and these checks made, to SPIR-V's own checker
-;; where it is installed (Debian's spirv-tools): what the suites can't see,
-;; a module a driver may take and do anything with.
-(check "every shader is a valid SPIR-V module for Vulkan 1.0"
+;; Every shader the world and these checks made, written as SPIR-V on any
+;; platform, to SPIR-V's own checker (spirv-tools): what the suites can't
+;; see, a module lavapipe takes and another driver may do anything with. A
+;; Mac writes it too, so a change made there is checked for Vulkan; where
+;; shaders are SPIR-V, what's checked is the code that runs.
+(check "every shader, written as SPIR-V on any platform, is a valid module \
+        for Vulkan 1.0, and where shaders are SPIR-V it is the code that runs"
        (let ([shaders
               ;; the core's and the world's
               (filter shader?
@@ -1010,24 +1013,33 @@
                                                 (top-level-value n env)))
                                          (environment-symbols env)))
                                   (list core1-env (interaction-environment)))))]
+             [spirv (lambda (s)
+                      (shader-spirv (shader-stage s) (shader-coords s)
+                                    (shader-params s) (shader-tree s)))]
              [file (string-append out-dir "/shader-check.spv")])
-         (cond
-           [(not (eq? shader-target 'spirv))
-            (printf "  skipped: shaders here are ~a\n" shader-target)
-            #t]
-           [(not (eqv? 0 (system "command -v spirv-val > /dev/null")))
-            (printf "  skipped: no spirv-val (Debian's spirv-tools)\n")
-            #t]
-           [else
-            (let ([bad (filter
-                        (lambda (s)
-                          (when (file-exists? file) (delete-file file))
-                          (call-with-port (open-file-output-port file)
-                            (lambda (p) (put-bytevector p (shader-code s))))
-                          (not (eqv? 0 (system
-                                        (format "spirv-val --target-env \
-                                                 vulkan1.0 ~a" file)))))
-                        shaders)])
-              (printf "  ~a shaders, ~a invalid: ~s\n" (length shaders)
-                      (length bad) (map shader-name bad))
-              (null? bad))])))
+         (if (not (eqv? 0 (system "command -v spirv-val > /dev/null")))
+             (begin
+               (printf "  no spirv-val: ~a\n"
+                       (if (platform-mac?)
+                           "brew install spirv-tools"
+                           "sudo apt install spirv-tools"))
+               #f)
+             (let ([bad (filter
+                         (lambda (s)
+                           (when (file-exists? file) (delete-file file))
+                           (call-with-port (open-file-output-port file)
+                             (lambda (p) (put-bytevector p (spirv s))))
+                           (not (eqv? 0 (system
+                                         (format "spirv-val --target-env \
+                                                  vulkan1.0 ~a" file)))))
+                         shaders)]
+                   [other (if (eq? shader-target 'spirv)
+                              (filter (lambda (s)
+                                        (not (bytevector=? (spirv s)
+                                                           (shader-code s))))
+                                      shaders)
+                              '())])
+               (printf "  ~a shaders, ~a invalid: ~s; ~a not what runs: ~s\n"
+                       (length shaders) (length bad) (map shader-name bad)
+                       (length other) (map shader-name other))
+               (and (pair? shaders) (null? bad) (null? other))))))

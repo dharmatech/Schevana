@@ -18,7 +18,7 @@ sudo apt install chezscheme libsdl3-0 mesa-vulkan-drivers
 ```
 
 `mesa-vulkan-drivers` holds lavapipe, the Vulkan driver on the CPU. The
-tests run on it, and it takes over when no GPU can open. The tests want
+tests run on it, and it takes over when no GPU can open. The tests need
 `spirv-tools` too ([TESTING.md](TESTING.md)).
 
 SDL chooses between Wayland and X11 by itself; `SDL_VIDEO_DRIVER=x11
@@ -47,6 +47,14 @@ brew install --cask font-dejavu
 Homebrew's Chez Scheme is the command `chez`, not `scheme`. `./schevana`
 runs whichever of the two it finds, and finds Homebrew's libraries in
 `/opt/homebrew/lib` (Apple silicon) or `/usr/local/lib` (Intel).
+
+The tests need `spirv-tools` too ([TESTING.md](TESTING.md)): they write
+the shaders as Linux's SPIR-V and check it, so a change made on a Mac is
+checked for Vulkan as well.
+
+```bash
+brew install spirv-tools
+```
 
 ## Running
 
