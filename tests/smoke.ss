@@ -1721,7 +1721,7 @@
       (steps 2))))
 
 (define (region-center id)
-  (let ([r (ui-find tui id)])
+  (let ([r (test-region tui id)])
     (values (+ (ui-region-x r) (/ (ui-region-w r) 2))
             (+ (ui-region-y r) (/ (ui-region-h r) 2)))))
 
@@ -2397,35 +2397,41 @@
        (and (eq? (focus-id) 'new-item) (shown? 'new-item)))
 (set-task! 7 'checklist (list-head (task-checklist (find-task 7)) 5))
 (press! 'escape)
+;; Put back after, as it went or not: the size, the description, nothing
+;; selected.
 (let-values ([(w h) (window-content-size tw)]
              [(t) (car (column-of 'review))])
   (define text (task-description t))
-  (resize-window! tw 1100 440)
-  (steps 2)
-  (let-values ([(x y) (region-center (list 'card (task-id t)))])
-    (tasks-click! x y))
-  (click-ui! tw 'description)
-  (press! 'end 'ctrl)
-  (do ([i 0 (+ i 1)]) ((= i 12)) (press! 'return) (type! "more text"))
-  (steps 2)
-  (let* ([r (ui-find tui 'description)]
-         [a (car (apply ui-text-box-areas
-                        (append (ui-region-frame r) '(()))))]
-         [lh (font-line-height 'ui)] [text (task-description (selected))]
-         [lay (edit-layout-of #f text (list-ref a 3) #f
-                              (lambda (s) (text-width s 'ui)) #f)]
-         [top (- (+ (list-ref a 2)
-                    (* lh (edit-row-at lay (edit-caret (edit)))))
-                 (ui-memo tui 'description 0))])
-    (check "typing at the end of a long description keeps its caret in view"
-           (<= (ui-region-y r) top (+ top lh)
-               (+ (ui-region-y r) (ui-region-h r)))))
-  (press! 'escape)
-  (press! 'escape)
-  (steps 1)
-  (set-task! t 'description text)
-  (resize-window! tw w h)
-  (steps 2))
+  (test-finally
+   (lambda ()
+     (resize-window! tw 1100 440)
+     (steps 2)
+     (let-values ([(x y) (region-center (list 'card (task-id t)))])
+       (tasks-click! x y))
+     (click-ui! tw 'description)
+     (press! 'end 'ctrl)
+     (do ([i 0 (+ i 1)]) ((= i 12)) (press! 'return) (type! "more text"))
+     (steps 2)
+     (let* ([r (ui-find tui 'description)]
+            [a (car (apply ui-text-box-areas
+                           (append (ui-region-frame r) '(()))))]
+            [lh (font-line-height 'ui)] [text (task-description (selected))]
+            [lay (edit-layout-of #f text (list-ref a 3) #f
+                                 (lambda (s) (text-width s 'ui)) #f)]
+            [top (- (+ (list-ref a 2)
+                       (* lh (edit-row-at lay (edit-caret (edit)))))
+                    (ui-memo tui 'description 0))])
+       (check "typing at the end of a long description keeps its caret in view"
+              (<= (ui-region-y r) top (+ top lh)
+                  (+ (ui-region-y r) (ui-region-h r))))))
+   (lambda ()
+     (press! 'escape)
+     (press! 'escape)
+     (steps 1)
+     (tasks-select! tv #f)
+     (set-task! t 'description text)
+     (resize-window! tw w h)
+     (steps 2))))
 (type! "n")
 (type! (make-string 150 #\W))
 (steps 2)
@@ -2715,50 +2721,54 @@
        [red? (lambda ()
                (exists (lambda (x) (eq? (vector-ref x 2) 'red)) *toasts*))])
   (set-task! (car more) 'title (format "About ~a" (task-label last)))
-  (tasks-select! tv (find-task 14))
-  (invalidate! tw)
-  (steps 2)
-  (click-ui! tw '(blocked-by add))
-  (let ([n (length (tasks-blocker-choices (find-task 14)))] [l (labels)])
-    (let-values ([(x y w h) (menu-geometry *menu*)])
-      (check "with many tasks, Add's menu fits on the screen, its last entry \
-              saying how many more"
-             (and (<= (+ y h) (screen-h)) (< 10 (length l) n)
-                  (equal? (car (last-pair l))
-                          (format "… ~a more: type to narrow"
-                                  (- n (length l) -1)))))))
-  (type! (task-label last))
-  (steps 1)
-  (check "an id typed: the task it names first, then what mentions it"
-         (equal? (labels)
-                 (list (format "~a  ~a" (task-label last) (task-title last))
-                       (format "~a  About ~a" (task-label (car more))
-                               (task-label last)))))
-  (press! 'escape)
-  (steps 1)
-  (let ([a (car more)] [b (cadr more)])
-    (tasks-select! tv a)
-    (invalidate! tw)
-    (steps 2)
-    (click-ui! tw '(blocked-by add))
-    (type! (task-label b))
-    (steps 1)
-    (set-task! b 'blocked-by (list a))   ; the REPL, while the menu is open
-    (set! *toasts* '())
-    (press! 'return)
-    (steps 2)
-    (check "a choice the REPL made into a cycle while Add's menu was open: \
-            refused, and a plain toast names the cycle"
-           (and (null? (task-blocked-by a)) (not (red?))
-                (equal? (map (lambda (x) (vector-ref x 1)) *toasts*)
-                        (list (format "~a would wait for itself: ~a → ~a → ~a \
-                                       (each waits for the next)"
-                                      (task-label a) (task-label a)
-                                      (task-label b) (task-label a)))))))
-  (for-each delete-task! more)
-  (set! *toasts* '())
-  (tasks-select! tv #f)
-  (steps 2))
+  (test-finally
+   (lambda ()
+     (tasks-select! tv (find-task 14))
+     (invalidate! tw)
+     (steps 2)
+     (click-ui! tw '(blocked-by add))
+     (let ([n (length (tasks-blocker-choices (find-task 14)))] [l (labels)])
+       (let-values ([(x y w h) (menu-geometry *menu*)])
+         (check "with many tasks, Add's menu fits on the screen, its last \
+                 entry saying how many more"
+                (and (<= (+ y h) (screen-h)) (< 10 (length l) n)
+                     (equal? (car (last-pair l))
+                             (format "… ~a more: type to narrow"
+                                     (- n (length l) -1)))))))
+     (type! (task-label last))
+     (steps 1)
+     (check "an id typed: the task it names first, then what mentions it"
+            (equal? (labels)
+                    (list (format "~a  ~a" (task-label last) (task-title last))
+                          (format "~a  About ~a" (task-label (car more))
+                                  (task-label last)))))
+     (press! 'escape)
+     (steps 1)
+     (let ([a (car more)] [b (cadr more)])
+       (tasks-select! tv a)
+       (invalidate! tw)
+       (steps 2)
+       (click-ui! tw '(blocked-by add))
+       (type! (task-label b))
+       (steps 1)
+       (set-task! b 'blocked-by (list a))   ; the REPL, while the menu is open
+       (set! *toasts* '())
+       (press! 'return)
+       (steps 2)
+       (check "a choice the REPL made into a cycle while Add's menu was open: \
+               refused, and a plain toast names the cycle"
+              (and (null? (task-blocked-by a)) (not (red?))
+                   (equal? (map (lambda (x) (vector-ref x 1)) *toasts*)
+                           (list (format "~a would wait for itself: ~a → ~a \
+                                          → ~a (each waits for the next)"
+                                         (task-label a) (task-label a)
+                                         (task-label b) (task-label a))))))))
+   (lambda ()
+     (when (menu-open?) (close-menu!))
+     (for-each delete-task! more)
+     (set! *toasts* '())
+     (tasks-select! tv #f)
+     (steps 2))))
 
 ;; The Tree: under each task what it waits for; a twisty, Right, Left and
 ;; Space expand and collapse; a click or a key selects; a later row of a

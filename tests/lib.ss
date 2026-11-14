@@ -113,6 +113,37 @@
 
 (define (raises? thunk) (guard (c [#t #t]) (thunk) #f))
 
+;; thunk's value, cleanup run after it, raise or not: what a sequence
+;; changed for itself it changes back, so a failure takes only its own.
+(define (test-finally thunk cleanup)
+  (let ([v (guard (c [#t (cleanup) (raise c)]) (thunk))])
+    (cleanup)
+    v))
+
+;; Region id of ui, as the last layout left it; a region not laid out
+;; (out of view, or never drawn) fails the check it's in, by its id.
+(define (test-region ui id)
+  (or (ui-find ui id)
+      (errorf 'test-region "no region ~s laid out" id)))
+
+;; The world as a scene starts from: no window, toast, hover, drag or menu.
+(define (test-clear-world!)
+  (for-each close-window! (windows))
+  (set! *toasts* '())
+  (set! *cascade* 0)
+  (set! *hover* #f)
+  (set! *drag* #f)
+  (when (menu-open?) (close-menu!)))
+
+;; A scene: thunk from a cleared world, its own state set by itself; one
+;; that raises fails by its name, and the next starts afresh.
+(define (test-scene name thunk)
+  (test-clear-world!)
+  (guard (c [#t (set! failures (+ failures 1))
+                (printf "FAIL the scene ~a raised: ~a\n" name
+                        (condition->string c))])
+    (thunk)))
+
 ;; The run's end: its verdict, and its exit status, 1 if a check failed or
 ;; SCHEVANA_CHECK named none.
 (define (test-verdict!)

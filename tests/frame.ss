@@ -145,14 +145,6 @@
   (add-status-segment! 'a (lambda () "12.3 ms/tick"))
   (add-status-segment! 'b (lambda () "Thu 29 Oct   12:00:00")))
 
-(define (clear-world!)
-  (for-each close-window! (windows))
-  (set! *toasts* '())
-  (set! *cascade* 0)
-  (set! *hover* #f)
-  (set! *drag* #f)
-  (when (menu-open?) (close-menu!)))
-
 (define (texted-repl!)
   (let* ([r (repl)] [rs (window-ref r 'state)])
     (for-each (lambda (l) (repl-add! rs (car l) (cdr l)))
@@ -168,7 +160,7 @@
 ;; S30T: 30 Life windows tiled; S30: cascaded; S5: a REPL, Settings, Clock,
 ;; Life and Monitor, overlapping, the REPL on top.
 (define (scene! name)
-  (clear-world!)
+  (test-clear-world!)
   (random-seed 4242)
   (case name
     [(S30T S30)
@@ -290,7 +282,7 @@
 
 (define (damage-paths pct)
   (set-theme! 'scale pct)
-  (clear-world!)
+  (test-clear-world!)
   (let* ([tick 0] [asked 0] [a-ink #x3060a0] [b-ink #x40a060]
          [c-ink #xa04060] [c-sub #xe0c040] [bad '()] [shown '()]
          ;; part of a's drawing lies under b
@@ -460,7 +452,7 @@
 (for-each
  (lambda (pct)
    (set-theme! 'scale pct)
-   (clear-world!)
+   (test-clear-world!)
    (override! 'shadow 0)
    (steps 1)
    (let ([bad '()] [glows '()])
@@ -627,14 +619,14 @@
 
 (define (tasks-scene pct)
   (set-theme! 'scale pct)
-  (clear-world!)
+  (test-clear-world!)
   (tasks-reset!)
   (let* ([w (tasks)] [ui (window-ref w 'ui)] [bad '()])
     (define (try! label)
       (unless (matches-reference? (list pct label))
         (set! bad (cons label bad))))
     (define (point id)   ; region id's middle on screen
-      (let ([r (ui-find ui id)])
+      (let ([r (test-region ui id)])
         (let-values ([(cx cy cw ch) (content-rect w)])
           (values (exact (floor (+ cx (ui-region-x r) (/ (ui-region-w r) 2))))
                   (exact (floor (+ cy (ui-region-y r)
@@ -755,7 +747,10 @@
                    pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
            (null? bad))))
 
-(for-each tasks-scene '(100 150 200))
+(for-each (lambda (pct)
+            (test-scene (format "~a at ~a%" 'tasks pct)
+                        (lambda () (tasks-scene pct))))
+          '(100 150 200))
 (set-theme! 'scale 100)
 (tasks-reset!)
 
@@ -768,7 +763,7 @@
 
 (define (tree-scene pct)
   (set-theme! 'scale pct)
-  (clear-world!)
+  (test-clear-world!)
   (tasks-reset!)
   (let* ([w (tasks)] [ui (window-ref w 'ui)] [bad '()])
     (define (try! label)
@@ -777,8 +772,7 @@
     (define (rows) (ui-memo ui '(tree rows) '#()))
     (define (row-id node) (list 'tree 'row (ui-tree-index (rows) node)))
     (define (point id . twisty?)   ; region id's middle, or its twisty's
-      (let ([r (ui-find ui id)])
-        (unless r (errorf 'tree-scene "no ~s at ~a%" id pct))
+      (let ([r (test-region ui id)])
         (let-values ([(cx cy cw ch) (content-rect w)])
           (values
            (exact (floor
@@ -853,7 +847,10 @@
                    pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
            (null? bad))))
 
-(for-each tree-scene '(100 150 200))
+(for-each (lambda (pct)
+            (test-scene (format "~a at ~a%" 'tree pct)
+                        (lambda () (tree-scene pct))))
+          '(100 150 200))
 (set-theme! 'scale 100)
 (tasks-reset!)
 
@@ -868,7 +865,7 @@
 
 (define (scan-scene pct)
   (set-theme! 'scale pct)
-  (clear-world!)
+  (test-clear-world!)
   (tasks-reset!)
   (let* ([w (tasks)] [ui (window-ref w 'ui)] [v (window-ref w 'state)]
          [text (string-append
@@ -899,7 +896,10 @@
                (and pending? first? (edit-layout-done? lay)
                     (> (edit-layout-count lay) (* 2 estimate)) settled?))))))
 
-(for-each scan-scene '(100 200))
+(for-each (lambda (pct)
+            (test-scene (format "~a at ~a%" 'scan pct)
+                        (lambda () (scan-scene pct))))
+          '(100 200))
 (set-theme! 'scale 100)
 (tasks-reset!)
 
@@ -912,7 +912,7 @@
 
 (define (caret-scene pct)
   (set-theme! 'scale pct)
-  (clear-world!)
+  (test-clear-world!)
   (tasks-reset!)
   (let* ([w (tasks)] [v (window-ref w 'state)]
          [text (string-append
@@ -942,7 +942,10 @@
                        pct)
                settled?)))))
 
-(for-each caret-scene '(100 200))
+(for-each (lambda (pct)
+            (test-scene (format "~a at ~a%" 'caret pct)
+                        (lambda () (caret-scene pct))))
+          '(100 200))
 (set-theme! 'scale 100)
 (tasks-reset!)
 
@@ -1017,7 +1020,7 @@
 ;; The wallpaper is drawn with each frame: a theme change, through set-theme!
 ;; or behind its back, shows on the next one.
 (set-theme! 'scale 200)
-(clear-world!)
+(test-clear-world!)
 (steps 2)
 (let ([px0 (desktop-pixel)]
       [top (theme 'desktop-top)]
