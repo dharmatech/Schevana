@@ -1795,39 +1795,16 @@
 (check "Tab goes from the assignee to the date" (equal? (focus-id) 'due))
 (press! 'escape)
 
-;; Tags: Return and a comma add, Backspace and × remove.
+;; Tags: the chip input reaches the task (the chip input itself:
+;; tests/units/ui-chip-input.ss).
 (click-ui! tw '(tags field))
 (type! "perf")
 (press! 'return)
-(type! "ui,")
 (steps 2)
-(check "tags: Return and a comma add them"
-       (equal? (task-tags nt) '("perf" "ui")))
-(press! 'backspace)
-(steps 2)
-(check "Backspace in the empty field removes the last tag"
-       (equal? (task-tags nt) '("perf")))
-(click-ui! tw '(tags remove 0))
-(check "and a chip's × the others" (null? (task-tags nt)))
-(clipboard-set! "alpha, beta,gamma")
-(press! #\v 'ctrl)
-(steps 2)
-(check "a paste with commas adds a tag for each, and keeps the rest typed"
-       (and (equal? (task-tags nt) '("alpha" "beta"))
-            (equal? (tasks-view-tag-draft tv) "gamma")))
-(set-task! nt 'tags '())
-(tasks-view-tag-draft-set! tv "")
-(clipboard-set! (apply string-append
-                       (map (lambda (i) (format "at f~a (x.ss:~a), " i (* 7 i)))
-                            (iota 4000))))
-(press! #\v 'ctrl)
-(steps 2)
-(check "a pasted log of 4,000 comma-separated frames: its first 64 become \
-        tags, and Tasks still draws"
-       (and (not (window-error tw)) (= (length (task-tags nt)) 64)
-            (equal? (car (task-tags nt)) "at-f0-(x.ss:0)")))
-(set-task! nt 'tags '())
-(tasks-view-tag-draft-set! tv "")
+(let ([added (task-tags nt)])
+  (click-ui! tw '(tags remove 0))
+  (check "a tag typed and Return is the task's, and its chip's × removes it"
+         (and (equal? added '("perf")) (null? (task-tags nt)))))
 (set-task! nt 'tags '("render"))
 (steps 2)   ; the chip moves the field
 (click-ui! tw '(tags field))
