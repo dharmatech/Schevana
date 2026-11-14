@@ -378,9 +378,13 @@
         (begin
           (ui-follow! ui win x y)
           (unless (ui-hover! ui win x y (now-ms))
-            ;; a tooltip not shown yet waits for the pointer to rest
+            ;; a tooltip not shown yet waits for the pointer to rest; one
+            ;; a press, key or typing used up waits from now, and a draw
+            ;; sets its timer, as a hover's does
             (when (< (now-ms) (+ (car (ui-state-rest ui)) ui-tip-ms))
-              (ui-rest! ui (now-ms) x y)))))))
+              (let ([used? (= (car (ui-state-rest ui)) +inf.0)])
+                (ui-rest! ui (now-ms) x y)
+                (when used? (invalidate! win)))))))))
 
 ;; A region that follows the pointer within it (a chart's column under
 ;; it) draws again when what it shows for the pointer changes: within one
