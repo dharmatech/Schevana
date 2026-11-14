@@ -167,6 +167,7 @@
 ;; Sketch is not here: the person approves it, as an app of their own.
 (define grant-tree-apps
   '((boids window draw ui timers crew)
+    (boids-clear window draw ui timers crew)
     (boids3d window draw ui timers gpu)
     (clock window draw timers)
     (life window draw ui timers crew)))
