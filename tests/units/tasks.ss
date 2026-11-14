@@ -450,24 +450,23 @@
 (let ([v (tasks-view-new (make-ui))])
   (define (mode w) (call-with-values (lambda () (tasks-layout v w 700 44))
                      (lambda (m view details) m)))
-  ;; the narrowest width with the details beside the view, and below it
-  ;; none: (narrowest narrow-below? wide-above?)
-  (define (beside)
-    (let loop ([lo 0] [hi 20000])
-      (if (= (+ lo 1) hi)
-          (list hi (eq? (mode (- hi 1)) 'narrow) (eq? (mode 20000) 'wide))
-          (let ([m (quotient (+ lo hi) 2)])
-            (if (eq? (mode m) 'wide) (loop lo m) (loop m hi))))))
-  (let ([at-13 (beside)])
-    (set-theme! 'ui-font-size 24)
-    (let ([at-24 (beside)])
-      (set-theme! 'ui-font-size 13)
-      (check "tasks-layout: the details beside the view from a width on, \
-              narrow below it, and that width greater at 24 px fonts than \
-              at 13"
-             (and (cadr at-13) (caddr at-13) (cadr at-24) (caddr at-24)
-                  (eq? (mode 0) 'narrow)
-                  (> (car at-24) (car at-13)))))))
+  ;; (wide-width wide-at-it? narrow-below?)
+  (define (layout)
+    (let ([w (tasks-wide-width v)])
+      (list w (eq? (mode w) 'wide) (eq? (mode (- w 1)) 'narrow))))
+  (let* ([board (layout)]
+         [list-view (begin (tasks-view-mode-set! v 'list) (layout))]
+         [at-24 (begin (tasks-view-mode-set! v 'board)
+                       (set-theme! 'ui-font-size 24)
+                       (layout))])
+    (set-theme! 'ui-font-size 13)
+    (check "tasks-layout: the details beside the view from tasks-wide-width \
+            on, narrow below it; the List's narrower than the Board's, and \
+            both greater at 24 px fonts than at 13"
+           (and (for-all (lambda (l) (and (cadr l) (caddr l)))
+                         (list board list-view at-24))
+                (< (car list-view) (car board))
+                (> (car at-24) (car board))))))
 
 ;; A keystroke in 13's description, Tasks maximized, with a long title on
 ;; TASK-10, which 13 and others wait for (cards, rows and tooltips fit its

@@ -1152,18 +1152,22 @@
   (values (+ (* 4 (tasks-column-min-width)) (* 3 (ui-gap)) (* 2 (ui-pad)))
           (max 420 (* 28 (font-line-height 'ui)))))
 
+;; The width from which v's details sit beside its view: the view's
+;; least, its columns' or its list's, and the details'.
+(define (tasks-wide-width v)
+  (let ([n (length (tasks-shown-statuses v))])
+    (+ (tasks-details-width)
+       (if (eq? (tasks-view-mode v) 'board)
+           (+ (* n (tasks-column-min-width)) (* (- n 1) (ui-gap))
+              (* 2 (ui-pad)))
+           (tasks-list-min-width)))))
+
 ;; (values mode view-rect details-rect) under a toolbar top high: wide
 ;; puts the details at the right; narrow gives the view the whole width,
 ;; or to the details page when it shows (details-rect #f otherwise).
 (define (tasks-layout v w h top)
-  (let* ([gap (ui-gap)] [dw (tasks-details-width)]
-         [n (length (tasks-shown-statuses v))]
-         [view-min (if (eq? (tasks-view-mode v) 'board)
-                       (+ (* n (tasks-column-min-width)) (* (- n 1) gap)
-                          (* 2 (ui-pad)))
-                       (tasks-list-min-width))]
-         [vh (- h top)])
-    (if (>= w (+ view-min dw))
+  (let ([dw (tasks-details-width)] [vh (- h top)])
+    (if (>= w (tasks-wide-width v))
         (values 'wide (list 0 top (- w dw) vh) (list (- w dw) top dw vh))
         (values 'narrow (list 0 top w vh)
                 (and (tasks-view-page? v) (tasks-view-selected v)
