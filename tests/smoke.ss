@@ -1781,37 +1781,18 @@
 (check "the assignee is typed, and Return leaves the field"
        (and (equal? (task-assignee nt) "Ada") (not (focus-id))))
 
-;; The due date: the calendar by mouse and by keys.
-(define (calendar-open?)
-  (exists (lambda (r) (let ([id (ui-region-id r)])
-                        (and (pair? id) (eq? (car id) 'due) (pair? (cdr id))
-                             (eq? (cadr id) 'day))))
-          (ui-state-regions tui)))
+;; The due date: a day picked in its calendar is the task's (the date
+;; field itself: tests/units/ui-date-field.ss).
 (click-ui! tw 'due)
-(check "a click on the date opens the calendar" (calendar-open?))
 (shot "calendar")
 (define day20 (let ([d (ui-today)]) (ui-date->day (list (car d) (cadr d) 20))))
 (click-ui! tw (list 'due 'day day20))
-(check "a day picked is the due date, and the calendar closes"
-       (and (equal? (task-due nt) (ui-day->date day20)) (not (calendar-open?))))
-(click-ui! tw 'due)
-(press! 'right) (press! 'right) (press! 'return)
-(steps 2)
-(check "reopened, Right Right Return: two days later"
-       (equal? (task-due nt) (ui-day->date (+ day20 2))))
-(click-ui! tw 'due)
-(press! 'page-down) (press! 'escape)
-(steps 2)
-(check "reopened, Escape: unchanged and closed"
-       (and (equal? (task-due nt) (ui-day->date (+ day20 2)))
-            (not (calendar-open?))))
+(check "a day picked in the due date's calendar is the task's due date"
+       (equal? (task-due nt) (ui-day->date day20)))
 (click-ui! tw 'assignee)
 (press! 'tab)
 (steps 1)
 (check "Tab goes from the assignee to the date" (equal? (focus-id) 'due))
-(press! 'delete)
-(steps 1)
-(check "and Delete clears it" (not (task-due nt)))
 (press! 'escape)
 
 ;; Tags: Return and a comma add, Backspace and × remove.
