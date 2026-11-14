@@ -2122,12 +2122,7 @@
   (tasks-click! x y 'right 1))
 (test-menu-click! "Move to Done")
 (check "Move to Done" (eq? (car (last-pair (column-of 'done))) copy))
-(click-ui! tw 'description)
-(click-ui! tw 'delete)
-(check "the dialog takes the keyboard from the field under it"
-       (and (ui-find tui '(confirm 1)) (not (focus-id))))
-(press! 'escape)
-(steps 2)
+;; Tasks' delete dialog (the dialog itself: tests/units/ui-dialog.ss)
 (press! 'delete)
 (steps 2)
 (check "Delete asks first" (ui-find tui '(confirm 1)))
