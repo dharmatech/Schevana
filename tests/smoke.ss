@@ -2605,9 +2605,9 @@
      (tasks-select! tv #f)
      (steps 2))))
 
-;; The Tree: under each task what it waits for; a twisty, Right, Left and
-;; Space expand and collapse; a click or a key selects; a later row of a
-;; shared blocker is a place of its own, and Return goes to its own row.
+;; The Tree: under each task what it waits for; a click selects; a later
+;; row of a shared blocker is a place of its own, and Return goes to its
+;; own row (the tree itself: tests/units/ui-tree.ss).
 (define (tree-rows) (ui-memo tui '(tree rows) '#()))
 (define (tree-nodes) (map ui-tree-row-node (vector->list (tree-rows))))
 (define (tree-shown! node)   ; the wheel brings node's row into view
@@ -2658,27 +2658,6 @@
 (check "a click on a row selects its task, and the details show it"
        (and (eq? (selected) (find-task 13)) (equal? (tree-at) 13)
             (ui-find tui '(blocked-by 31))))
-(tree-click! 13 'twisty)
-(check "its twisty collapses it" (not (memv 31 (tree-nodes))))
-(press! 'right)
-(steps 1)
-(check "Right expands it" (memv 31 (tree-nodes)))
-(press! 'right)
-(steps 1)
-(check "and again goes to its first child" (equal? (tree-at) 31))
-(press! 'left)
-(steps 1)
-(check "Left goes to the parent" (equal? (tree-at) 13))
-(press! 'left)
-(steps 1)
-(let ([collapsed? (not (memv 31 (tree-nodes)))])
-  (press! #\space)
-  (steps 1)
-  (check "Left collapses, Space expands"
-         (and collapsed? (memv 31 (tree-nodes)))))
-(press! 'down)
-(steps 1)
-(check "Down goes to the next row" (equal? (tree-at) 31))
 (tree-click! '(17 . 31))
 (check "a click on a later row selects its task there"
        (and (eq? (selected) (find-task 31)) (equal? (tree-at) '(17 . 31))))
@@ -2746,14 +2725,13 @@
 (tasks-select! tv (find-task 9))
 (invalidate! tw)
 (steps 2)
-(tree-click! 11 'twisty)
-(check "a twisty that hides the selection selects the row it collapsed"
-       (and (equal? (tree-at) 11) (not (memv 9 (tree-nodes)))))
+(tree-click! 11 'twisty)   ; it hides the selection, 9: 11 is selected
 (let ([was (task-description (find-task 11))])
   (click-ui! tw 'description)
   (type! "x")
   (steps 2)
-  (check "and typing in that task's details keeps it collapsed"
+  (check "a task whose row's twisty hid the selection: typing in its \
+          details keeps it collapsed"
          (and (not (memv 9 (tree-nodes))) (equal? (tree-at) 11)))
   (press! 'escape)
   (set-task! 11 'description was))

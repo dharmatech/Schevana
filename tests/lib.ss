@@ -126,16 +126,20 @@
   (or (ui-find ui id)
       (errorf 'test-region "no region ~s laid out" id)))
 
-;; A window of kit widgets drawn by draw (ui w h), size (w . h) if given:
+;; A window of kit widgets drawn by draw (ui w h), size (w . h) if given,
+;; then an app's handlers as ui-handlers takes them ('key (win key mods)):
 ;; one widget, or a few, by themselves, as a widget's topic tests them. Its
 ;; ui is (window-ref win 'ui).
-(define (test-kit-window title draw . size)
-  (let ([ui (make-ui)])
-    (apply open-window title 'size (if (pair? size) (car size) '(400 . 200))
-           'pos '(300 . 200)
+(define (test-kit-window title draw . more)
+  (let ([ui (make-ui)]
+        [size (if (and (pair? more) (pair? (car more)))
+                  (car more)
+                  '(400 . 200))]
+        [app (if (and (pair? more) (pair? (car more))) (cdr more) more)])
+    (apply open-window title 'size size 'pos '(300 . 200)
            'draw (lambda (win w h)
                    (ui-begin! ui) (draw ui w h) (ui-end! ui w h))
-           (ui-handlers ui))))
+           (apply ui-handlers ui app))))
 
 ;; Region id of win's ui: its middle on the screen, dx to its right, or at
 ;; x within it (a number from the region's left) if given as 'at x.
