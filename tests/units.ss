@@ -1,6 +1,8 @@
 ;;; tests/units.ss — the world piece by piece, headless: a file a topic in
 ;;; tests/units/, an app's, a kit's, a service's or the core's, each in a
-;;; process of its own, so that none leans on what another left behind:
+;;; process of its own, so that none leans on what another left behind,
+;;; as many at once as SCHEVANA_TEST_JOBS says (else the CPUs less two),
+;;; each writing in a folder of its own, output-dir/topic:
 ;;;
 ;;;   scheme --script tests/units.ss [output-dir [topic ...]]
 ;;;   scheme --script tests/units.ss out              every file there
@@ -75,13 +77,64 @@
              sleep 1; i=$((i + 1)); done; wait $p 2> /dev/null"
             command seconds)))
 
-;; Whether topic passes, run by this file in a process of its own.
-(define (units-run topic)
-  (printf "--- ~a\n" topic)
-  (flush-output-port (current-output-port))
-  (zero? (system (units-chez '() (string-append *schevana-root*
-                                                "/tests/units.ss")
-                             out-dir topic))))
+;; How many topics run at once: SCHEVANA_TEST_JOBS, else the CPUs less
+;; two; one where Chez has no threads.
+(define units-jobs
+  (let ([given (string->number (or (getenv "SCHEVANA_TEST_JOBS") ""))]
+        [cpus (let* ([p (process "getconf _NPROCESSORS_ONLN")]
+                     [n (read (car p))])
+                (close-port (car p))
+                (close-port (cadr p))
+                (if (fixnum? n) n 1))])
+    (cond
+      [(not (threaded?)) 1]
+      [(and (fixnum? given) (> given 0)) given]
+      [else (max 1 (- cpus 2))])))
+
+;; topic run by this file in a process of its own, with a folder of its own
+;; under output-dir for what it writes, there too what it says: its status.
+(define (units-run-quiet topic)
+  (let ([dir (string-append out-dir "/" topic)])
+    (unless (file-directory? dir) (mkdir dir))
+    (system (string-append
+             (units-chez '() (string-append *schevana-root* "/tests/units.ss")
+                         dir topic)
+             " > " (units-sh-word (string-append dir "/said.txt")) " 2>&1"))))
+
+;; The topics that fail, each run as units-jobs allow at once, what each
+;; said printed in the topics' order as each is done.
+(define (units-run-all topics)
+  (let* ([v (list->vector topics)] [n (vector-length v)]
+         [status (make-vector n #f)] [next 0]
+         [m (make-mutex)] [done (make-condition)])
+    (define (work!)
+      (let ([i (with-mutex m (let ([i next]) (set! next (+ i 1)) i))])
+        (when (< i n)
+          (let ([s (units-run-quiet (vector-ref v i))])
+            (with-mutex m
+              (vector-set! status i s)
+              (condition-broadcast done)))
+          (work!))))
+    (if (= units-jobs 1)
+        (work!)
+        (do ([k 0 (+ k 1)]) ((= k (min units-jobs n)))
+          (fork-thread work!)))
+    (let loop ([i 0] [failed '()])
+      (if (= i n)
+          (reverse failed)
+          (let ([s (with-mutex m
+                     (let wait ()
+                       (or (vector-ref status i)
+                           (begin (condition-wait done m) (wait)))))]
+                [topic (vector-ref v i)])
+            (printf "--- ~a\n" topic)
+            (let ([said (call-with-input-file
+                         (string-append out-dir "/" topic "/said.txt")
+                         get-string-all)])
+              (unless (eof-object? said)
+                (put-string (current-output-port) said)))
+            (flush-output-port (current-output-port))
+            (loop (+ i 1) (if (eqv? s 0) failed (cons topic failed))))))))
 
 ;; All of them, or those asked for: here only the topics' verdicts.
 ;; SCHEVANA_CHECK finds a check in the topics asked for: a run names one.
@@ -90,8 +143,8 @@
   (exit 1))
 
 (unless (= (length units-asked) 1)
-  (let ([failed (remp units-run
-                      (if (null? units-asked) (units-topics) units-asked))])
+  (let ([failed (units-run-all
+                 (if (null? units-asked) (units-topics) units-asked))])
     (if (null? failed)
         (printf "all topics passed\n")
         (printf "~a topic(s) FAILED: ~a\n" (length failed) failed))
