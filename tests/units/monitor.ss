@@ -96,8 +96,11 @@
 
 (check "Monitor's Flags tab lists every late tick, the newest first, why it \
         came late and the ticks about it, a row's tooltip all that's known"
-       (let* ([real now-ns] [held 0]
+       ;; the clock held still but for the one late tick, so a step a busy
+       ;; machine makes late isn't one
+       (let* ([real now-ns] [at (real)] [held 0]
               [m (monitor)] [ui (window-ref m 'ui)])
+        (fluid-let ([now-ns (lambda () (+ at held))])
          (profile-clear!)
          (steps 3)
          (let-values ([(cx cy cw ch) (content-rect m)])
@@ -109,11 +112,10 @@
              (inject! `(mouse-down ,x ,y left 1) `(mouse-up ,x ,y left))))
          (steps 3)
          (let ([none (ui-find ui '(monitor-flags row 0))])
-           (fluid-let ([now-ns (lambda () (+ (real) held))])
-             (with-profile-span 'step #f (set! held (* 8671932088 1000)))
-             (steps 5)
-             (invalidate! m)
-             (steps 2))
+           (with-profile-span 'step #f (set! held (* 8671932088 1000)))
+           (steps 5)
+           (invalidate! m)
+           (steps 2)
            (let ([rows (ui-find ui '(monitor-flags row 0))]
                  [flags (profile-flags)]
                  [crashed (window-error m)])
@@ -122,7 +124,7 @@
              (and (not none) rows (not crashed) (pair? flags)
                   (equal? (profile-why-text
                            (profile-flag-why (car (reverse flags))))
-                          "core1 woke 8671.9 s past its time"))))))
+                          "core1 woke 8671.9 s past its time")))))))
 
 (check "a bar chart flags at its top the bars 'flagged says, in chart-flag"
        (let* ([ui (make-ui)] [seen '()]

@@ -151,19 +151,29 @@
          (printf "  ~a collections\n" (- (collections) n0))
          (= (unbox sum) (* 20 64 20000))))
 
+;; Noted in ids, then done only once the world has stepped more than 3
+;; times (stepped counts them), or after 10 s.
+(define-worklet (crew-test-after-steps lo hi stepped ids)
+  (crew-test-busy 0 ids)
+  (let ([until (+ (now-ns) 10000000000)])
+    (let wait ()
+      (unless (or (> (unbox stepped) 3) (> (now-ns) until))
+        (wait)))))
+
 (check "in a process (a REPL evaluation), crew-for waits without taking \
         part, and the world steps meanwhile"
-       (let* ([ids (box '())] [done #f] [steps0 0]
+       (let* ([ids (box '())] [done #f] [steps0 0] [stepped (box 0)]
               [p (spawn "crew"
                         (lambda ()
-                          (crew-for* 1 0 32 crew-test-count
-                                     (make-bytevector 32 0) 100000 ids)
+                          (crew-for* 1 0 32 crew-test-after-steps stepped
+                                     ids)
                           (set! done #t)))])
          (let ([until (+ (real-time) 30000)])   ; at most 30 s
            (let loop ()
              (when (and (memq p (procs)) (< (real-time) until))
                (steps 1)
                (set! steps0 (+ steps0 1))
+               (set-box! stepped steps0)
                (loop))))
          (printf "  ~a steps while it waited\n" steps0)
          (and done (> steps0 3) (pair? (unbox ids))

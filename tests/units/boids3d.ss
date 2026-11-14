@@ -505,7 +505,9 @@
          (steps 1)
          ;; its timers alone: the top bar's, once a second, asks for a
          ;; frame of its own
-         (let ([before *timers*])
+         ;; a copy: after links a timer in place, behind any already
+         ;; due, so into these very cells on a machine running late
+         (let ([before (list-copy *timers*)])
            (eval '(boids3d-ride! 'timer) box)
            (window-call win 'frame (now-ns))   ; its timer set
            (let* ([own (remp (lambda (x) (memq x before)) *timers*)]
@@ -526,8 +528,12 @@
                  (run-timers!)
                  (let ([stopped (null? *timers*)] [had (pair? own)])
                    (steps 1)   ; the steps queued go to the GPU
-                   (let ([sent (null? *gpu-computes*)])
+                   (let ([sent (null? *gpu-computes*)]
+                         [crashed (window-error win)])
                      (close-window! win)
+                     (printf "  ~s\n" (list 'had had 'flips flips 'quiet quiet
+                                           'queued queued 'stopped stopped
+                                           'sent sent 'crashed crashed))
                      (and had (= flips 4) quiet queued stopped
                           sent)))))))))
 
