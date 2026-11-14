@@ -967,33 +967,8 @@
     (vat-drop-env! lab)
     (invalidate! w)
     (steps 2))
-  (let* ([line (lambda () (+ 3 (ui-region-x (ui-find ui 'split))))]
-         [before (line)])
-    (define (drag! x0 x1 y clicks)
-      (inject! `(mouse-move ,x0 ,y) `(mouse-down ,x0 ,y left ,clicks)
-               `(mouse-move ,x1 ,y) `(mouse-up ,x1 ,y left))
-      (steps 2))
-    (let-values ([(x y) (ui-point w 'split 0.5)])
-      (inject! `(mouse-move ,x ,y))
-      (steps 1)
-      (let ([cursor (window-ref w 'cursor)])
-        (drag! x (- x 100) y 1)
-        (let ([dragged (line)])
-          (drag! (- x 100) -5000 y 1)
-          (let ([narrowest (line)])
-            (inject! `(mouse-move ,(- (+ x narrowest) before) ,y)
-                     `(mouse-down ,(- (+ x narrowest) before) ,y left 1)
-                     `(mouse-up ,(- (+ x narrowest) before) ,y left)
-                     `(mouse-down ,(- (+ x narrowest) before) ,y left 2)
-                     `(mouse-up ,(- (+ x narrowest) before) ,y left))
-            (steps 2)
-            (check "the line between the tree and the inspector drags, no \
-                    further than the panes' least widths; a double click \
-                    puts it back"
-                   (and (eq? cursor 'resize-ew)
-                        (= dragged (- before 100))
-                        (= narrowest 280)
-                        (= (line) before))))))))
+  ;; the line between the tree and the inspector: a split
+  ;; (tests/units/ui-split.ss)
   (click-ui! w '(tree row 1))
   (let ([n (vat-pool-size)])
     (click-ui! w '((envs pool) up))
@@ -2743,25 +2718,10 @@
 (set-task! 9 'assignee "Claude")
 (steps 1)
 
-;; At 150%, Clear keeps to the toolbar's first row until the search is at
-;; its narrowest, even at widths that fill the row exactly.
-(let ([y (lambda (id) (ui-region-y (ui-find tui id)))] [bad '()]
-      [scale (theme 'scale)])
-  (set-theme! 'scale 150)
-  (steps 2)
-  (for-each (lambda (w)
-              (resize-window! tw w 700)
-              (steps 1)
-              (when (and (> (y 'clear) (y 'new))
-                         (> (ui-region-w (ui-find tui 'search)) 151))
-                (set! bad (cons w bad))))
-            (map (lambda (i) (+ 1260 i)) (iota 31)))
-  (set-theme! 'scale scale)
-  (resize-window! tw 1205 660)
-  (steps 2)
-  (check "at 150%, Clear stays on the toolbar's first row while the search \
-          is wider than its narrowest"
-         (null? bad)))
+;; A row the toolbar's items fill exactly is one row: the toolbar's
+;; (tests/units/ui-toolbar.ss).
+(resize-window! tw 1205 660)
+(steps 2)
 
 ;; 100,000 characters: words, then one word as long.
 (define long-text

@@ -82,3 +82,36 @@
          (close-window! win)
          (printf "  ~s\n" (reverse (unbox said)))
          (equal? (reverse (unbox said)) '(cancel dismiss))))
+
+;; A sheet over a field: its body a field of its own, under the sheet's id.
+(define (ui-dialog-test-sheet)
+  (let ([body (box "")] [said (box '())])
+    (values
+     (test-kit-window "Sheet"
+       (lambda (ui w h)
+         (ui-text-field ui 'f 20 20 300 30 "" void)
+         (ui-sheet ui 'sh "Name it" 260 (ui-control-height)
+                   (lambda (x y w)
+                     (ui-text-field ui '(sh name) x y w (ui-control-height)
+                                    (unbox body)
+                                    (lambda (t) (set-box! body t))))
+                   (list (list "Cancel" (lambda ()
+                                          (set-box! said (cons 'cancel
+                                                               (unbox said)))))
+                         (list "Name" (lambda ()
+                                        (set-box! said (cons 'name
+                                                             (unbox said))))))
+                   (lambda () (set-box! said (cons 'dismiss (unbox said))))))
+       '(500 . 360))
+     body said)))
+
+(check "a sheet's body takes the keyboard as a dialog's buttons do: a field \
+        in it takes typing, and Return there presses the default button"
+       (let-values ([(win body said) (ui-dialog-test-sheet)])
+         (steps 2)
+         (test-click! win '(sh name))
+         (inject! '(text "draft"))
+         (steps 1)
+         (ui-dialog-test-press! 'return)
+         (close-window! win)
+         (and (equal? (unbox body) "draft") (equal? (unbox said) '(name)))))
