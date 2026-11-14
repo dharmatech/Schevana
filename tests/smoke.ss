@@ -1718,20 +1718,6 @@
     (values (+ (ui-region-x r) (/ (ui-region-w r) 2))
             (+ (ui-region-y r) (/ (ui-region-h r) 2)))))
 
-;; Clicks the open menu's entry that starts with label, where menu-areas
-;; puts it.
-(define (menu-click! label)
-  (let* ([es (menu-entries *menu*)]
-         [i (list-index (lambda (e)
-                          (and (pair? e) (string-prefix? label (car e))))
-                        es)]
-         [a (and i (assv i (placed-menu-areas *menu*)))])
-    (unless a (errorf 'menu-click! "no entry ~s" label))
-    (let ([x (+ (cadr a) 30)] [my (round (+ (caddr a) (/ (list-ref a 4) 2)))])
-      (inject! `(mouse-move ,x ,my) `(mouse-down ,x ,my left 1)
-               `(mouse-up ,x ,my left))
-      (steps 2))))
-
 (check "Tasks opens on the Board with the seed tasks"
        (and (not (window-error tw)) (= (length tasks-seed) (length *tasks*))
             (eq? (tasks-view-mode tv) 'board) (card-of 16)))
@@ -1769,25 +1755,24 @@
          (and r (= (ui-region-h r) (cadddr (ui-region-frame r))))))
 (shot "title")
 
-;; Tab to Status; its menu by keys. Priority by mouse.
+;; Tab to Status; its menu by keys, Priority's by mouse: the dropdowns
+;; reach the task (the dropdown itself: tests/units/ui-dropdown.ss).
 (press! 'tab)
 (steps 1)
 (check "Tab goes from the title to Status" (equal? (focus-id) 'status))
 (press! 'return)
 (steps 1)
-(check "Return opens Status's menu on the current entry"
-       (and (menu-open?) (= 0 (menu-sel *menu*))))
 (shot "dropdown")
 (press! 'down)
 (press! 'return)
 (steps 2)
-(check "Down and Return: In progress, at the end of its column"
-       (and (eq? (task-status nt) 'doing)
-            (eq? nt (car (last-pair (column-of 'doing))))))
 (click-ui! tw 'priority)
-(check "a click opens Priority's menu" (menu-open?))
-(menu-click! "Urgent")
-(check "and picks Urgent" (eq? (task-priority nt) 'urgent))
+(test-menu-click! "Urgent")
+(check "Status by keys and Priority by a click set the task: In progress, \
+        at the end of its column, and Urgent"
+       (and (eq? (task-status nt) 'doing)
+            (eq? nt (car (last-pair (column-of 'doing))))
+            (eq? (task-priority nt) 'urgent)))
 
 (click-ui! tw 'assignee)
 (type! "Ada")
@@ -2126,7 +2111,7 @@
        (and (equal? "" (tasks-view-query tv))
             (= (length *tasks*) (length (tasks-visible tv)))))
 (click-ui! tw '(filter kind))
-(menu-click! "Bug")
+(test-menu-click! "Bug")
 (check "Kind: Bug shows only bugs"
        (and (pair? (tasks-visible tv))
             (for-all (lambda (t) (eq? (task-kind t) 'bug)) (tasks-visible tv))))
@@ -2168,7 +2153,7 @@
 (let-values ([(x y) (region-center (list 'card 13))])
   (tasks-click! x y 'right 1))
 (check "a right click on a card opens its menu" (menu-open?))
-(menu-click! "Duplicate")
+(test-menu-click! "Duplicate")
 (define copy (selected))
 (check "Duplicate: a copy right after it, selected"
        (and (= (+ 2 (length tasks-seed)) (length *tasks*))
@@ -2177,7 +2162,7 @@
                     (string-append (task-title (find-task 13)) " (copy)"))))
 (let-values ([(x y) (region-center (list 'card (task-id copy)))])
   (tasks-click! x y 'right 1))
-(menu-click! "Move to Done")
+(test-menu-click! "Move to Done")
 (check "Move to Done" (eq? (car (last-pair (column-of 'done))) copy))
 (click-ui! tw 'description)
 (click-ui! tw 'delete)
@@ -2275,7 +2260,7 @@
         (press! 'escape)
         (details-down!)
         (tasks-click! x y 'right 1)
-        (menu-click! "Open")
+        (test-menu-click! "Open")
         (check "Enter, a double click and Open show the title they focus, \
                 scrolled out of the details"
                (and away enter double (eq? (focus-id) 'title)
@@ -2414,7 +2399,7 @@
          (= (content-pixel (- right 1) y) (content-pixel (- right 12) y))))
 (press! 'escape)
 (click-ui! tw '(filter tag))
-(menu-click! "genera")
+(test-menu-click! "genera")
 (set-task! 8 'tags '("style"))
 (steps 2)
 (let ([r (ui-find tui '(filter tag))])
@@ -3403,7 +3388,7 @@
   (let-values ([(x y) (region-center (list 'card 9))])
     (tasks-click! x y 'right 1))
   (close-window! tw)
-  (menu-click! "Move to Done")
+  (test-menu-click! "Move to Done")
   (check "a menu its window left open changes nothing once it is closed"
          (eq? status (task-status (find-task 9)))))
 (set! *toasts* '())

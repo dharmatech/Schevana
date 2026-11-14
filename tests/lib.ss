@@ -166,6 +166,20 @@
                  `(mouse-up ,x ,y left)))
       (steps 1))))
 
+;; Clicks the open menu's entry that starts with label, where menu-areas
+;; puts it; a step or two.
+(define (test-menu-click! label)
+  (let* ([es (menu-entries *menu*)]
+         [i (list-index (lambda (e)
+                          (and (pair? e) (string-prefix? label (car e))))
+                        es)]
+         [a (and i (assv i (placed-menu-areas *menu*)))])
+    (unless a (errorf 'test-menu-click! "no entry ~s" label))
+    (let ([x (+ (cadr a) 30)] [my (round (+ (caddr a) (/ (list-ref a 4) 2)))])
+      (inject! `(mouse-move ,x ,my) `(mouse-down ,x ,my left 1)
+               `(mouse-up ,x ,my left))
+      (steps 2))))
+
 ;; The world as a scene starts from: no window, toast, hover, drag or menu.
 (define (test-clear-world!)
   (for-each close-window! (windows))
