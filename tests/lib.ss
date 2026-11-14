@@ -71,8 +71,45 @@
               [r #f])))
       "a line not known"))
 
-;; The world's loop, n times.
-(define (steps n) (do ([i 0 (+ i 1)]) ((= i n)) (schevana-step! 0)))
+;; The test's clock: the world's milliseconds (now-ms, by which timers,
+;; tooltips and carets go) held still, moving only when a test says, so a
+;; delay is the same on any machine. now-ns stays the machine's: the pacer,
+;; the profiler and a process's turn go by it. test-clock-ms is the time
+;; held, or #f while the clock goes as the machine's; released, it goes on
+;; from where it was held, the machine's plus what was skipped, so the
+;; world's time never runs back.
+(define test-real-now-ms now-ms)
+(define test-clock-ms #f)
+(define test-clock-skipped 0)
+(define (test-clock-hold! . at)
+  (set! test-clock-ms (if (pair? at) (car at) (now-ms)))
+  (set! now-ms (lambda () test-clock-ms)))
+(define (test-clock-release!)
+  (when test-clock-ms
+    (set! test-clock-skipped (max 0 (- test-clock-ms (test-real-now-ms))))
+    (set! test-clock-ms #f)
+    (set! now-ms (lambda () (+ (test-real-now-ms) test-clock-skipped)))))
+(define (test-clock-advance! ms)
+  (when test-clock-ms (set! test-clock-ms (+ test-clock-ms ms))))
+
+;; The world's loop, n times, each after the held clock moves on ms.
+(define (steps n . ms)
+  (do ([i 0 (+ i 1)]) ((= i n))
+    (when (pair? ms) (test-clock-advance! (car ms)))
+    (schevana-step! 0)))
+
+;; pred's first true value as the world goes on, a step each 5 ms, for up
+;; to ms of the clock, held or the machine's; #f if it never is.
+(define (test-wait ms pred)
+  (if test-clock-ms
+      (let loop ([left ms])
+        (or (pred)
+            (and (> left 0) (begin (steps 1 5) (loop (- left 5))))))
+      (let ([until (+ (now-ms) ms)])
+        (let loop ()
+          (or (pred)
+              (and (< (now-ms) until)
+                   (begin (schevana-step! 5) (loop))))))))
 
 (define (raises? thunk) (guard (c [#t #t]) (thunk) #f))
 

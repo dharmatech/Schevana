@@ -35,12 +35,18 @@
 (define (transcript win)
   (map cdr (reverse (repl-lines (repl-of win)))))
 
-(define (wait-for pred)
-  (let ([deadline (+ (now-ms) 3000)])
-    (let loop ()
-      (cond [(pred) #t]
-            [(> (now-ms) deadline) #f]
-            [else (schevana-step! 5) (loop)]))))
+;; Whether pred comes true while the world goes on, for work done
+;; elsewhere (a process, a thread): at most 10 s of the machine's clock, as
+;; long as a slow one may take; done as soon as it's true.
+(define (wait-for pred) (and (test-wait 10000 pred) #t))
+
+;; Whether pred comes true within three tooltip delays of the test's clock,
+;; held meanwhile: a delay the same on any machine, and no wait.
+(define (wait-tooltip pred)
+  (test-clock-hold!)
+  (let ([v (test-wait (* 3 ui-tip-ms) pred)])
+    (test-clock-release!)
+    (and v #t)))
 
 ;; Click (or drag across) a ui widget by its id, with real mouse events.
 (define (ui-point win id frac)
@@ -2261,7 +2267,7 @@
     (steps 2)
     (check "a tooltip shows when the pointer rests on New task"
            (and (= before (pixel))
-                (wait-for (lambda () (not (= before (pixel)))))))
+                (wait-tooltip (lambda () (not (= before (pixel)))))))
     (shot "tooltip")))
 (let*-values ([(x y) (region-center 'search)]
               [(cx cy cw ch) (content-rect tw)]
@@ -2275,7 +2281,7 @@
   (let ([before (pixel)])
     (check "but none over the field being typed in"
            (and (eq? (focus-id) 'search)
-                (not (wait-for (lambda () (not (= before (pixel))))))))
+                (not (wait-tooltip (lambda () (not (= before (pixel))))))))
     (press! 'escape)
     (click-ui! tw 'clear)))
 
@@ -2292,10 +2298,10 @@
     (let ([t (selected)])
       (check "after a click and typing, no tooltip while the pointer rests"
              (and (eq? (focus-id) 'title)
-                  (not (wait-for (lambda () (> tips 0))))))
+                  (not (wait-tooltip (lambda () (> tips 0))))))
       (inject! `(mouse-move ,(+ cx (round x) 2) ,(+ cy (round y))))
       (check "and one once the pointer moves and rests"
-             (wait-for (lambda () (> tips 0))))
+             (wait-tooltip (lambda () (> tips 0))))
       (set! ui-draw-tooltip orig)
       (press! 'escape)
       (delete-task! t)
@@ -2320,7 +2326,7 @@
     (check "keys that scroll the List under a resting pointer show no row's \
             tooltip"
            (and (> (car (ui-memo tui '(table body) '(0 . 0))) 0)
-                (not (wait-for (lambda () (> tips 0))))))
+                (not (wait-tooltip (lambda () (> tips 0))))))
     (set! ui-draw-tooltip orig))
   (for-each delete-task! extra)
   (type! "v")

@@ -43,21 +43,13 @@
 
 (load (string-append *schevana-root* "/tests/lib.ss"))
 
-;; A clock that moves only when told, so that Life steps when a check says.
-;; Checks that need time to pass go back to the real one.
-(define fake-ms 1000000)
-(define real-now-ms now-ms)
-(define (fake-clock!) (set! now-ms (lambda () fake-ms)))
-(fake-clock!)
+;; The test's clock held (tests/lib.ss), so that Life steps when a check
+;; says. Checks that need time to pass go back to the machine's.
+(test-clock-hold! 1000000)
 (random-seed 4242)
 (schevana-boot! 'headless 1280 800)
 ;; From here, a form that raises fails and the next goes on.
 (current-eval test-form-eval)
-
-(define (steps n . ms)
-  (do ([i 0 (+ i 1)]) ((= i n))
-    (set! fake-ms (+ fake-ms (if (pair? ms) (car ms) 0)))
-    (schevana-step! 0)))
 
 ;; Steps while a frame is asked for (at most 20): then the canvas shows
 ;; the world as it is.
@@ -376,7 +368,7 @@
                     (invalidate! e 3 5 21 13)
                     (request-frame! 141 621 11 11)
                     (loop))))])
-      (fluid-let ([now-ms real-now-ms])
+      (fluid-let ([now-ms test-real-now-ms])
         (do ([i 0 (+ i 1)]) ((= i 60))
           (if (even? i)
               (begin (set! b-ink (if (even? (quotient i 2)) #x6040a0 #x40a060))
@@ -414,7 +406,7 @@
                    (window-set! d 'window-style 'mac)
                    (set! done #t)
                    (let park () (sleep-ms 100000000) (park))))])
-        (fluid-let ([now-ms real-now-ms])
+        (fluid-let ([now-ms test-real-now-ms])
           (do ([i 0 (+ i 1)]) ((or done (= i 100))) (schevana-step! 0))
           (do ([i 0 (+ i 1)]) ((= i 2)) (schevana-step! 0)))
         (set! request-frame! plain)
@@ -532,13 +524,13 @@
 (set-theme! 'scale 200)
 (scene! 'S5)
 (let* ([acts (make-vector 5 0)] [switches 0] [errors 0] [n0 *frames-drawn*]
-       [report report-error!] [steps-run 0] [t0 (real-now-ms)])
+       [report report-error!] [steps-run 0] [t0 (test-real-now-ms)])
   (define (switch-point!)
     (when (and (current-proc) (= 0 (#%$tc-field 'disable-count (#%$tc)))
                (zero? (random 3)))
       (set! switches (+ switches 1))
       (sleep-ms 1)))
-  (fluid-let ([now-ms real-now-ms]
+  (fluid-let ([now-ms test-real-now-ms]
               [report-error! (lambda (who c)
                                (set! errors (+ errors 1)) (report who c))])
     (let ([p (spawn "repl"
@@ -556,7 +548,7 @@
       ;; steps cost little with no frame asked for: until the process is
       ;; seen to have done enough
       (let loop ()
-        (when (and (< (- (real-now-ms) t0) 20000)
+        (when (and (< (- (test-real-now-ms) t0) 20000)
                    (or (<= switches 50) (<= (vector-ref acts 3) 100)))
           (set! steps-run (+ steps-run 1))
           (schevana-step! 0)

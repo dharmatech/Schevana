@@ -840,25 +840,27 @@
            (pipeline-look! v)
            (and (pipeline-view-held? v) (eq? held (pipeline-view-shown v)))))
   (press! '(pipeline hold))
-  ;; the River: a few ticks to go back through
-  (steps 6)
-  (let* ([history (pipeline-view-history v)]
+  ;; the River: a few ticks to go back through, the refresh each draw's
+  ;; frame will show at kept, as the River is drawn from it: compared with
+  ;; that, not the clock, the check holds however long a step takes
+  (let* ([target #f]
+         [plain pipeline-river-target]
+         [stepped (fluid-let ([pipeline-river-target
+                               (lambda (g)
+                                 (let ([t (plain g)]) (set! target t) t))])
+                    (steps 6))]
+         [history (pipeline-view-history v)]
          [river (pipeline-view-river v)]
-         [k (ui-stream-sent river)]
-         ;; now, read before the row: reading it back waits for the GPU to
-         ;; finish the frame on its way, which on lavapipe can take a
-         ;; refresh or two
-         [now (inspect-refresh-of (inspect-refresh-grid) (now-ns))])
+         [k (ui-stream-sent river)])
     (check (format "the River flows a column a refresh, the newest at the \
                     right the one before the refresh its frame will show \
                     at: the frames are kept, each refresh's row its bar's \
-                    parts and the screen's word (~a, now ~a)"
-                   k now)
+                    parts and the screen's word (~a, its frame's ~a)"
+                   k target)
            (let ([row (and (ui-stream-buffer river) (ui-stream-row river k))])
              (and row (> (inspect-history-count history) 3)
                   (= (length row) (+ (length pipeline-draw-river-parts) 1))
-                  ;; a refresh or two may pass between the draw and this
-                  (<= -2 (- k now) 2))))
+                  (eqv? k (and target (- target 1))))))
     ;; the ticks over the River, by a choice that names both ways
     (let* ([ran? (not (pipeline-view-ticks-by-frame? v))]
            [frame? (begin (press! '((pipeline ticks) frame))
