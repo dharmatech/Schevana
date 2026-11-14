@@ -89,22 +89,32 @@
 
 (check "a card's tags: as many chips as fit beside \"+k\" for the rest, the \
         first cut when even it does not fit, never past the card's edge"
-       (let ([fits?
-              (lambda (w tags)
-                (let-values ([(ws k) (tasks-card-tags
-                                      w (mk 6 "x" 'todo 'bug 'low #f tags #f))])
-                  (and (pair? ws) (= (+ (length ws) k) (length tags))
-                       (<= (+ (apply + ws) (* 4 (- (length ws) 1))
-                              (if (> k 0)
-                                  (+ 4 (text-width (format "+~a" k)
-                                                   'ui-small))
-                                  0))
-                           (- w 20))
-                       (list (length ws) k))))])
-         (and (equal? (fits? 200 '("ui" "kit")) '(2 0))
-              (equal? (fits? 145 '("abcdefghijkl" "abcdefgh" "b")) '(1 2))
-              (equal? (fits? 200 '("abcdefghijklmnopqrstuvwx" "b")) '(1 1))
-              (equal? (fits? 100 '("abcdefghijklmnopqrstuvwx")) '(1 0)))))
+       (let* ([pad (tasks-card-pad)]
+              [chip (lambda (tag)
+                      (let-values ([(w h) (ui-chip-size tag #f)]) w))]
+              [more (lambda (k) (+ 4 (text-width (format "+~a" k) 'ui-small)))]
+              ;; a card with room inside, measured for what's said
+              [card (lambda (room) (+ room (* 2 pad)))]
+              [long "abcdefghijklmnopqrstuvwx"]
+              [fits?
+               (lambda (w tags)
+                 (let-values ([(ws k)
+                               (tasks-card-tags
+                                w (mk 6 "x" 'todo 'bug 'low #f tags #f))])
+                   (and (pair? ws) (= (+ (length ws) k) (length tags))
+                        (<= (+ (apply + ws) (* 4 (- (length ws) 1))
+                               (if (> k 0) (more k) 0))
+                            (- w (* 2 pad)))
+                        (list (length ws) k))))])
+         (and (equal? (fits? (card (+ (chip "ui") 4 (chip "kit")))
+                             '("ui" "kit"))
+                      '(2 0))
+              (equal? (fits? (card (+ (chip "abcdefghijkl") (more 2)))
+                             '("abcdefghijkl" "abcdefgh" "b"))
+                      '(1 2))
+              ;; room for the chip, but not for "+1" beside it
+              (equal? (fits? (card (chip long)) (list long "b")) '(1 1))
+              (equal? (fits? (card (- (chip long) 10)) (list long)) '(1 0)))))
 
 (check "tasks-neighbor, tasks-tag, ui-initials"
        (and (eq? (tasks-neighbor ts t2) t3) (eq? (tasks-neighbor ts t4) t3)
@@ -440,13 +450,24 @@
 (let ([v (tasks-view-new (make-ui))])
   (define (mode w) (call-with-values (lambda () (tasks-layout v w 700 44))
                      (lambda (m view details) m)))
-  (let ([at-13 (list (mode 1205) (mode 760))])
+  ;; the narrowest width with the details beside the view, and below it
+  ;; none: (narrowest narrow-below? wide-above?)
+  (define (beside)
+    (let loop ([lo 0] [hi 20000])
+      (if (= (+ lo 1) hi)
+          (list hi (eq? (mode (- hi 1)) 'narrow) (eq? (mode 20000) 'wide))
+          (let ([m (quotient (+ lo hi) 2)])
+            (if (eq? (mode m) 'wide) (loop lo m) (loop m hi))))))
+  (let ([at-13 (beside)])
     (set-theme! 'ui-font-size 24)
-    (let ([at-24 (list (mode 1205) (mode 2400))])
+    (let ([at-24 (beside)])
       (set-theme! 'ui-font-size 13)
-      (check "tasks-layout: the details beside the view when they fit, at 13 \
-              and 24 px fonts"
-             (equal? (list at-13 at-24) '((wide narrow) (narrow wide)))))))
+      (check "tasks-layout: the details beside the view from a width on, \
+              narrow below it, and that width greater at 24 px fonts than \
+              at 13"
+             (and (cadr at-13) (caddr at-13) (cadr at-24) (caddr at-24)
+                  (eq? (mode 0) 'narrow)
+                  (> (car at-24) (car at-13)))))))
 
 ;; A keystroke in 13's description, Tasks maximized, with a long title on
 ;; TASK-10, which 13 and others wait for (cards, rows and tooltips fit its

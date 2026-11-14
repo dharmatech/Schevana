@@ -155,6 +155,24 @@
 
 (define (raises? thunk) (guard (c [#t #t]) (thunk) #f))
 
+;; The insets Genera's rule gives with today's fonts: its 2-pixel border
+;; and 4-pixel margin on each side, and at the bottom its label strip, the
+;; label font's line and 2, at least 14 (styles/genera.ss).
+(define (test-genera-insets)
+  (with-style 'genera
+    (lambda ()
+      (let ([label (font-line-height (theme 'genera-label-font))])
+        (list 6 6 6 (+ 6 (max 14 (exact (round (+ label 2))))))))))
+
+;; Medley's: a border of 4, and above it the title strip, at least
+;; Medley's 15 pixels, the title font's line under the ink, or the title
+;; bar's setting less 15 (styles/interlisp.ss).
+(define (test-interlisp-insets)
+  (with-style 'interlisp
+    (lambda ()
+      (let ([line (exact (round (font-line-height 'ui-small)))])
+        (list 4 (+ 2 (max 15 (- (title-height) 15) (+ 2 line))) 4 4)))))
+
 ;;; ------------------------------------------------------------------ images
 
 ;; An image's pixels, read back from the GPU: premultiplied, a native word of

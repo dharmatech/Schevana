@@ -1249,6 +1249,24 @@
 (reset-theme!)
 
 ;; Window styles: the frame, its buttons and their actions come from the style.
+;; The insets Genera's rule gives with today's fonts: its 2-pixel border
+;; and 4-pixel margin on each side, and at the bottom its label strip, the
+;; label font's line and 2, at least 14 (styles/genera.ss).
+(define (test-genera-insets)
+  (with-style 'genera
+    (lambda ()
+      (let ([label (font-line-height (theme 'genera-label-font))])
+        (list 6 6 6 (+ 6 (max 14 (exact (round (+ label 2))))))))))
+
+;; Medley's: a border of 4, and above it the title strip, at least
+;; Medley's 15 pixels, the title font's line under the ink, or the title
+;; bar's setting less 15 (styles/interlisp.ss).
+(define (test-interlisp-insets)
+  (with-style 'interlisp
+    (lambda ()
+      (let ([line (exact (round (font-line-height 'ui-small)))])
+        (list 4 (+ 2 (max 15 (- (title-height) 15) (+ 2 line))) 4 4)))))
+
 (define (click-button! win kind)
   (let ([b (assq kind (frame-regions win))])
     (unless b (errorf 'click-button! "~s has no ~s button" win kind))
@@ -1290,8 +1308,10 @@
 (let ([w (open-window "Gamma" 'size '(300 . 150) 'pos '(200 . 140))])
   (let-values ([(l t r b) (frame-insets w)])
     (check "interlisp has Medley's border of 4 (2 of ink, 2 of paper), a \
-            15-pixel title strip and no buttons"
-           (and (= l 4) (= r 4) (= b 4) (= t 17) (null? (frame-regions w)))))
+            title strip of Medley's 15 pixels or the title font's line, and \
+            no buttons"
+           (and (equal? (list l t r b) (test-interlisp-insets))
+                (null? (frame-regions w)))))
   (inject! '(mouse-move 300 147) '(mouse-down 300 147 right 1)
            '(mouse-up 300 147 right))
   (steps 2)
@@ -1308,7 +1328,7 @@
   (let-values ([(l t r b) (frame-insets w)])
     (check "genera has a 2-pixel border, a 4-pixel margin and the label at \
             the bottom"
-           (and (= l 6) (= t 6) (= r 6) (= b 23))))
+           (equal? (list l t r b) (test-genera-insets))))
   (let ([x 260] [y (+ 140 (window-h w) -10)])
     (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
              `(mouse-move ,(+ x 40) ,(- y 30))

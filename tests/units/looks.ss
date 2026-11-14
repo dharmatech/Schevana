@@ -9,14 +9,14 @@
       (close-window! w)
       (list l t r b))))
 
-(check "at the default fonts the insets are Genera's 6 6 6 23, the CADR's \
-        2 2 2 and its label strip, the code font's line and 2, Interlisp's \
-        4 17 4 4"
-       (and (equal? (style-insets 'genera) '(6 6 6 23))
+(check "the insets are Genera's 6 6 6 and its label strip, the CADR's 2 2 \
+        2 and its label strip, the code font's line and 2, Interlisp's 4 \
+        and its title strip, each by the font"
+       (and (equal? (style-insets 'genera) (test-genera-insets))
             (equal? (style-insets 'cadr)
                     (list 2 2 2 (+ 2 (exact (round (+ 2 (font-line-height
                                                          'mono)))))))
-            (equal? (style-insets 'interlisp) '(4 17 4 4))))
+            (equal? (style-insets 'interlisp) (test-interlisp-insets))))
 
 (check "our styles' own behaviors, and the CADR's Genera's but its frame \
         and its gray"
@@ -606,9 +606,12 @@
        (let ([w (open-window "T" 'size '(300 . 160) 'pos '(200 . 200)
                              'window-style 'interlisp)])
          (steps 2)
+         ;; the strip's top row, its middle and its last
          (let* ([x (+ (window-x w) 200)] [y (window-y w)]
+                [strip (- (cadr (test-interlisp-insets)) 2)]
                 [px (lambda () (map (lambda (dy) (canvas-pixel x (+ y dy)))
-                                    '(0 5 14)))]
+                                    (list 0 (quotient strip 2)
+                                          (- strip 1))))]
                 [ink (px)])
            (override! 'interlisp-title-shade #xffffff)
            (steps 2)
@@ -651,11 +654,13 @@
                  (override! 'scrollbar-side)
                  (close-window! w)
                  (steps 1)
-                 ;; from the title strip's bottom (15) to the frame's
-                 (and (= l 28) (eq? region 'scrollbar) bar
-                      (= (car bar) -28) (= (caddr bar) 24)
-                      (= (cadr bar) (- 15 t))
-                      (= (cadddr bar) (- (window-h w) 15)))))))))
+                 ;; from the title strip's bottom (the inset less the
+                 ;; ink) to the frame's
+                 (let ([strip (- t 2)])
+                   (and (= l 28) (eq? region 'scrollbar) bar
+                        (= (car bar) -28) (= (caddr bar) 24)
+                        (= (cadr bar) (- strip t))
+                        (= (cadddr bar) (- (window-h w) strip))))))))))
 
 (check "the REPL's scroll bar is on the style's side, and no wider than \
         its text's inset there (Interlisp's 24)"

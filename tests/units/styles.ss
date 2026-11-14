@@ -92,7 +92,7 @@
            (close-window! w)
            (printf "  ~s\n" (list seen insets hit))
            (and (equal? seen '(genera flat)) (eq? (theme 'palette) 'tokyo-night)
-                (equal? insets '(6 6 6 23)) (eq? hit 'title)))))
+                (equal? insets (test-genera-insets)) (eq? hit 'title)))))
 
 (check "choosing Genera brings its palette and wallpaper; a palette chosen \
         for it stays with it"
