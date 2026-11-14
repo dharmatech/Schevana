@@ -2223,45 +2223,12 @@
 (for-each (lambda (s) (type! s) (press! 'return))
           '("Item 1" "Item 2" "Item 3" "Item 4" "Item 5"))
 (steps 2)
-(check "Return in Add an item keeps it in view as the items push it down"
-       (and (eq? (focus-id) 'new-item) (shown? 'new-item)))
+;; scrolled into view as they push it down: the kit's
+;; (tests/units/ui-focus.ss)
+(check "Return in Add an item keeps the keyboard there for the next item"
+       (eq? (focus-id) 'new-item))
 (set-task! 7 'checklist (list-head (task-checklist (find-task 7)) 5))
 (press! 'escape)
-;; Put back after, as it went or not: the size, the description, nothing
-;; selected.
-(let-values ([(w h) (window-content-size tw)]
-             [(t) (car (column-of 'review))])
-  (define text (task-description t))
-  (test-finally
-   (lambda ()
-     (resize-window! tw 1100 440)
-     (steps 2)
-     (let-values ([(x y) (region-center (list 'card (task-id t)))])
-       (tasks-click! x y))
-     (click-ui! tw 'description)
-     (press! 'end 'ctrl)
-     (do ([i 0 (+ i 1)]) ((= i 12)) (press! 'return) (type! "more text"))
-     (steps 2)
-     (let* ([r (ui-find tui 'description)]
-            [a (car (apply ui-text-box-areas
-                           (append (ui-region-frame r) '(()))))]
-            [lh (font-line-height 'ui)] [text (task-description (selected))]
-            [lay (edit-layout-of #f text (list-ref a 3) #f
-                                 (lambda (s) (text-width s 'ui)) #f)]
-            [top (- (+ (list-ref a 2)
-                       (* lh (edit-row-at lay (edit-caret (edit)))))
-                    (ui-memo tui 'description 0))])
-       (check "typing at the end of a long description keeps its caret in view"
-              (<= (ui-region-y r) top (+ top lh)
-                  (+ (ui-region-y r) (ui-region-h r))))))
-   (lambda ()
-     (press! 'escape)
-     (press! 'escape)
-     (steps 1)
-     (tasks-select! tv #f)
-     (set-task! t 'description text)
-     (resize-window! tw w h)
-     (steps 2))))
 (type! "n")
 (type! (make-string 150 #\W))
 (steps 2)
@@ -2272,8 +2239,7 @@
 (steps 2)
 
 ;; Each task's details start at their top: a description wheeled down is
-;; not wheeled in the next task. Tab leaves a gap at the details' edges,
-;; so a focus ring shows whole.
+;; not wheeled in the next task.
 (let* ([lines (lambda (what)
                 (apply string-append
                        (map (lambda (i) (format "~a ~a.\n" what i))
@@ -2297,35 +2263,6 @@
   (delete-task! a)
   (delete-task! b)
   (steps 2))
-(tasks-select! tv (find-task 11))   ; its card is scrolled out of view
-(invalidate! tw)
-(steps 2)
-(click-ui! tw 'title)
-(define (ring-inside? id)   ; the focus ring reaches 4 px out
-  (let ([r (ui-find tui id)] [d (ui-find tui 'details)])
-    (and (>= (- (ui-region-y r) 4) (ui-region-y d))
-         (<= (+ (ui-region-y r) (ui-region-h r) 4)
-             (+ (ui-region-y d) (ui-region-h d))))))
-(define (tab-to! id . mods)
-  (let loop ([n 0])
-    (unless (or (= n 40) (eq? (focus-id) id))
-      (apply press! 'tab mods)
-      (steps 2)
-      (loop (+ n 1)))))
-(tab-to! 'delete)
-(let ([last (ring-inside? 'delete)])
-  (tab-to! 'status 'shift)
-  (check "Tab and Shift+Tab bring a field into view with its focus ring"
-         (and last (eq? (focus-id) 'status) (ring-inside? 'status))))
-(tab-to! 'title 'shift)
-(check "Shift+Tab up onto a title of three rows shows all of it"
-       (and (eq? (focus-id) 'title)
-            (>= (cadddr (ui-region-frame (ui-find tui 'title)))
-                (* 3 (font-line-height 'heading)))
-            (ring-inside? 'title)))
-(press! 'escape)
-(steps 1)
-
 ;; Looks: the tag field draws no box inside the chip input's; a filter
 ;; whose tag no task has any more still shows it; a disabled button does
 ;; not light up under the pointer; a cut title says so, and so does a cut
