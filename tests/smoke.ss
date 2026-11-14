@@ -205,13 +205,9 @@
   (press! 'down)
   (press! 'return)
   (steps 1)
-  (check "down and return take the second one"
-         (and (string=? "(set-theme-plist!" (repl-input r)) (not (offered))))
   (fresh! "(stp")
   (press! 'tab)
   (steps 1)
-  (check "initials find set-theme-plist!"
-         (member "set-theme-plist!" (offered)))
   (type! "l")
   (steps 1)
   (check "typing narrows the list"
@@ -231,7 +227,6 @@
                  '("accent" "accent-2" "accent-choices" "panel-accent")))
   (press! 'escape)
   (steps 1)
-  (check "escape closes the list" (not (offered)))
   (call-with-output-file (string-append out-dir "/zz-complete-me.txt")
     (lambda (p) (display "x" p))
     'replace)
@@ -347,27 +342,6 @@
                   (string-contains-ci? doc "double square")
                   (string-contains-ci? doc "acme/math.sls")))))
   ;; Tab pages through the list; Return or a click on a row accepts.
-  (fresh! "(set-")
-  (press! 'tab)
-  (steps 1)
-  (let* ([input (repl-input r)]
-         [n (length (or (offered) '()))]
-         [last-page (* complete-rows (quotient (- n 1) complete-rows))]
-         [sel (lambda () (let ([c (complete-of r)]) (and c (complete-sel c))))])
-    (press! 'tab)
-    (steps 1)
-    (let ([next (sel)])
-      (press! 'tab 'shift)
-      (press! 'tab 'shift)
-      (steps 1)
-      (let ([back (sel)])
-        (press! 'tab)
-        (steps 1)
-        (check "tab selects the next page's first row and shift+tab the \
-                previous one's, both wrapping, and neither takes one"
-               (and (> n (* 2 complete-rows)) (eqv? next complete-rows)
-                    (eqv? back last-page) (eqv? (sel) 0)
-                    (string=? input (repl-input r)))))))
   ;; Under the pointer a row shows it takes a click: a box, a hand and
   ;; the mouse documentation's words; off the list the REPL's own again,
   ;; and so once the list closes under a still pointer.
@@ -399,21 +373,8 @@
                       (equal? (state) '(#f ibeam ()))))))))
   (fresh! "(set-th")
   (press! 'tab)
-  (steps 1)
-  (let-values ([(cx cy cw ch) (content-rect w)])
-    (let* ([c (complete-of r)] [box (complete-box c)]
-           [second (car (vector-ref (complete-items c) 1))])
-      (click! (+ cx (car box) 20)
-              (+ cy (list-ref box 5) (* 3/2 (complete-row-height))))
-      (check "a click on a row takes it"
-             (and (string=? (string-append "(" second) (repl-input r))
-                  (not (offered))))))
-  (fresh! "(set-th")
-  (press! 'tab)
   (inject! '(wheel 0 -1))
   (steps 1)
-  (check "the wheel moves the selection"
-         (= 1 (complete-sel (complete-of r))))
   (let-values ([(cx cy cw ch) (content-rect w)])
     (click! (+ cx cw -10) (+ cy 10))
     (check "a click elsewhere in the REPL closes the list"
@@ -443,8 +404,9 @@
         (check "a click on another window or on the desktop closes the list"
                (and on-clock? (not after-clock) (not (window-at 1200 700))
                     on-desktop? (not after-desktop))))))
-  ;; With nothing to add, a popup says so; it goes at the next key, text,
-  ;; click or wheel, which then acts as usual.
+  ;; With nothing to add, a popup says so, with a sole completion's
+  ;; description; it goes at the next key, which then acts as usual (the
+  ;; list itself: tests/units/complete.ss).
   (fresh! "(set-theme-plist!")
   (press! 'tab)
   (steps 1)
@@ -464,27 +426,9 @@
   (fresh! "(zzqx")
   (press! 'tab)
   (steps 1)
-  (check "tab with nothing matching says so"
-         (let ([c (complete-of r)])
-           (and c (equal? (complete-message c) "No completions")
-                (equal? (offered) '()))))
   (png-write-screen (string-append out-dir "/completion-none.png"))
   (type! "y")
   (steps 1)
-  (check "typed text closes it and is typed"
-         (and (not (complete-of r)) (string=? "(zzqxy" (repl-input r))))
-  (press! 'tab)
-  (inject! '(wheel 0 1))
-  (steps 1)
-  (check "so does the wheel" (not (complete-of r)))
-  (press! 'tab)
-  (steps 1)
-  (let ([c (complete-of r)])
-    (let-values ([(cx cy cw ch) (content-rect w)])
-      (when c (click! (+ cx (car (complete-box c)) 20)
-                      (+ cy (cadr (complete-box c)) 10)))
-      (check "and a click, even on the popup"
-             (and c (not (complete-of r))))))
   ;; A small window: the rows shrink so the list leaves the line in view.
   (resize-window! w 420 140)
   (fresh! "(set-")
@@ -544,10 +488,6 @@
                 (for-all (lambda (p) (= (+ (caddr p) 4) (cadddr p))) pages)
                 (for-all (lambda (p) (= (cadr p) (cadar pages))) pages)
                 (exists (lambda (p) (not (= (car p) (caar pages)))) pages))))
-  (let ([owner (list 'field)])
-    (complete-open! owner 'symbols 0 (vector))
-    (check "a list opened with no items is closed"
-           (not (complete-of owner))))
   ;; A REPL's own handler outlives loading the REPL's file again.
   (let ([mine (lambda (win x y button clicks) #f)])
     (hashtable-set! (window-handlers w) 'mouse-down mine)
@@ -556,22 +496,6 @@
            (eq? mine (hashtable-ref (window-handlers w) 'mouse-down #f))))
   (close-window! w))
 
-;; Names match as in the editor e: in segments, each starting where a part
-;; of the name starts, in any order.
-(let ([world (map (lambda (s) (cons (symbol->string s) #f))
-                  (environment-symbols (interaction-environment)))]
-      [names (lambda (v) (map car (vector->list v)))])
-  (check "stp still finds set-theme-plist!"
-         (member "set-theme-plist!" (names (rank-choices "stp" world))))
-  (check "a segment starts where a part does: letters in order inside a \
-          part do not match"
-         (null? (names (rank-choices "sem" '(("set-theme!" . #f))))))
-  (check "segments out of order match, after those in order"
-         (equal? (names (rank-choices "thse" '(("set-theme" . #f)
-                                               ("theme-set" . #f))))
-                 '("theme-set" "set-theme")))
-  (check "an exact name comes first"
-         (equal? "string" (car (names (rank-choices "string" world))))))
 (press! #\u 'ctrl)
 (type! "(exit)")
 (press! 'return)
