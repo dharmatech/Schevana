@@ -288,7 +288,10 @@
               (ui-find ui (list 'monitor-kill (proc-id p)))
               (ui-find ui (list 'monitor-focus (window-id target)))))
   ;; the Consumers sorted by a heading: by name, again the other way, and
-  ;; back to ms/s, the most first
+  ;; back to ms/s, the most first. Monitor's view moves on twice a second,
+  ;; and its rows with it (a consumer's first second, a window opened):
+  ;; paused, it holds the one view the three orders are of
+  (monitor-test-click! m 'pause)
   (let ([order (lambda (nodes)   ; the same nodes, in a fixed order
                  (list-sort string<? (map (lambda (n) (format "~s" n))
                                           nodes)))]
@@ -310,6 +313,7 @@
                       (equal? (reverse by-name) by-name-down)
                       (equal? (order by-rate) (order by-name))
                       (equal? (order by-rate) (order (roots)))))))))
+  (monitor-test-click! m 'pause)
   ;; The rows drawn selected, at a draw of Monitor's: where each is, down
   ;; the window.
   (let ([selected-rows

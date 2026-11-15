@@ -143,9 +143,10 @@ level above tests only what it adds, trusting the levels below.
   check would starve rather than share.
 - What the world does by its clock happens between a check's steps when
   they're slow: the Pipeline reads the frame again a second after it last
-  did, Monitor's rows sort again twice a second. A scene such a read would
-  change holds the clock (`test-clock-hold!`), or acts on what was last
-  drawn, not on where it was a step ago.
+  did, Monitor's view moves on twice a second, its rows sorted again and
+  others among them. A scene such a read would change holds the clock
+  (`test-clock-hold!`), holds the view as a person would (Monitor's
+  Pause), or acts on what was last drawn, not on where it was a step ago.
 - The held clock isn't held while a process runs that never yields: a
   process's turn ends by that clock, so it would never end. The clock
   fails the run when a tick reads it 100,000 times (`tests/lib.ss`).
