@@ -176,6 +176,24 @@
                  `(mouse-up ,x ,y left)))
       (steps 1))))
 
+;; Wheels win's scroll view view (its region's id) until region id is
+;; whole in it, so that a press on it lands with any font; a step each
+;; notch, 40 at most.
+(define (test-show! win view id)
+  (let ([ui (window-ref win 'ui)])
+    (let loop ([n 0])
+      (let* ([v (test-region ui view)] [r (ui-find ui id)]
+             [f (and r (ui-region-frame r))]
+             [above? (and f (< (cadr f) (ui-region-y v)))]
+             [below? (or (not f)
+                         (> (+ (cadr f) (cadddr f))
+                            (+ (ui-region-y v) (ui-region-h v))))])
+        (when (and (< n 40) (or above? below?))
+          (let-values ([(x y) (test-point win view)])
+            (inject! `(mouse-move ,x ,y) `(wheel 0 ,(if above? 1 -1))))
+          (steps 1)
+          (loop (+ n 1)))))))
+
 ;; Clicks the open menu's entry that starts with label, where menu-areas
 ;; puts it; a step or two.
 (define (test-menu-click! label)
