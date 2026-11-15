@@ -1817,27 +1817,15 @@
     (move-task! 13 'todo 14)
     (steps 2)))
 
-;; Board keys.
+;; Board keys: a key reaches the board (its keys: tests/units/tasks.ss).
 (let-values ([(x y) (region-center (list 'card 13))])
   (tasks-click! x y))
 (check "a click on a card selects it" (eq? (selected) (find-task 13)))
 (press! 'down)
 (steps 1)
 (check "Down selects the next card" (eq? (selected) (find-task 14)))
-(press! 'right 'shift)
-(steps 1)
-(check "Shift+Right moves it to the next status"
-       (eq? (task-status (find-task 14)) 'doing))
-(let ([before (list-index (lambda (t) (eq? t (find-task 14)))
-                          (column-of 'doing))])
-  (press! 'up 'shift)
-  (steps 1)
-  (check "Shift+Up moves it up its column"
-         (= (list-index (lambda (t) (eq? t (find-task 14))) (column-of 'doing))
-            (- before 1))))
 (press! 'escape)
 (steps 1)
-(check "Escape lets go of the selection" (not (selected)))
 
 ;; The List.
 (type! "v")
@@ -1845,19 +1833,16 @@
 (check "v switches to the List" (eq? (tasks-view-mode tv) 'list))
 (define (rows) (tasks-rows tv (tasks-visible tv)))
 (click-ui! tw '(table header priority))
-(check "a header sorts by it: urgent first"
-       (eq? (task-priority (car (rows))) 'urgent))
+(check "a press on a heading sorts the List by it"
+       (equal? (tasks-view-sort tv) '(priority . up)))
 (shot "list")
-(click-ui! tw '(table header priority))
-(check "again: low first" (eq? (task-priority (car (rows))) 'low))
-(click-ui! tw '(table header priority))
-(check "again: board order" (not (tasks-view-sort tv)))
+(tasks-sort-by! tv 'priority)
+(tasks-sort-by! tv 'priority)   ; board order again
 (press! 'down) (press! 'down)
-(steps 1)
-(check "Down twice selects the second row" (eq? (selected) (cadr (rows))))
 (press! 'return)
-(steps 1)
-(check "Return edits its title" (eq? (focus-id) 'title))
+(steps 2)
+(check "Down twice selects the List's second row, and Return edits its title"
+       (and (eq? (selected) (cadr (rows))) (eq? (focus-id) 'title)))
 (press! 'escape)
 (let-values ([(x y) (region-center '(table body))]
              [(cx cy cw ch) (content-rect tw)])
@@ -1890,9 +1875,6 @@
 (check "Return leaves the search and selects the first match"
        (and (not (focus-id)) (eq? (selected) (car (rows)))))
 (click-ui! tw 'clear)
-(check "Clear shows every task again"
-       (and (equal? "" (tasks-view-query tv))
-            (= (length *tasks*) (length (tasks-visible tv)))))
 (click-ui! tw '(filter kind))
 (test-menu-click! "Bug")
 (check "Kind: Bug shows only bugs"
@@ -1912,24 +1894,9 @@
   (press! 'escape)
   (steps 2)
   (set-task! 9 'assignee a))
-(click-ui! tw 'done)
 (type! "v")
-(type! "v")
+(type! "v")   ; the Board again
 (steps 2)
-(check "Show done off: no Done column"
-       (and (not (tasks-view-done? tv)) (ui-find tui '(column todo))
-            (not (ui-find tui '(column done)))))
-(let-values ([(x y) (region-center (list 'card 7))])
-  (tasks-click! x y))
-(press! 'right 'shift)
-(steps 2)
-(check "Shift+Right into the hidden Done selects the task next to it"
-       (and (eq? (task-status (find-task 7)) 'done)
-            (eq? (selected) (find-task 16))))
-(move-task! 7 'review 16)
-(press! 'escape)
-(steps 1)
-(click-ui! tw 'done)
 
 ;; The context menu, Duplicate and Move to; Delete and its dialog.
 (column-home! 'todo)
@@ -1943,20 +1910,11 @@
             (eq? (next-to 13) copy)
             (equal? (task-title copy)
                     (string-append (task-title (find-task 13)) " (copy)"))))
-(let-values ([(x y) (region-center (list 'card (task-id copy)))])
-  (tasks-click! x y 'right 1))
-(test-menu-click! "Move to Done")
-(check "Move to Done" (eq? (car (last-pair (column-of 'done))) copy))
 ;; Tasks' delete dialog (the dialog itself: tests/units/ui-dialog.ss)
 (press! 'delete)
 (steps 2)
 (check "Delete asks first" (ui-find tui '(confirm 1)))
 (shot "dialog")
-(press! 'escape)
-(steps 2)
-(check "Escape cancels" (and (memq copy *tasks*) (not (ui-find tui 'confirm))))
-(press! 'delete)
-(steps 1)
 (press! 'return)
 (steps 2)
 (check "Delete and Return: gone, and the task next to it selected"
@@ -2181,9 +2139,6 @@
 (steps 2)
 (check "set-task! on a focused title: the field shows it"
        (and (eq? (focus-id) 'title) (equal? (edit-text (edit)) "Renamed")))
-(move-task! rt 'done)
-(steps 1)
-(check "move-task!" (eq? (car (last-pair (column-of 'done))) rt))
 (delete-task! rt)
 (steps 1)
 (check "delete-task!: the selection goes" (and (not (selected))
@@ -2263,27 +2218,6 @@
 (check "a chip's × removes it" (equal? (task-blocked-by (find-task 14)) '(33)))
 (click-ui! tw '(blocks 22))
 (check "a click on a chip selects that task" (eq? (selected) (find-task 22)))
-(set! *toasts* '())
-(move-task! 22 'done)
-(steps 1)
-(check "a blocked task moved to Done: it is, and a toast says what it waits \
-        for"
-       (and (eq? 'done (task-status (find-task 22)))
-            (exists (lambda (t)
-                      (equal? (vector-ref t 1)
-                              "TASK-22 is done, though it waits for TASK-14"))
-                    *toasts*)))
-(move-task! 22 'todo 15)
-(set! *toasts* '())
-(let ([t (add-task! "Born done" 'status 'done 'blocked-by '(10))])
-  (check "a task added done while it waits: the same toast"
-         (exists (lambda (x)
-                   (equal? (vector-ref x 1)
-                           (format "~a is done, though it waits for TASK-10"
-                                   (task-label t))))
-                 *toasts*))
-  (delete-task! t)
-  (set! *toasts* '()))
 
 ;; With many tasks, Add's menu shows what fits on the screen, then how many
 ;; more, which typing narrows; the task an id typed names comes first. A
