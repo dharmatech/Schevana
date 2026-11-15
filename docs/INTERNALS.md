@@ -222,6 +222,13 @@ stamps alone. A refresh comes its period after the one before; an earlier
 stamp moves the clock at once, a later one only as far as the clock may
 have drifted, and eight later in a row by the least of them, which is the
 few frames it takes to learn a screen at the start, or a change of it.
+That holds while frames flow, each sent within a refresh and a half of
+the one before. A display may stop its timing when nothing new comes and
+start it anew with the next frame, off the old beat: a laptop's panel
+does, some ten refreshes after the last frame. So after a pause the
+clock is the stamp, as it is. A stamp taken so may have run late; the
+next frame's then reads as the same refresh's, which no stamp can be,
+since none comes before its refresh, and the clock takes that one.
 Each report then says the refresh its frame showed at, by number, and when
 that refresh came by the clock; the stamp is kept beside it. A stamp can
 run a whole refresh late, which only the next frame's report can tell,

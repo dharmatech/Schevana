@@ -78,14 +78,17 @@
 ;;; inferred from the stamps alone: a refresh comes its period after the
 ;;; one before; a stamp earlier than that moves the clock at once, a later
 ;;; one only as far as the clock may have drifted, a 4096th, and eight
-;;; later in a row by the least of them. A report then says the refresh
-;;; its frame showed at, by number, and when that refresh came by the
-;;; clock. A stamp may run a whole refresh late, which only the next
-;;; frame's report can tell: a frame shows at a later refresh than the one
-;;; before it. So a report that says a refresh was missed is held till one
-;;; agrees with it. The display's own count of its refreshes is read
-;;; nowhere: a compositor may send none (KWin), or count frames where the
-;;; driver counts nothing (Mutter over NVIDIA's).
+;;; later in a row by the least of them. That holds while frames flow: a
+;;; display may stop its timing when nothing new comes (a laptop's panel,
+;;; some ten refreshes on) and start it anew with the next frame, off the
+;;; old beat, so after a pause the clock is the stamp, as it is. A report
+;;; then says the refresh its frame showed at, by number, and when that
+;;; refresh came by the clock. A stamp may run a whole refresh late, which
+;;; only the next frame's report can tell: a frame shows at a later refresh
+;;; than the one before it. So a report that says a refresh was missed is
+;;; held till one agrees with it. The display's own count of its refreshes
+;;; is read nowhere: a compositor may send none (KWin), or count frames
+;;; where the driver counts nothing (Mutter over NVIDIA's).
 
 ;; The newest refresh a report placed, by number, and when it came by the
 ;; screen's clock (now-ns; 0, none yet); the reports that came later than
@@ -124,18 +127,19 @@
 ;; missed in a flow of frames, each sent within a refresh and a half of the
 ;; one before. In a flow a stamp is read as late, by up to three quarters
 ;; of a refresh, and hardly early; after a pause, or with no clock, as the
-;; nearest refresh.
+;; nearest refresh, which the clock then takes from it.
 (define (present-shown! frame at stamp refresh)
   (let* ([r *present-ring*]
          [refresh (if (and (fx> refresh 0) (fx> *present-refresh-said* 0))
                       *present-refresh-said*
                       refresh)]
          [p (if (fx> refresh 0) refresh (core0-frame-ns))]
-         [clock? (and (fx> refresh 0) (fx> *present-refresh-at* 0))]
          [sent (fxvector-ref r (fx+ at 2))]
-         [flow? (fx< (fx* 2 (fx- sent *present-sent*)) (fx* 3 p))]
+         ;; a clock to read the stamp against: kept, and a flow
+         [clock? (and (fx> refresh 0) (fx> *present-refresh-at* 0)
+                      (fx< (fx* 2 (fx- sent *present-sent*)) (fx* 3 p)))]
          [n (fxdiv (fx+ (fx- stamp *present-refresh-at*)
-                        (fxquotient p (if (and clock? flow?) 4 2)))
+                        (fxquotient p (if clock? 4 2)))
                    p)])
     (fxvector-set! r (fx+ at 4) p)
     (fxvector-set! r (fx+ at 10) stamp)
@@ -154,21 +158,26 @@
        (when (fx>= *present-held* 0) (present-held-settle! p))
        (cond
          [(fx>= *present-held* 0) (set! *present-held-last* frame)]
-         [(and clock? flow? (fx> *present-refresh* (fx+ *present-shown* 1)))
+         [(and clock? (fx> *present-refresh* (fx+ *present-shown* 1)))
           (set! *present-held* frame)
           (set! *present-held-last* frame)]
          [else
           ;; no two frames at one refresh: one whose stamp says so is
-          ;; numbered on from the newest shown, and the clock with it
-          (set! *present-refresh*
-            (fxmax *present-refresh* (fx+ *present-shown* 1)))
-          (fxvector-set! r (fx+ at 5) *present-refresh*)
+          ;; numbered on from the newest shown. No stamp comes before its
+          ;; refresh, so the clock was late (set by a stamp that ran late,
+          ;; the first or one after a pause), and takes this one
+          (when (fx<= *present-refresh* *present-shown*)
+            (set! *present-refresh* (fx+ *present-shown* 1))
+            (set! *present-refresh-at* stamp)
+            (set! *present-late-run* 0)
+            (fxvector-set! r (fx+ at 3) stamp)
+            (fxvector-set! r (fx+ at 5) *present-refresh*))
           (set! *present-shown* *present-refresh*)
           (present-publish! at 1)])])))
 
 ;; The screen's clock moved on to the refresh a report places, since ns
-;; after the newest by the clock: when its stamp says, unless that's later
-;; than the clock may have drifted.
+;; after the newest by the clock: when its stamp says, unless, in a flow
+;; (clock?), that's later than the clock may have drifted.
 (define (present-clock! stamp since clock?)
   (let ([latest (fx+ *present-refresh-at* since (fxquotient since 4096))])
     (set! *present-refresh-at*

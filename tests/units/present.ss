@@ -270,47 +270,137 @@
                  (for-all (lambda (k) (= 1 (present-test-step (+ f k))))
                           (cdr (iota 11))))))))
 
+;; Frames from first on, the first shown at t: each of steps a pair, how
+;; long after the one before the screen stamped it and how long after it
+;; was sent, ns, a refresh p ns by the screen's word.
+(define (present-test-steps first p t steps)
+  (present-test-shown!
+   first p
+   (let walk ([steps steps] [stamp t] [frames (list (list (- t (* 2 p)) t))])
+     (if (null? steps)
+         (reverse frames)
+         (let ([stamp (+ stamp (caar steps))])
+           (walk (cdr steps) stamp
+                 (cons (list (- stamp (cadar steps)) stamp) frames)))))))
+
+(check "after a pause the clock is the stamp: a laptop's panel that stops \
+        its timing when nothing new comes shows the next frame off the old \
+        beat, later or earlier than the nearest refresh, and the flow that \
+        follows keeps the new one (Intel's under GNOME 48.7 at 120 Hz, as \
+        measured: stamps 11.305, 9, 11.103 and 10.629 refreshes apart, \
+        then three a refresh apart)"
+       (present-test-fresh
+        (lambda ()
+          (let ([p 8333000] [f 2000091] [sent 20000000])
+            (present-test-steps
+             f p (* 1000 p)
+             `((94206000 ,sent) (75000000 ,sent) (92526000 ,sent)
+               (88577000 ,sent) (8333331 ,sent) (8333331 ,sent)
+               (8333331 ,sent)))
+            (and (equal? (map (lambda (k) (present-test-step (+ f k)))
+                              '(1 2 3 4 5 6 7))
+                         '(11 9 11 11 1 1 1))
+                 (for-all (lambda (k)
+                            (and (eqv? 1 (present-test-word (+ f k) 1))
+                                 (= (present-test-word (+ f k) 3)
+                                    (present-test-word (+ f k) 10))))
+                          '(1 2 3 4 5 6 7))
+                 (= *present-held* -1))))))
+
+;; A frame after a pause of 20 refreshes whose stamp ran late ns after its
+;; refresh, then two in a flow stamped in time, a refresh p ns: => how far
+;; the clock's time of each of the two is off its refresh's, ns, and their
+;; steps.
+(define (present-test-late-after-pause first p late)
+  (present-test-fresh
+   (lambda ()
+     (let ([t (* 1000 p)])
+       (present-test-shown!
+        first p
+        (list (list (- t (* 2 p)) t)
+              (list (+ t (* 18 p)) (+ t (* 20 p) late))
+              (list (+ t (* 19 p)) (+ t (* 21 p) 20000))
+              (list (+ t (* 20 p)) (+ t (* 22 p) 20000))))
+       (list (- (present-test-word (+ first 2) 3) (+ t (* 21 p)))
+             (- (present-test-word (+ first 3) 3) (+ t (* 22 p)))
+             (present-test-step (+ first 2))
+             (present-test-step (+ first 3))
+             (present-test-word (+ first 1) 1))))))
+
+(let* ([p (core0-frame-ns)]
+       [runs (map (lambda (k late)
+                    (present-test-late-after-pause (+ 2000101 (* 10 k)) p late))
+                  '(0 1 2 3)
+                  (list (quotient p 8) (quotient (* 3 p) 8)
+                        (quotient (* 5 p) 8) (quotient (* 7 p) 8)))])
+  (check (format "a stamp that ran late after a pause is taken too, with \
+                  nothing to tell it by, and shown at once; the next \
+                  frame's, in time, sets the clock right, whether it ran \
+                  an eighth of a refresh late or seven: no stamp comes \
+                  before its refresh, so one that reads as the refresh \
+                  before's says the clock was late (~a)"
+                 runs)
+         (for-all (lambda (run)
+                    (and (<= 0 (car run) 20000) (<= 0 (cadr run) 20000)
+                         (= 1 (caddr run)) (= 1 (cadddr run))
+                         (eqv? 1 (list-ref run 4))))
+                  runs)))
+
 ;; A stream of n frames from first on, a refresh p ns long as the screen
 ;; says: each shows a refresh after the one before, one in 53 two (the
 ;; compositor held it), is sent two refreshes before it shows, and is
 ;; stamped tens of microseconds after its refresh, one in 97 between 0.5
 ;; and 9 ms after, none before the stamp before it, as one thread sends
-;; them. Core0's step runs before each report. => (wrong off): the steps
-;; counted wrong, and the most a frame's time by the clock is off its
-;; refresh's, ns.
-(define (present-test-stream first p n)
-  (let ([t (* 1000 p)] [truth (make-vector n 0)])
-    (let feed ([k 0] [tick 0] [before 0])
+;; them. With every over 0, a pause of 3 to 40 refreshes comes before each
+;; frame that many on from the last. Core0's step runs before each report.
+;; => (wrong off across): of the frames in a flow, the steps counted
+;; wrong, but the last before a pause's, whose stamp no report after it
+;; can tell from a refresh missed; the most the time by the clock of one
+;; whose frame before was in the flow too is off its refresh's, ns; and
+;; the steps across a pause counted wrong.
+(define (present-test-stream first p n every)
+  (let ([t (* 1000 p)] [truth (make-vector n 0)] [flow (make-vector n #t)])
+    (let feed ([k 0] [tick 0] [sent 0] [before 0])
       (when (< k n)
         (let* ([at (+ t (* tick p))]
                [late (+ 5000 (* 1000 (modulo (* k 7919) 31))
                         (if (= 0 (modulo (* k 7919) 97))
                             (+ 500000 (* 100000 (modulo (* k 31) 86)))
                             0))]
-               [stamp (max (+ at late) (+ before 2000))])
+               [stamp (max (+ at late) (+ before 2000))]
+               [pause (if (and (> every 0) (= 0 (modulo (+ k 1) every)))
+                          (+ 3 (modulo (* k 7907) 38))
+                          0)])
           (vector-set! truth k tick)
+          (when (and (> pause 0) (< (+ k 1) n))
+            (vector-set! flow (+ k 1) #f))
           (present-held-poll! stamp)
-          (present-test-sent! (+ first k) (+ t (* (- k 2) p)))
+          (present-test-sent! (+ first k) (+ t (* (- sent 2) p)))
           (present-reported! (+ first k) 1 stamp p)
-          (feed (+ k 1) (+ tick (if (= 0 (modulo k 53)) 2 1)) stamp))))
-    (present-held-poll! (* 2 (+ t (* 2 n p))))
-    (let verdict ([k 1] [wrong 0] [off 0])
+          (feed (+ k 1) (+ tick pause (if (= 0 (modulo k 53)) 2 1))
+                (+ sent pause 1) stamp))))
+    (present-held-poll! (* 2 (+ t (* 2 n 41 p))))
+    (let verdict ([k 1] [wrong 0] [off 0] [across 0])
       (if (= k n)
-          (list wrong off)
-          (verdict (+ k 1)
-                   (if (= (present-test-step (+ first k))
-                          (- (vector-ref truth k) (vector-ref truth (- k 1))))
-                       wrong
-                       (+ wrong 1))
-                   (max off (abs (- (present-test-word (+ first k) 3)
-                                    (+ t (* (vector-ref truth k) p))))))))))
+          (list wrong off across)
+          (let ([right? (= (present-test-step (+ first k))
+                           (- (vector-ref truth k) (vector-ref truth (- k 1))))]
+                [flow? (vector-ref flow k)]
+                [last? (and (< (+ k 1) n) (not (vector-ref flow (+ k 1))))])
+            (verdict (+ k 1)
+                     (if (or right? last? (not flow?)) wrong (+ wrong 1))
+                     (if (and flow? (vector-ref flow (- k 1)))
+                         (max off (abs (- (present-test-word (+ first k) 3)
+                                          (+ t (* (vector-ref truth k) p)))))
+                         off)
+                     (if (or right? flow?) across (+ across 1))))))))
 
 (let* ([p (core0-frame-ns)]
        [at-60 (present-test-fresh
-               (lambda () (present-test-stream 2001001 p 3000)))]
+               (lambda () (present-test-stream 2001001 p 3000 0)))]
        ;; a screen at 144 Hz: a stamp may run more than a refresh late
        [at-144 (present-test-fresh
-                (lambda () (present-test-stream 2005001 6944444 3000)))])
+                (lambda () (present-test-stream 2005001 6944444 3000 0)))])
   (check (format "3,000 frames stamped as a kernel thread stamps them, one \
                   in 97 late by 0.5 to 9 ms, one in 53 held a refresh by \
                   the compositor: every step is counted right, at the \
@@ -318,6 +408,24 @@
                   each frame's time by the clock is within 0.1 ms of its \
                   refresh's (~a wrong, ~a ns off; at 144 Hz ~a wrong)"
                  (car at-60) (cadr at-60) (car at-144))
+         (and (= 0 (car at-60)) (< (cadr at-60) 100000)
+              (= 0 (car at-144)))))
+
+(let* ([p (core0-frame-ns)]
+       [at-60 (present-test-fresh
+               (lambda () (present-test-stream 2010001 p 3000 5)))]
+       [at-144 (present-test-fresh
+                (lambda () (present-test-stream 2015001 6944444 3000 5)))])
+  (check (format "the same frames in bursts of five, a pause of 3 to 40 \
+                  refreshes before each burst, on a screen that keeps its \
+                  beat through them: every step within a burst is counted \
+                  right, its last's aside, and from a burst's second frame \
+                  on its time by the clock is within 0.1 ms of its \
+                  refresh's at the window's rate (~a wrong, ~a ns off, ~a \
+                  wrong across a pause; at 144 Hz ~a wrong, ~a ns off, ~a \
+                  across)"
+                 (car at-60) (cadr at-60) (caddr at-60)
+                 (car at-144) (cadr at-144) (caddr at-144))
          (and (= 0 (car at-60)) (< (cadr at-60) 100000)
               (= 0 (car at-144)))))
 
