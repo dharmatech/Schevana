@@ -55,3 +55,25 @@
   (check "a process killed while it waits stays gone, and its then, \
           given late, changes nothing"
          (and (not (memq p (procs))) (eq? (unbox result) 'none))))
+
+;; The test's own clock (tests/lib.ss): a process that never yields runs
+;; till its share of a step is up by the world's clock, so under a clock
+;; held still it would run without end. The verdict and what's printed are
+;; this check's own for the while.
+(let* ([p (spawn "never yields" (lambda () (let loop () (loop))))]
+       [failed 0]
+       [said (with-output-to-string
+               (lambda ()
+                 (fluid-let ([failures 0])
+                   (test-clock-hold!)
+                   (steps 3)
+                   (test-clock-release!)
+                   (set! failed failures))))])
+  (kill! p)
+  (steps 2)
+  (check "a world that waits for the held clock fails the run, once, and \
+          goes on: the clock moves from then till it's let go"
+         (and (= failed 1)
+              (string-contains-ci? said "FAIL the held clock")
+              (not test-clock-ms)
+              (not (memq p (procs))))))

@@ -4,9 +4,12 @@
 ;;; Vats (services/vat.ss): threads with a mailbox and a sandbox; jobs,
 ;;; their deliveries on core1, and their kills.
 
-;; Steps the world until (pred), for at most 2 s.
+;; Steps the world until (pred), a vat's thread doing its part meanwhile:
+;; a few ms alone, and as long as a busy machine keeps that thread waiting.
+;; The minute is no bound on that: it ends a run where the vat never
+;; answers.
 (define (vat-test-until pred)
-  (let ([until (+ (real-time) 2000)])
+  (let ([until (+ (real-time) 60000)])
     (let loop ()
       (cond [(pred) #t]
             [(> (real-time) until) #f]

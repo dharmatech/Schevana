@@ -2,12 +2,6 @@
 
 ;;; The crew (services/crew.ss).
 
-;; Core1's budget is for runaways, and on a busy machine an ordinary region
-;; here could run into it. So it's long in this file, but for the check
-;; about it.
-(define crew-test-budget crew-core1-ms)
-(set! crew-core1-ms 60000)
-
 ;; About us µs of work, without allocating; the thread's id noted in ids
 ;; (a box of a list) the first time.
 (define-worklet (crew-test-busy us ids)
@@ -115,7 +109,7 @@
         caller raises the timeout, the worker escapes, and the crew works \
         on"
        (let* ([t0 (now-ms)]
-              [c (fluid-let ([crew-core1-ms crew-test-budget])
+              [c (fluid-let ([crew-core1-ms test-crew-budget])
                    (guard (c [#t c])
                      (crew-for* 1 0 64 crew-test-runaway (get-thread-id))
                      #f))]
@@ -126,7 +120,7 @@
                     (get-thread-id) ids)
          ;; at its budget, not after it: how long past it is the machine's
          (and c (string-contains-ci? (condition-message c) "time budget")
-              (>= ms crew-test-budget)
+              (>= ms test-crew-budget)
               (< ms 10000)
               (> (length (unbox ids)) 1))))
 

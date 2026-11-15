@@ -83,22 +83,43 @@
              (and copy (not crashed)
                   (string? text) (string-prefix? "| " text))))))
 
-;; A report's time on CLOCK_MONOTONIC_RAW, from a compositor that says
-;; CLOCK_MONOTONIC: it fits after its frame was sent, whichever clock that
-;; takes. Both are Linux's and a Mac's numbers alike.
+;; A compositor that says CLOCK_MONOTONIC and stamps on CLOCK_MONOTONIC_RAW
+;; (GNOME's with NVIDIA's): a report's time fits after its frame was sent on
+;; one clock or the other. The two a fixed way apart here, not as the
+;; machine's are: a desktop nine hours up has raw 165 ms behind, where the
+;; time doesn't fit the clock said; a laptop an hour up, 35 ms ahead, where
+;; it does. Both are Linux's and a Mac's numbers alike.
 (check "a report's time is read on the first clock under which its frame \
-        shows after it was sent"
+        shows after it was sent: the one said, where it fits; raw, where by \
+        the one said the frame would have shown before it was sent"
        (let* ([frame 1000003] [at (present-at frame)]
-              [sent (- (now-ns) 1000000)])
+              [apart 165000000] [shown 7000000000000]
+              [sent (- shown 16000000)])
          (fxvector-set! *present-ring* at frame)
          (fxvector-set! *present-ring* (+ at 2) sent)
-         (let ([raw (- (now-ns) (platform-clock-offset 4))])
-           (fluid-let ([*wayland-clock* 1] [*wayland-used* 1]
-                       [core0-platform-read! void])
-             (let ([shown (wayland-shown-ns frame raw)])
-               (and (<= (- sent 1000000) shown (+ sent 1000000000))
-                    (< (abs (- shown (now-ns))) 2000000)
-                    (memv *wayland-used* '(1 4))))))))
+         (fluid-let ([platform-clock-offset
+                      (lambda (clock) (if (eqv? clock 4) apart 0))]
+                     [*wayland-clock* 1] [*wayland-used* 1]
+                     [core0-platform-read! void])
+           (let* ([said (wayland-shown-ns frame shown)]
+                  [said-on *wayland-used*]
+                  [raw (wayland-shown-ns frame (- shown apart))])
+             (and (= said shown) (eqv? said-on 1)
+                  (= raw shown) (eqv? *wayland-used* 4))))))
+
+;; The offset is read from two clocks one after the other, so it's off by
+;; the time between the reads: that, not a bound in ms, which a busy
+;; machine breaks.
+(check "a clock's offset is what to add to its time for now-ns's: read \
+        twice, the monotonic clock's and raw's each differ by no more than \
+        the reads took, and a thousandth for the clocks' rates"
+       (for-all (lambda (clock)
+                  (let* ([t0 (now-ns)]
+                         [a (platform-clock-offset clock)]
+                         [b (platform-clock-offset clock)]
+                         [took (- (now-ns) t0)])
+                    (<= (abs (- a b)) (+ took (quotient took 1000) 1))))
+                '(1 4)))
 
 (check "the trace keeps each thread's steps and writes them, by time, with \
         the screen's frames, to a file of its own"

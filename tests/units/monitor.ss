@@ -310,22 +310,37 @@
                       (equal? (reverse by-name) by-name-down)
                       (equal? (order by-rate) (order by-name))
                       (equal? (order by-rate) (order (roots)))))))))
-  ;; The rows drawn selected, at a draw of Monitor's.
+  ;; The rows drawn selected, at a draw of Monitor's: where each is, down
+  ;; the window.
   (let ([selected-rows
          (lambda ()
-           (let ([n 0] [real ui-draw-highlight-over])
+           (let ([ys '()] [real ui-draw-highlight-over])
              (fluid-let ([ui-draw-highlight-over
-                          (lambda args (set! n (+ n 1)) (apply real args))])
+                          (lambda (x y w h flags)
+                            (set! ys (cons y ys))
+                            (real x y w h flags))])
                (invalidate! m)
                (steps 1))
-             n))])
+             ys))]
+        ;; the Consumers' row drawn at y, as the last draw numbered it
+        [row-at (lambda (y)
+                  (let loop ([k 0])
+                    (let ([r (ui-find ui (list 'consumers 'row k))])
+                      (cond [(not r) #f]
+                            [(= (ui-region-y r) y) k]
+                            [else (loop (+ k 1))]))))])
     (monitor-test-click! m '(consumers row 0))
-    (let ([chosen (selected-rows)])
-      (monitor-test-click! m '(consumers row 0))
+    ;; Monitor's view moves on twice a second, and its rows sort again by
+    ;; what they spent: the second press is on the row drawn selected,
+    ;; wherever it is by then, not on the first again
+    (let* ([chosen (selected-rows)]
+           [k (and (pair? chosen) (row-at (car chosen)))])
+      (when k (monitor-test-click! m (list 'consumers 'row k)))
       (let ([let-go (selected-rows)])
         (check (format "a press selects a Consumers row, and a second lets it \
-                        go (~a, then ~a drawn selected)" chosen let-go)
-               (and (= chosen 1) (= let-go 0))))))
+                        go (~a, then ~a drawn selected)"
+                       (length chosen) (length let-go))
+               (and (= (length chosen) 1) k (null? let-go))))))
   (check "a Consumers heading says what its column means"
          (let ([r (ui-find ui '(consumers header avg))])
            (and r (string? (ui-region-tip r))

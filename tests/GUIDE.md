@@ -141,6 +141,21 @@ level above tests only what it adds, trusting the levels below.
   check that fails only under load is flaky; reproduce it beside spinning
   shells at the suites' own priority (nice 19), never above it, where the
   check would starve rather than share.
+- What the world does by its clock happens between a check's steps when
+  they're slow: the Pipeline reads the frame again a second after it last
+  did, Monitor's rows sort again twice a second. A scene such a read would
+  change holds the clock (`test-clock-hold!`), or acts on what was last
+  drawn, not on where it was a step ago.
+- The held clock isn't held while a process runs that never yields: a
+  process's turn ends by that clock, so it would never end. The clock
+  fails the run when a tick reads it 100,000 times (`tests/lib.ss`).
+- A collection comes when it likes. What a check expects to find made, it
+  holds till it has seen it; only then does it let go and collect.
+- The crew's limit on core1, 100 ms of the machine's clock, is long in
+  every suite (`tests/lib.ss`): a busy machine keeps a worker waiting
+  longer in an ordinary call. The crew's topic checks it at what it is.
+- No check compares two of the machine's clocks: the monotonic clock and
+  raw drift apart with the time a machine is up, either way.
 
 ## Both Chez versions
 

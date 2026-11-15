@@ -587,6 +587,11 @@
                        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
                                 `(mouse-up ,x ,y left))
                        (steps 2)))))])
+  ;; the Pipeline reads the frame anew a second after it last did, by the
+  ;; world's clock, and a selection moves with what it reads: held, it
+  ;; reads when a check says (pipeline-look!), not between a press and
+  ;; what's said of it, as a slow step would have it
+  (test-clock-hold!)
   (steps 3)
   (pipeline-look! v)
   (check "the Pipeline opens on the list, by who drew it, itself among them"
@@ -1516,6 +1521,7 @@
          (and (not (pipeline-view-image v))
               (not (pipeline-view-back v))
               (not (ui-stream-buffer (pipeline-view-river v))))))
+(test-clock-release!)
 
 ;;; Recording itself.
 
@@ -1594,6 +1600,7 @@
 ;; done a ms apart after its publish, and shown a refresh after it, at
 ;; refresh 1000 by the screen's count.
 (let* ([w (pipeline)] [v (window-ref w 'state)] [p (pacer-period)])
+  (test-clock-hold!)   ; no read of the frame but a check's, as above
   (request-frame!)
   (steps 1)
   (check "with no word from the screen, refreshes are counted on the clock, \
@@ -1843,6 +1850,7 @@
                        (/ (- (ui-region-h river)
                              (ui-stream-room pipeline-draw-river-strips))
                           pipeline-river-depth))))))))
+(test-clock-release!)
 
 (check "a list not recorded yet, with no extras at all, flattens to \
         nothing: the Pipeline opened at boot reads one"

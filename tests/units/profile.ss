@@ -204,13 +204,22 @@
                        (window-frame-soon! win)
                        (invalidate! win))
               'draw (lambda (win w h) (profile-test-busy 3)))]
-      [life-win (life)])
+      [life-win (life)]
+      [size (crew-size)])
+  ;; On a clock of its own, a µs a read, and Life with no crew: what a
+  ;; window took is then what it read of the clock, the same on any
+  ;; machine. On the machine's, Life waited for its workers, and on a busy
+  ;; one for longer than the slow window's 3 ms.
+  (crew-size-set! 0)
   (check "a window whose draw is made slow comes first among Monitor's \
           consumers, its draw the most of its parts"
-         (let* ([ss (profile-test-ticks (lambda () (steps 10)))]
+         (let* ([ss (profile-test-on-clock
+                     1000
+                     (lambda () (profile-test-ticks (lambda () (steps 10)))))]
                 [ts (filter (lambda (t)
                               (monitor-subject? (profile-total-what t)))
                             (profile-totals ss #t))])
+           (crew-size-set! size)
            (close-window! slow)
            (close-window! life-win)
            (and (pair? ts)

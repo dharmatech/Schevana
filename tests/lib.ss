@@ -20,6 +20,14 @@
 (set! *grant-file-path* (string-append out-dir "/permissions.ss"))
 (when (file-exists? *grant-file-path*) (delete-file *grant-file-path*))
 
+;; The crew's limit on core1 (services/crew.ss) is 100 ms of the machine's
+;; clock, for runaways. A busy machine keeps a worker waiting longer than
+;; that in the middle of an ordinary call, and the caller then raises as
+;; for a runaway: so the limit is long in every suite, and the crew's own
+;; topic checks it, at what it is, with a call that never ends.
+(define test-crew-budget crew-core1-ms)
+(set! crew-core1-ms 60000)
+
 (define failures 0)
 
 ;; With SCHEVANA_CHECK set, a run stops after the first check whose name
@@ -73,17 +81,18 @@
 
 ;; The test's clock: the world's milliseconds (now-ms, by which timers,
 ;; tooltips and carets go) held still, moving only when a test says, so a
-;; delay is the same on any machine. now-ns stays the machine's: the pacer,
-;; the profiler and a process's turn go by it. test-clock-ms is the time
-;; held, or #f while the clock goes as the machine's; released, it goes on
-;; from where it was held, the machine's plus what was skipped, so the
-;; world's time never runs back.
+;; delay is the same on any machine. now-ns stays the machine's: the pacer
+;; and the profiler go by it. test-clock-ms is the time held, or #f while
+;; the clock goes as the machine's; released, it goes on from where it was
+;; held, the machine's plus what was skipped, so the world's time never
+;; runs back.
 (define test-real-now-ms now-ms)
 (define test-clock-ms #f)
 (define test-clock-skipped 0)
 (define (test-clock-hold! . at)
   (set! test-clock-ms (if (pair? at) (car at) (now-ms)))
-  (set! now-ms (lambda () test-clock-ms)))
+  (set! test-clock-stuck? #f)
+  (set! now-ms test-clock-read))
 (define (test-clock-release!)
   (when test-clock-ms
     (set! test-clock-skipped (max 0 (- test-clock-ms (test-real-now-ms))))
@@ -91,6 +100,28 @@
     (set! now-ms (lambda () (+ (test-real-now-ms) test-clock-skipped)))))
 (define (test-clock-advance! ms)
   (when test-clock-ms (set! test-clock-ms (+ test-clock-ms ms))))
+
+;; The held clock, read. What waits for it to move waits forever: a process
+;; that never yields runs till its share of a step is up by this clock
+;; (run-procs!), collections held off meanwhile, until the machine is out
+;; of memory. So a tick of the world's that reads it a hundred thousand
+;; times fails the run, once, and from then on the clock moves a ms a
+;; read till it's held anew, which ends such a wait.
+(define test-clock-reads 0)
+(define test-clock-tick #f)
+(define test-clock-stuck? #f)
+(define (test-clock-read)
+  (let ([tick (pacer-ticks)])
+    (if (eqv? tick test-clock-tick)
+        (set! test-clock-reads (+ test-clock-reads 1))
+        (begin (set! test-clock-tick tick) (set! test-clock-reads 0))))
+  (when (and (> test-clock-reads 100000) (not test-clock-stuck?))
+    (set! test-clock-stuck? #t)
+    (set! failures (+ failures 1))
+    (printf "FAIL the held clock is not waited for: a tick of the world's \
+             read it 100,000 times (a process that never yields?)\n"))
+  (when test-clock-stuck? (set! test-clock-ms (+ test-clock-ms 1)))
+  test-clock-ms)
 
 ;; The world's loop, n times, each after the held clock moves on ms.
 (define (steps n . ms)

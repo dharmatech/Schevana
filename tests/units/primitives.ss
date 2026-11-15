@@ -537,11 +537,15 @@
                (record-list! lst (lambda () (draw-image image 0 0 2 2)))
                (gpu-image-id image))]
        [plain record-world!]
-       [ids (let ([b (make-gpu-buffer 4)] [i (gpu-image-make 2 2)]
-                  [l (gpu-list-new)])
-              (record-list! l (lambda () (fill-box 0 0 2 2 #xff0000)))
-              (set! record-world! (lambda () (show-list l 0 0)))
-              (list (gpu-buffer-id b) (gpu-image-id i) (gpu-list-id l)))]
+       ;; held till they're seen made: a collection that came first would
+       ;; let go of what nothing holds before the frame that makes it
+       [things (let ([b (make-gpu-buffer 4)] [i (gpu-image-make 2 2)]
+                     [l (gpu-list-new)])
+                 (record-list! l (lambda () (fill-box 0 0 2 2 #xff0000)))
+                 (set! record-world! (lambda () (show-list l 0 0)))
+                 (list b i l))]
+       [ids (list (gpu-buffer-id (car things)) (gpu-image-id (cadr things))
+                  (gpu-list-id (caddr things)))]
        ;; frames that show neither, then a collection and a step's end
        [again! (lambda ()
                  (do ([k 0 (+ k 1)]) ((= k 3)) (request-frame!) (steps 1))
@@ -552,6 +556,7 @@
   (steps 1)
   (let ([made (and (has? (car ids)) (has? (cadr ids)) (shown? (caddr ids))
                    (has? kept))])
+    (set! things #f)
     (set! record-world! plain)
     (again!)
     (let ([dropped (and (not (has? (car ids))) (not (has? (cadr ids)))
@@ -562,8 +567,9 @@
       (again!)
       (check (format "a buffer, an image and a list nothing holds are let go \
                       of after a collection (~a by the guardian), and an \
-                      image a list draws stays till the list goes"
-                     counted)
+                      image a list draws stays till the list goes (made ~a, \
+                      let go ~a, held ~a, then gone ~a)"
+                     counted made dropped held (not (has? kept)))
              (and made dropped held (>= counted 3) (not (has? kept)))))))
 
 ;; Core0 says what it is as an alist it makes again only when that changes.
