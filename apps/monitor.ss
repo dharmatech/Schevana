@@ -287,14 +287,19 @@
           [else (format "~a h ~a min" h (remainder m 60))])))
 
 ;; Input to the screen, by the screen's reports, the last 10 s: the median
-;; and the 99th percentile, and the refreshes missed.
+;; and the 99th percentile, and the refreshes missed. With no input in
+;; them the screen's word is the refreshes missed alone; it has none only
+;; where it reports on no frame.
 (define (monitor-input-text)
   (let-values ([(p50 p99 missed) (inspect-frames-truth 10000)])
-    (if p50
-        (format "~,1f ms, ~,1f at the 99th; ~a refresh~a missed, the last \
-                 10 s"
-                (/ p50 1e6) (/ p99 1e6) missed (if (= missed 1) "" "es"))
-        "no word from the screen")))
+    (let ([missed (format "~a refresh~a missed, the last 10 s" missed
+                          (if (= missed 1) "" "es"))])
+      (cond
+        [p50 (format "~,1f ms, ~,1f at the 99th; ~a" (/ p50 1e6) (/ p99 1e6)
+                     missed)]
+        [(inspect-refresh-estimated? (inspect-refresh-grid))
+         "no word from the screen"]
+        [else (format "no input; ~a" missed)]))))
 
 ;; The World's facts, (label . words) a pair each, in reading order.
 (define (monitor-world-facts)

@@ -3023,7 +3023,9 @@
                      (format "~,1f ms at the median, ~,1f at the 99th, the \
                               last 10 s"
                              (/ p50 1e6) (/ p99 1e6))
-                     "no word from the screen in the last 10 s"))
+                     (if (inspect-refresh-estimated? (inspect-refresh-grid))
+                         "no word from the screen in the last 10 s"
+                         "no input in the last 10 s")))
            (cons "Refreshes missed"
                  (format "~a in the last 10 s, by the screen" missed))
            (cons "Glyphs"

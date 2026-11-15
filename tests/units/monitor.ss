@@ -399,3 +399,41 @@
   (close-window! m)
   (close-window! target)
   (steps 2))
+
+;; Input to screen, when the screen reports and no frame shows any input:
+;; a hands-off run. The newest frame's report is written as core0 would.
+(begin
+  (request-frame!)
+  (steps 2)
+  (let* ([i (- *frame-ring-n* 1)]
+         [n (inspect-frame-ref i 6)]
+         [at (present-at n)]
+         [r *present-ring*]
+         [saved (map (lambda (k) (fxvector-ref r (+ at k)))
+                     (iota present-words))]
+         [input (inspect-frame-ref i 7)]
+         [publish (inspect-frame-at i 'publish)]
+         [silent (monitor-input-text)])
+    (fxvector-set! r at n)
+    (fxvector-set! r (+ at 1) 1)
+    (fxvector-set! r (+ at 2) publish)
+    (fxvector-set! r (+ at 3) (+ publish 8000000))
+    (fxvector-set! r (+ at 4) 16666667)
+    (fxvector-set! r (+ at 5) 1000)
+    (frame-ring-set! n 7 0)
+    (let ([hands-off (monitor-input-text)])
+      (frame-ring-set! n 7 (- publish 4000000))
+      (let ([driven (monitor-input-text)])
+        (frame-ring-set! n 7 input)
+        (for-each (lambda (k v) (fxvector-set! r (+ at k) v))
+                  (iota present-words) saved)
+        (check (format "Input to screen has no word from a screen that \
+                        reports on no frame; from one that does, the \
+                        refreshes missed, with or without input in the \
+                        last 10 s (~s; ~s; ~s)" silent hands-off driven)
+               (and (string=? silent "no word from the screen")
+                    (string=? hands-off
+                              "no input; 0 refreshes missed, the last 10 s")
+                    (string=? driven
+                              "12.0 ms, 12.0 at the 99th; 0 refreshes \
+                               missed, the last 10 s")))))))
