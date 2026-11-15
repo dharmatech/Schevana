@@ -235,7 +235,9 @@ monitor, CPU and Chez (`AGENTS.md`, "Layers"). A check holds on each.
   suite does, never with pixels stored from one rasterizer.
 - A bound in time is for the bench (`tests/bench.ss`), not a suite: a
   check's limit in milliseconds holds on a slow machine under load, and
-  says how far it is from what it measures.
+  says how far it is from what it measures. It limits the work, by the
+  thread's own time in the CPU (`(current-time 'time-thread)`), never the
+  wait: a busy machine keeps a thread waiting as long as it likes.
 - Nothing depends on the monitor (its refresh, its scale, its size), the
   locale, the time zone, or a variable of the environment the suites don't
   set themselves.

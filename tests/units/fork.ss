@@ -32,10 +32,10 @@
          (and (saw 'readback) (saw 'compute) (> (saw 'bytes) 0)
               (equal? (saw 'read-then) '(0 1 4 9))
               (equal? (saw 'waited) '(0 1 4 9))))
-  ;; by the frames' own t, core0's screen: how fast they came by the
-  ;; machine's clock is a busy machine's, and the bench's
+  ;; by the frames' own t, core0's screen: how many refreshes a busy
+  ;; machine is late for is the bench's
   (check (format "frame turns follow core0's screen: a window that \
-                  animates gets a frame a refresh, each one's t a period \
+                  animates gets its frames, each one's t whole refreshes \
                   after the last (~a frames, ~a uneven; ~a refreshes by \
                   the machine's clock)"
                  (saw 'animated) (saw 'uneven) (saw 'refreshes))

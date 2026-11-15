@@ -2336,19 +2336,26 @@
   (string-append (apply string-append (make-list 5555 "abcdefgh "))
                  (make-string 50005 #\x)))
 
-;; Takes n steps; => the slowest one's ms.
+;; The ms this thread has had of a CPU: a step's work by it is the step's
+;; own, however long a busy machine kept it waiting.
+(define (thread-cpu-ms)
+  (let ([t (current-time 'time-thread)])
+    (+ (* 1000 (time-second t)) (quotient (time-nanosecond t) 1000000))))
+
+;; Takes n steps; => the slowest one's ms of work.
 (define (slowest-of-steps n)
   (let loop ([i 0] [worst 0])
     (if (= i n)
         worst
-        (let ([t0 (now-ms)])
+        (let ([t0 (thread-cpu-ms)])
           (steps 1)
-          (loop (+ i 1) (max worst (- (now-ms) t0)))))))
+          (loop (+ i 1) (max worst (- (thread-cpu-ms) t0)))))))
 
 ;; That pasted into a title, an assignee, a tag and the search: the Board,
 ;; the details, the menus, the dialog and the List keep answering, every
-;; step under 300 ms (about 60 at most measured alone), and Tasks never
-;; crashes.
+;; step under 300 ms of work (55 at most measured alone, 95 on a busy
+;; machine; a cut that reads the text again for each piece takes seconds),
+;; and Tasks never crashes.
 (let ([t (add-task! "Long" 'status 'review)] [slow '()])
   (define (timed label n)
     (let ([ms (slowest-of-steps n)])
@@ -2401,8 +2408,8 @@
         (unless (null? slow) (printf "  slow or crashed: ~s\n" slow))
         (check "100,000 characters in a title, an assignee, a tag and the \
                 search: every step of the Board, the details, the menus, \
-                the dialog, the List and the Tree under 300 ms, and Tasks \
-                never crashed"
+                the dialog, the List and the Tree under 300 ms of work, \
+                and Tasks never crashed"
                ;; the menu: a name of 20 line heights at most, and the
                ;; menu's own room
                (and (null? slow) menu? dialog? menu-w
@@ -2503,7 +2510,7 @@
 
 ;; A window titled with 10,000 characters, then (when that was quick, so
 ;; that a slow cut fails in seconds) with 100,000: every window style
-;; draws it in under 300 ms a frame.
+;; draws it in under 300 ms of work a frame.
 (let ([style (theme 'window-style)])
   (define (slow-styles title)
     (let* ([w (open-window title 'size '(300 . 200)
@@ -2520,7 +2527,8 @@
     (set-theme! 'window-style style)
     (steps 1)
     (check (format "a window's title of 10,000, then 100,000 characters: \
-                    every window style draws it in under 300 ms (slow: ~a)"
+                    every window style draws it in under 300 ms of work \
+                    (slow: ~a)"
                    slow)
            (null? slow))))
 

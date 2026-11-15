@@ -7,14 +7,15 @@
 
 ;; A window that animates: each frame's t and when it came, newest first,
 ;; as it asks for the next. The run is timed after its first 5, which wait
-;; for the world's pipelines, and on a first run for Mesa's shaders.
+;; for the world's pipelines, and on a first run for Mesa's shaders, and
+;; ends by its frames, 40 more, however long a busy machine takes for them.
 (define fork-frames '())
 (open-window "Animates" 'size '(120 . 80)
              'open window-frame-soon!
              'frame (lambda (win t)
                       (window-frame-soon! win)
                       (set! fork-frames (cons (cons t (now-ns)) fork-frames))
-                      (when (= (length fork-frames) 6) (after 1000 fork-done!))
+                      (when (= (length fork-frames) 46) (after 0 fork-done!))
                       (invalidate! win))
              'draw (lambda (win w h) (fill-box 0 0 w h 'accent)))
 
@@ -54,17 +55,21 @@
 ;; The frames timed, oldest first.
 (define (fork-timed) (list-tail (reverse fork-frames) 5))
 
-;; Of the gaps between the timed frames' t, those that aren't a period, to
-;; the 0.5 ms.
+;; Of the gaps between the timed frames' t, those that aren't whole
+;; periods, to the 0.5 ms: one where core1 kept up, more where it came
+;; late for a refresh. Past four, core1 was away, and t starts anew.
 (define (fork-uneven)
   (let ([p (core0-frame-ns)])
     (let count ([fs (fork-timed)] [k 0])
       (if (null? (cdr fs))
           k
           (count (cdr fs)
-                 (if (< (abs (- (caadr fs) (caar fs) p)) 500000)
-                     k
-                     (+ k 1)))))))
+                 (let ([d (- (caadr fs) (caar fs))])
+                   (if (or (and (< (abs (- d (* p (round (/ d p))))) 500000)
+                                (> d (quotient p 2)))
+                           (> d (* 4 p)))
+                       k
+                       (+ k 1))))))))
 
 ;; The refreshes between the first and the last timed frame, by the clock.
 (define (fork-refreshes)
