@@ -113,6 +113,12 @@
 
 (define (raises? thunk) (guard (c [#t #t]) (thunk) #f))
 
+;; Text typed and a key pressed, as the screen would send them; not
+;; stepped.
+(define (test-type! str)
+  (for-each (lambda (c) (inject! (list 'text (string c)))) (string->list str)))
+(define (test-press! key . mods) (inject! (list 'key-down key mods)))
+
 ;; thunk's value, cleanup run after it, raise or not: what a sequence
 ;; changed for itself it changes back, so a failure takes only its own.
 (define (test-finally thunk cleanup)

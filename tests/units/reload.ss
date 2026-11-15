@@ -18,3 +18,207 @@
               (not (top-level-bound? 'theme *world-env*))
               (for-all (lambda (n) (top-level-syntax? n *world-env*))
                        (core1-exported)))))
+
+;;; Reloading as a process.
+
+;; Reloading as a process (the launcher's "Reload sources", a REPL) holds
+;; the world still until it ends, but stays a process. These reload a copy
+;; of the tree whose apps/tasks.ss ends in form.
+(define (tree-copy-with name form)
+  (let ([dir (string-append out-dir "/" name)])
+    (system (format "rm -rf '~a' && mkdir -p '~a' && cp -r~{ '~a'~} '~a'"
+                    dir dir
+                    (map (lambda (f) (string-append *schevana-root* "/" f))
+                         (cons* "main.ss" "src" source-folders))
+                    dir))
+    ;; the last file to load into the world: an app in a sandbox would run
+    ;; the form there
+    (let ([p (open-output-file (string-append dir "/apps/tasks.ss") 'append)])
+      (write form p)
+      (newline p)
+      (close-port p))
+    dir))
+
+;; A long load: until it ends no frame, timer, tick, handler or other
+;; process runs, and events that come meanwhile are handled after it, in
+;; order. The slow form notes what had run before and after its 0.6 s;
+;; a process that comes after the reload in each round counts its slices
+;; during it.
+(define probe-counts (lambda () '()))
+(define probe-seen '())
+(let* ([root *schevana-root*] [ticks 0] [draws 0] [timers 0] [slices 0]
+       [keys '()] [sent '()] [n 0] [done? #f] [late-held 0]
+       [probe (open-window "Probe" 'size '(200 . 100)
+                           'open window-frame-soon!
+                           'frame (lambda (win at)
+                                    (window-frame-soon! win)
+                                    (set! ticks (+ ticks 1)))
+                           'draw (lambda (win w h) (set! draws (+ draws 1)))
+                           'key (lambda (win key mods)
+                                  (set! keys (cons key keys))))]
+       [bystander (spawn "bystander"
+                         (lambda ()
+                           (let loop ()
+                             (set! slices (+ slices 1))
+                             (yield)
+                             (loop))))])
+  (set! probe-counts (lambda () (list ticks draws timers slices (length keys))))
+  (let again ()
+    (after 5 (lambda () (set! timers (+ timers 1)) (unless done? (again)))))
+  (steps 2)
+  (set! *schevana-root*
+    (tree-copy-with "slow-tree"
+      '(begin (set! probe-seen (list (probe-counts)))
+              (let ([t (+ (real-time) 600)])
+                (let loop () (when (< (real-time) t) (loop))))
+              (set! probe-seen (cons (probe-counts) probe-seen)))))
+  (let* ([p (spawn "reload" reload!)]
+         [late (spawn "late"
+                      (lambda ()
+                        (let loop ()
+                          (when *reloading* (set! late-held (+ late-held 1)))
+                          (yield)
+                          (loop))))])
+    (let loop ()
+      (when (and (memq p (procs)) (< n 5000))
+        (let ([k (integer->char (+ 97 (mod n 26)))])
+          (inject! (list 'key-down k '()))
+          (set! sent (cons k sent)))
+        (set! n (+ n 1))
+        (schevana-step! 0)
+        (loop)))
+    (kill! late))
+  (set! *schevana-root* root)
+  (steps 3)
+  (check (format "a long reload run as a process holds the world still (~a \
+                  steps; ticks, draws, timers, other process, keys before and \
+                  after: ~s; slices of a later process during it: ~a)"
+                 n (reverse probe-seen) late-held)
+         (and (> n 10) (= (length probe-seen) 2)
+              (equal? (car probe-seen) (cadr probe-seen)) (= late-held 0)
+              (> (length keys) 0) (equal? keys sent)
+              (> ticks (car (car probe-seen)))))
+  (set! done? #t)
+  (kill! bystander)
+  (close-window! probe)
+  (set! *toasts* '())
+  (steps 1))
+
+;; A source whose top level loops: the world does not freeze (its steps go
+;; on, the reload alive; the longest is printed, not bounded: how long a
+;; step may take is the bench's), Ctrl+C kills the reload, a toast names
+;; the file, and the world goes on.
+(define reload-reached #f)
+(let ([root *schevana-root*] [worst 0] [n 0] [ticks 0])
+  (set! *schevana-root*
+    (tree-copy-with "loop-tree"
+      '(begin (set! reload-reached #t) (let loop () (loop)))))
+  (let ([p (spawn "reload" reload!)]
+        [w (open-window "Ticks" 'open window-frame-soon!
+                                'frame (lambda (win at)
+                                         (window-frame-soon! win)
+                                         (set! ticks (+ ticks 1))))])
+    (define (step!)
+      (let ([t0 (real-time)])
+        (schevana-step! 0)
+        (set! n (+ n 1))
+        (set! worst (max worst (- (real-time) t0)))))
+    (let loop () (unless (or reload-reached (> n 3000)) (step!) (loop)))
+    (do ([i 0 (+ i 1)]) ((= i 20)) (step!))
+    (let ([alive? (and (memq p (procs)) #t)] [t0 ticks])
+      (test-press! #\c 'ctrl)
+      (steps 3)
+      (set! *schevana-root* root)
+      (check (format "a reload whose source loops does not freeze the world \
+                      (~a steps, the longest ~a ms), Ctrl+C kills it and a \
+                      toast names the file"
+                     n worst)
+             (and reload-reached alive? (not (memq p (procs)))
+                  (not *reloading*) (> ticks t0)
+                  (exists (lambda (t)
+                            (string-contains-ci? (vector-ref t 1)
+                                                 "apps/tasks.ss"))
+                          *toasts*))))
+    (close-window! w)
+    (set! *toasts* '())
+    (steps 1)))
+
+;; A source that raises: the reload ends there and a toast names the file,
+;; also when the process catches the error and carries on.
+(let ([root *schevana-root*] [caught? #f])
+  (set! *schevana-root*
+    (tree-copy-with "error-tree" '(error 'smoke "on purpose")))
+  (let ([p (spawn "reload"
+                  (lambda ()
+                    (guard (c [#t (set! caught? #t)]) (reload!))
+                    (let loop () (yield) (loop))))])
+    (let loop ([n 0])
+      (unless (or caught? (> n 3000)) (schevana-step! 0) (loop (+ n 1))))
+    (steps 2)
+    (set! *schevana-root* root)
+    (check "a reload whose source raises ends there, and a toast names the file"
+           (and caught? (memq p (procs)) (not (reload-holding?))
+                (exists (lambda (t)
+                          (string-contains-ci? (vector-ref t 1)
+                                               "failed in apps/tasks.ss"))
+                        *toasts*)))
+    (kill! p)
+    (set! *toasts* '())
+    (steps 1)))
+
+;; The hold ends when the loading does, not when the process does: a
+;; process that goes on after (reload!) lets the world run.
+(let ([state 'unset] [ticks 0])
+  (let ([p (spawn "reload+work"
+                  (lambda ()
+                    (reload!)
+                    (set! state *reloading*)
+                    (let loop () (yield) (loop))))]
+        [w (open-window "Ticks" 'open window-frame-soon!
+                                'frame (lambda (win at)
+                                         (window-frame-soon! win)
+                                         (set! ticks (+ ticks 1))))])
+    (let loop ([n 0])
+      (when (and (eq? state 'unset) (< n 3000))
+        (schevana-step! 0)
+        (loop (+ n 1))))
+    (let ([t0 ticks])
+      (steps 3)
+      (let ([alive? (and (memq p (procs)) #t)] [ran (- ticks t0)])
+        (kill! p)
+        (steps 2)
+        (check (format "a process that goes on after (reload!) does not hold \
+                        the world (*reloading* ~s, ~a ticks, toasts ~s)"
+                       state ran (map (lambda (t) (vector-ref t 1)) *toasts*))
+               (and (not state) alive? (> ran 0) (not *reloading*)
+                    (exists (lambda (t)
+                              (equal? (vector-ref t 1) "Sources reloaded"))
+                            *toasts*)
+                    (not (exists (lambda (t)
+                                   (string-contains-ci? (vector-ref t 1)
+                                                        "stopped"))
+                                 *toasts*))))))
+    (close-window! w)
+    (set! *toasts* '())
+    (steps 1)))
+
+;; (reload!) in a world REPL reloads the world, not the REPL.
+(let ([p (repl 'world)] [old render-frame!])
+  (steps 2)
+  (test-type! "(reload!)")
+  (test-press! 'return)
+  (let ([reloaded? (test-wait 10000 (lambda () (not (eq? render-frame! old))))])
+    (test-wait 10000 (lambda () (not (repl-proc (window-ref p 'state)))))
+    ;; the REPL's own: the world's styles must not see it
+    (test-type! "(define (title-height) 99)")
+    (test-press! 'return)
+    (test-wait 10000 (lambda () (not (repl-proc (window-ref p 'state)))))
+    (let ([w (open-window "Plain" 'size '(260 . 120) 'pos '(300 . 200))])
+      (let-values ([(l t r b) (frame-insets w)])
+        (check "(reload!) in a world REPL reloads the world, whose \
+                styles keep the world's names"
+               (and reloaded? (= t (title-height)) (not (= t 99)))))
+      (close-window! w)))
+  (close-window! p)
+  (set! *toasts* '())
+  (steps 1))
