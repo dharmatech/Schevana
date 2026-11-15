@@ -58,8 +58,9 @@ The bundles, and the tree's apps that run in sandboxes:
 (map car grant-bundles)          ; => (window draw ui timers crew gpu toasts launch)
 (grant-bundle-title 'timers)               ; => "Run on a timer"
 (grant-bundle-names 'timers)               ; => (after now-ms now-ns current-date)
-(grant-apps)
-; => (boids boids-clear boids-l3-simple boids-simple boids3d clock life sketch)
+(list-head (grant-apps) 6)
+; => (boids boids-clear boids-l3-simple boids-l4-flat boids-simple boids3d)
+(list-tail (grant-apps) 6)                 ; => (clock life sketch)
 (grant-requested 'clock)                   ; => (window draw timers)
 (grant-undecided 'sketch)                  ; => (window draw)
 ```

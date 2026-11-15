@@ -17,17 +17,21 @@ Two things keep each attempt honest:
   steps number for number (2,000 boids, 30 frames, the heaviest rules
   too). `tests/units/boids-simple.ss` and `tests/units/boids-l3-simple.ss`
   do the same for Boids (simple) and Boids L3 (simple), on smaller
-  flocks.
+  flocks. `tests/units/boids-l4-flat.ss` holds Boids L4 (flat), whose
+  floats can't be exact, to the reference within a tolerance.
 - `tests/bench-boids-clear.ss` times both on the same flocks, in
   alternating rounds, and prints the medians and their ratio. Boids
-  timed against itself gives 1.00. The grid's rows come last: Boids
-  (simple), Boids L3 (simple) and Boids, alone and on the crew.
+  timed against itself gives 1.00. The grid's rows come next: Boids
+  (simple), Boids L3 (simple) and Boids, alone and on the crew; then
+  Boids L4 (flat), on the GPU, or with `cpu` on lavapipe.
 
 ```
 scheme --script tests/units.ss out boids-clear
 scheme --script tests/units.ss out boids-simple
 scheme --script tests/units.ss out boids-l3-simple
+scheme --script tests/units.ss out boids-l4-flat
 scheme --script tests/bench-boids-clear.ss out
+scheme --script tests/bench-boids-clear.ss out cpu
 ```
 
 Times below are from one machine (Ubuntu 26.04, 16 threads, Chez
@@ -268,19 +272,21 @@ A version has a place on two axes: its level, what its step may reach
 
 So a name gives both: "Boids L", the level, and the way in
 parentheses. Boids L3 (simple) is level 3 written simple; "L" keeps the
-level from reading as Boids 3D's 3. It is the first named so. The others
-keep their names for now, and would be Boids L2 (simple), Boids L3
-(flat) and Boids L3 (clear):
+level from reading as Boids 3D's 3. It and Boids L4 (flat) are the first
+named so. The others keep their names for now, and would be Boids L2
+(simple), Boids L3 (flat) and Boids L3 (clear):
 
 | | simple | flat | clear |
 |---|---|---|---|
 | L2, a sandbox | Boids (simple) | (Boids, its threads at 0) | |
 | L3, the crew | Boids L3 (simple) | Boids | Boids (clear) |
-| L4, the GPU | none can be | (Boids 3D, another sim) | |
+| L4, the GPU | none can be | Boids L4 (flat) | |
 
 A shader has no lists or procedures as values, so the GPU's row has no
 simple version. Boids with its threads at 0 runs as a flat level 2
-would, though it asks for the crew.
+would, though it asks for the crew. Boids 3D, another sim, in three
+dimensions, is all shaders too; Boids L4 (flat) follows its buffers, its
+paint and its tiles.
 
 ### Boids L3 (simple): the simple step on the crew
 
@@ -346,6 +352,163 @@ cancels it and raises, which crashes the window (`services/crew.ss`).
 1,000 take 26 ms there and 78 on a crew of one. With no crew the step
 runs on core1, as Boids (simple)'s does, with the handler's fuel alone:
 142 ms at 1,000 under the heaviest rules, slow but whole.
+
+### Boids L4 (flat): Boids' step on the GPU
+
+**What.** `apps/boids-l4-flat.ss` is Boids with its step as a compute
+shader, `boids-steer`, and its drawing as a paint, `boids-view`. The
+flock lives in two GPU buffers, four floats a boid, as Boids' flvector
+has them: each frame's step reads one and writes the other, and the
+paint draws from the one just written. The CPU scatters boids into the
+buffers, works out the rules once (`boids-steering`) and asks for the
+shaders. Its rules, keys and rules window are Boids', without the
+threads row: there is no crew. Where Boids' status line shows a step's
+time, this one says "on the GPU", since the CPU only asks for a step and
+the GPU tells it nothing of how long one took.
+
+The shader is Boids' `boids-steer!` and `boids-keep-on-screen!` in one, a
+cell a boid. What the GPU changed:
+
+- **Only 32-bit numbers, in buffers.** A flock is floats, and the rules
+  are numbers in the shader's parameters, there by name
+  (`cohesion-reach`, where Boids has `(rule 8)`): there are no lists,
+  records or procedures to hand it.
+- **A loop has no body.** `do-bounded` has its variables and their
+  steps, nothing else, so Boids' flvector of twelve sums becomes twelve
+  loop variables, each step making its own test:
+
+  ```scheme no-run
+  [center-x 0.0 (add center-x (seen? j cohesion-reach view) (at j 0))]
+  [center-y 0.0 (add center-y (seen? j cohesion-reach view) (at j 1))]
+  [centered 0.0 (add centered (seen? j cohesion-reach view) 1.0)]
+  ```
+
+  `seen?`, `near?`, `dx` and the rest are local functions, inlined, so a
+  pair's tests are written once and repeated in each sum; the GPU's
+  compiler works them out once. Boids' first test, against the longest
+  reach ("most pairs stop here"), has no place: there is no body for it
+  to skip, and each sum's step tests its own reach.
+- **The cap is in the code.** A loop's bound is a number written in the
+  shader, not one it is handed, so the most boids, 8,192, is written in
+  the step's loop, the tiles' and the paint's; `boids-max-count` says it
+  again for the rules window, and a test holds the four together.
+- **No `flmod`.** The wrap is written from `flfloor`, `v - size ×
+  floor(v / size)`, which in floats can come out as `size` itself or a
+  hair below 0, a device's division being no more exact. Both become 0,
+  which on the wrap is the same place.
+- **No infinity.** Boids hands `-inf.0` as the half-cosine of a view all
+  around; the language says nothing of infinities, so it is -2, which any
+  heading beats, as in Boids 3D.
+- **No waiting.** A handler can't wait for the GPU, and the sandbox's
+  `gpu` bundle has no `gpu-compute!` or `gpu-buffer-read!`, which would.
+  The flock comes back only when asked, later:
+  `(boids-flock-then win then)` hands it to `then` as Boids' flvector, a
+  step or two on, through `gpu-buffer-read-then!`.
+
+**Drawing.** Boids draws a boid with `draw-line` and `fill-circle`,
+records the core's own shaders draw. Here the flock never comes to the
+CPU to be recorded, so a paint draws it, a pixel at a time, and each
+pixel has to find the boids that cover it. The field is cut into tiles
+16 device pixels a side, and each tile lists the boids whose dot or line
+touches it. A shader has no list that grows and no word two cells may
+add to, so the lists take three runs: each tile counts its boids
+(`boids-bin`), one cell adds the counts up into where each list starts
+(`boids-starts`), and each tile lists its boids there (`boids-bin`
+again, one shader both times, so that the lists are what was counted).
+The paint then goes through its tile's list in the flock's order, as
+Boids draws them: a boid's line, then its dot, each covering as much of
+the pixel as the core's own line and circle would.
+
+Boids 3D lists at most 48 birds a tile and drops the rest. A flock of
+Boids' crowds a tile far more: after it has flocked a while, under the
+default rules, the busiest tile had 92 boids at 1,000, 334 at 4,096 and
+675 at 8,192, and a list that stopped short would cut boids off at the
+tiles' edges. Counted lists draw every one.
+
+Against Boids' own drawing of the same flock (300 boids, 100 steps on),
+no channel of any pixel differs by more than 2 levels of 255, and with
+600 boids 98% of the pixels are the same: the core rounds to a byte at
+each boid it blends, the paint once at the end.
+
+**The tolerance.** A step in floats can't be the reference's to the last
+digit, so `tests/units/boids-l4-flat.ss` holds it to the reference
+within a tolerance: each place within a thousandth of a unit, on the
+field's wrap, and each velocity too. Floats keep 24 bits: a place under
+1,024 is rounded to 6e-5, and a velocity's sums gather a rounding from
+each neighbor they add. Over 40 flocks of 300, scattered and after 10 to
+90 steps of flocking, under the default, the heaviest and random rules,
+the device came within 7.5e-5 of the reference in places and 6.4e-5 in
+velocities, and the twin, on 12 of them, within 6e-5 and 2.3e-5: a
+thousandth leaves room. What it would catch
+is a pair at a radius's edge to within a rounding, a neighbor for the
+reference and not for the shader, which floats explain too but which
+moves a boid by far more; none of these flocks has one. The device is
+held to the twin within the same thousandth, as Boids 3D's is: a device
+may round a division and a root as it likes, and fuse a product and a
+sum. On lavapipe they came within 3e-5 and 1.1e-6.
+
+The topic also checks the tiles' lists on the twin and the device, the
+paint's twin against the device's pixels, the picture against Boids',
+the wrap at the field's edges, the keys, a step at the cap, a flock read
+back and a reload. It takes 8 s.
+
+**Speed.** The suites run headless on lavapipe, the Vulkan driver on the
+CPU, so a GPU time there isn't a GPU's. The real GPU can be timed with no
+window: the bench opens it as the headless world opens lavapipe, on
+SDL's windowless video driver (`core0-window-init!` with "offscreen",
+then `gpu-open!` with `'gpu`, before booting headless). SDL's GPU API has
+no timestamps, so a time is the clock's: 8 steps sent at once and a read
+that waits for them all, over 8. Below, this machine's GPU (an NVIDIA
+GTX 1650 Ti with Max-Q, a laptop's, driver 595.99) and lavapipe (Mesa
+26.0.8, LLVM 21, on its 16 threads), ms a step with the wrap, against
+Boids on the crew of 8 and alone, from one run of the bench each:
+
+| boids | rules | L4, GPU | L4, lavapipe | Boids crew | Boids alone |
+|---|---|---|---|---|---|
+| 150 | default | 0.13 | 0.16 | 0.19 | 0.19 |
+| 450 | default | 0.40 | 0.44 | 0.39 | 1.60 |
+| 1,000 | default | 0.44 | 1.13 | 1.48 | 7.74 |
+| 150 | heaviest | 0.12 | 0.18 | 0.32 | 0.30 |
+| 450 | heaviest | 0.30 | 0.51 | 0.63 | 2.65 |
+| 1,000 | heaviest | 0.63 | 1.48 | 2.34 | 12.8 |
+
+And past the grid's counts, with the field listed and drawn (760 × 520,
+a flock that has flocked for 300 steps, over an image of its ground
+alone):
+
+| boids | GPU: step, default and heaviest | draw | lavapipe: step | draw |
+|---|---|---|---|---|
+| 2,000 | 0.82, 1.27 | 0.96 | 4.4, 5.5 | 9.0 |
+| 4,096 | 1.65, 2.61 | 2.07 | 18.0, 28.0 | 16.2 |
+| 8,192 | 4.43, 6.65 | 4.12 | 67, 145 | 32.2 |
+
+- **Below a few thousand boids, the GPU's own costs show.** A run is
+  sent and waited for, and its cells go in groups of 64: 150 boids are
+  three groups, on a GPU of 1,024 lanes. From 150 to 1,000 boids, 44
+  times the pairs, its step takes 3.4 and 5.3 times as long, where Boids'
+  on the crew takes 7.8 and 7.3. Twice the boids take twice the time
+  from 2,000 to 4,096, 2.7 times to 8,192 and 3.5 to 16,384: only then is
+  the GPU full, and the step grows as the pairs do.
+- **At 1,000 the GPU is 3.4 and 3.7 times as fast as the crew of 8**, and
+  18 and 20 times Boids alone.
+- **lavapipe is a crew of its own**, the CPU's 16 threads running the
+  shader's cells side by side in SIMD. It keeps pace with Boids on the
+  crew of 8: at 2,000 boids, 4.4 ms each under the default rules, and 5.5
+  to Boids' 6.9 under the heaviest (the bench's first rows), though it
+  tests every pair for every sum where Boids' worklet stops most pairs at
+  the longest reach.
+- **The drawing is as dear as the step** at 4,096 and 8,192 on the GPU:
+  each tile goes through the whole flock twice, to count and to list.
+
+**Its cap.** 8,192 boids. On this GPU a frame's work there is 8.5 ms
+under the default rules and 10.8 under the heaviest, a step and the
+drawing: within a 60 Hz frame. 16,384, timed the same way with the
+bounds raised, take 27 and 33 ms, two frames, and the GPU draws the
+whole desktop too, which would wait for the flock. On lavapipe, a
+machine with no GPU, the cap is slow: 4,096 take two or three frames (34
+and 44 ms), 8,192 six to eleven (100 and 177). Past a frame nothing is
+stopped, as a handler's fuel and the crew's 100 ms stop a step on the
+CPU: the screen only slows.
 
 ## What the flat step costs a reader
 

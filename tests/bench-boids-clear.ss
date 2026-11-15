@@ -19,6 +19,19 @@
 ;;; round by round, and what one step of each way allocates. The simple
 ;;; steps are slow, so fewer rounds.
 ;;;
+;;; Last, Boids L4 (flat), whose step is a compute shader: a step (with the
+;;; wrap) of the same flocks, at the grid's counts and up to its cap; and
+;;; its window's field, 760 × 520, listed by tile and drawn, a flock that
+;;; has flocked for 300 steps, over what an image of its ground alone
+;;; takes. The GPU is opened as the headless world opens lavapipe, with no
+;;; window; "cpu" after output-dir times lavapipe instead:
+;;;
+;;;   scheme --script tests/bench-boids-clear.ss out cpu
+;;;
+;;; SDL's GPU API has no timestamps, so a time is the clock's: 8 steps sent
+;;; at once and a read of the last one's buffer, which waits for them all,
+;;; over 8; an image waits for its drawing.
+;;;
 ;;; Prints, asserts nothing. output-dir only receives scratch files.
 
 (define *schevana-root*
@@ -179,5 +192,87 @@
    '(default heaviest)
    (list (bench-ref 'boids 'boids-default-rules) bench-heaviest))
   (crew-size-set! size))
+
+;;; ------------------------------------------------------------------ L4
+
+(define bench-l4-kind
+  (if (and (pair? (command-line-arguments))
+           (member "cpu" (cdr (command-line-arguments))))
+      'cpu
+      'gpu))
+
+;; The GPU's device, opened as the headless world opens lavapipe's: on the
+;; windowless video driver.
+(when (eq? bench-l4-kind 'gpu)
+  (core0-window-init! "offscreen")
+  (gpu-open! 'gpu))
+(schevana-boot! 'headless 1280 800)
+
+(define (bench-l4 name) (bench-ref 'boids-l4-flat name))
+
+(define (bench-l4-buffer flock)
+  (let ([b (make-gpu-buffer (flvector-length flock))])
+    (do ([i 0 (+ i 1)]) ((= i (flvector-length flock)) b)
+      (gpu-buffer-set! b i (flvector-ref flock i)))))
+
+;; ms a step of flock under rules on the grid's field, 1200 × 700: 8 from
+;; one buffer into the other and back, sent at once, and a read that waits.
+(define (bench-l4-step flock rules)
+  (let* ([n (quotient (flvector-length flock) 4)]
+         [a (bench-l4-buffer flock)]
+         [b (bench-l4-buffer flock)]
+         [args (cons* n 1200.0 700.0 ((bench-l4 'boids-steering) rules))])
+    (define (eight)
+      (do ([i 0 (+ i 1)]) ((= i 8))
+        (apply gpu-compute-soon! (bench-l4 'boids-steer) n 1
+               (if (even? i) a b) (if (even? i) b a) args))
+      (gpu-computes-send!)
+      (gpu-buffer-read! a))
+    (let ([ms (car (bench-rounds (list eight) 7))])
+      (gpu-buffer-release! a)
+      (gpu-buffer-release! b)
+      (/ ms 8))))
+
+;; ms to list and draw n boids in win's field, 760 × 520, once they have
+;; flocked for 300 steps, over an image of the ground alone.
+(define (bench-l4-draw win n)
+  (let ([draw (lambda ()
+                (drawing->bytes 760 520 1
+                                (lambda ()
+                                  ((bench-l4 'boids-draw-field) win 760 520))))]
+        [ground (lambda ()
+                  (drawing->bytes 760 520 1
+                                  (lambda () (fill-box 0 0 760 520 'bg-0))))])
+    ((bench-l4 'boids-resize!) win n)
+    ((bench-l4 'boids-scatter!) win)
+    (do ([i 0 (+ i 1)]) ((= i 300))
+      ((bench-l4 'boids-step!) win 760 520)
+      (when (= 0 (mod i 30))
+        (gpu-computes-send!)
+        (gpu-buffer-read! ((bench-l4 'boids-current) win))))
+    (let ([times (bench-rounds (list draw ground) 7)])
+      (- (car times) (cadr times)))))
+
+(printf "Boids L4 (flat) on ~a\n" (car (platform-gpu-device)))
+(random-seed 2024)
+(for-each
+ (lambda (rules-name rules)
+   (for-each
+    (lambda (n)
+      (printf "~8a ~5d L4    step ~8,3f ms\n" rules-name n
+              (bench-l4-step ((bench-ref 'boids 'boids-scatter) n 1200 700)
+                             rules)))
+    '(150 450 1000 2000 4096 8192)))
+ '(default heaviest)
+ (list (bench-ref 'boids 'boids-default-rules) bench-heaviest))
+(let ([win ((bench-l4 'boids-l4-flat))])
+  (close-window! (find-window "Boids L4 (flat) — Rules"))
+  (window-call win 'key #\space '())   ; paused: the bench steps it
+  (for-each
+   (lambda (n)
+     (printf "default  ~5d L4    list and draw ~8,3f ms\n" n
+             (bench-l4-draw win n)))
+   '(150 1000 2000 4096 8192))
+  (close-window! win))
 
 (exit)
