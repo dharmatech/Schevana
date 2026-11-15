@@ -154,6 +154,17 @@ level above tests only what it adds, trusting the levels below.
   runs its topics by `chez` if `PATH` has one, else by `scheme`. To run
   them under the other version, build it from its release tag and put its
   `bin` first on `PATH`.
+- On a Mac, 10.0.0 needs one line changed before it's built. Today's SDK
+  defines `TARGET_OS_IPHONE` on a Mac too, as 0, and 10.0.0's
+  `c/version.h` asks only whether it's defined, which leaves Chez there
+  with no `system` (it raises) and an iPhone's code memory, which crashes
+  with threads ("invalid memory reference"). Make the line
+  `#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE`.
+- A Mac's suites run by `chez`, and the build installs `scheme` alone: in
+  its `bin` link `chez` to `scheme`, and beside `scheme.boot` link
+  `chez.boot` to it, since Chez finds its boot file by the name it's run
+  by. A link, not a script: a variable for the loader wouldn't get through
+  `/bin/sh` (see "Any platform").
 
 ## Any font
 
