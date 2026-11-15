@@ -17,6 +17,8 @@
   (let ([dir (path-parent (path-parent (car (command-line))))])
     (if (string=? dir "") "." dir)))
 
+;; A run of Chez through /bin/sh (test-chez), for this file run again.
+(load (string-append *schevana-root* "/tests/chez.ss"))
 (load (string-append *schevana-root* "/tests/lib.ss"))
 
 ;; Prints the problems found, one per line; true when there are none.
@@ -961,11 +963,13 @@
           itself"
          (exists run-then-exit? (file-forms "world.ss"))))
 
-;; This file run again with SCHEVANA_CHECK set: its exit status.
+;; This file run again with SCHEVANA_CHECK set, as the units' runner runs a
+;; topic, so that a Mac's loader path reaches it: its exit status.
 (define (sources-run-checking text)
-  (system (format "SCHEVANA_CHECK='~a' \"$(command -v chez || echo scheme)\" \
-                   --script ~a/tests/sources.ss > /dev/null 2>&1"
-                  text *schevana-root*)))
+  (system (string-append
+           (test-chez (list (cons "SCHEVANA_CHECK" text))
+                      (string-append *schevana-root* "/tests/sources.ss"))
+           " > /dev/null 2>&1")))
 
 (unless test-only
   (check "SCHEVANA_CHECK stops a run after the first check whose name has \

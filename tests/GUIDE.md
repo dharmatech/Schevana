@@ -216,6 +216,10 @@ monitor, CPU and Chez (`AGENTS.md`, "Layers"). A check holds on each.
   nothing.
 - What can be checked for another platform is checked everywhere: a Mac
   writes and validates the SPIR-V Linux runs.
+- A check that runs Chez again runs it by `test-chez` (`tests/chez.ss`),
+  never by a command line of its own: macOS drops the loader's variables
+  (`DYLD_FALLBACK_LIBRARY_PATH`) on the way into `/bin/sh`, and `test-chez`
+  hands them on.
 - What's drawn is compared with what the same machine draws, as the frame
   suite does, never with pixels stored from one rasterizer.
 - A bound in time is for the bench (`tests/bench.ss`), not a suite: a

@@ -115,8 +115,8 @@
          (check (format "~a: its examples run, in a world of their own" page)
                 (zero? (units-system-within
                         600
-                        (units-chez (list (cons "SCHEVANA_DOCS_PAGE" page))
-                                    (string-append *schevana-root*
-                                                   "/tests/units.ss")
-                                    out-dir "docs"))))))
+                        (test-chez (list (cons "SCHEVANA_DOCS_PAGE" page))
+                                   (string-append *schevana-root*
+                                                  "/tests/units.ss")
+                                   out-dir "docs"))))))
      (docs-pages)))

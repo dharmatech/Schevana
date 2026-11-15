@@ -12,11 +12,11 @@
           (when (file-exists? out) (delete-file out))
           (units-system-within 120
             (string-append
-              (units-chez (list (cons "HOME" home))
-                          (string-append *schevana-root* "/main.ss")
-                          "--headless" "--fork" "--size" "400x300"
-                          "--eval" (format "(define *fork-out* ~s)" out)
-                          "--eval" (format "(load ~s)" run))
+              (test-chez (list (cons "HOME" home))
+                         (string-append *schevana-root* "/main.ss")
+                         "--headless" "--fork" "--size" "400x300"
+                         "--eval" (format "(define *fork-out* ~s)" out)
+                         "--eval" (format "(load ~s)" run))
               " > /dev/null")))]
        [seen (and (file-exists? out) (call-with-input-file out read))])
   (define (saw key) (and (pair? seen) (cdr (assq key seen))))
@@ -56,7 +56,7 @@
 (let ([word "it's \"$HOME\" `x` \\ ~"]
       [file (string-append out-dir "/fork-word.txt")])
   (check "a word reaches sh whole, whatever it holds"
-         (and (eqv? (system (format "printf %s ~a > ~a" (units-sh-word word)
-                                    (units-sh-word file)))
+         (and (eqv? (system (format "printf %s ~a > ~a" (test-sh-word word)
+                                    (test-sh-word file)))
                     0)
               (equal? (call-with-input-file file get-string-all) word))))

@@ -39,34 +39,9 @@
                      (directory-list
                       (string-append *schevana-root* "/tests/units"))))))
 
-;; s as one word of /bin/sh's, whatever it holds.
-(define (units-sh-word s)
-  (let ([o (open-output-string)])
-    (put-char o #\')
-    (string-for-each
-      (lambda (c) (if (char=? c #\') (put-string o "'\\''") (put-char o c)))
-      s)
-    (put-char o #\')
-    (get-output-string o)))
-
-;; The loader's variables that macOS drops on the way into /bin/sh: set
-;; here, they're handed on by name.
-(define units-loader-variables
-  '("DYLD_LIBRARY_PATH" "DYLD_FALLBACK_LIBRARY_PATH"))
-
-;; /bin/sh's command that becomes a run of Chez on script with args, with
-;; env's variables, (name . value), and the loader's set. Chez is "chez"
-;; where Homebrew installs it, as in ./schevana, else "scheme".
-(define (units-chez env script . args)
-  (format "exec env~{ ~a~} \"$(command -v chez || echo scheme)\" \
-           --script~{ ~a~}"
-          (map (lambda (v)
-                 (string-append (car v) "=" (units-sh-word (cdr v))))
-               (append env
-                       (filter cdr
-                               (map (lambda (name) (cons name (getenv name)))
-                                    units-loader-variables))))
-          (map units-sh-word (cons script args))))
+;; A run of Chez through /bin/sh, a Mac's loader path with it: test-chez
+;; and test-sh-word, which the sources' suite runs itself again by too.
+(load (string-append *schevana-root* "/tests/chez.ss"))
 
 ;; command's exit status, or 137 if it still ran after seconds and was
 ;; killed, lest a hang hold up the suite. GNU's timeout isn't everywhere (a
@@ -99,9 +74,9 @@
   (let ([dir (string-append out-dir "/" topic)])
     (unless (file-directory? dir) (mkdir dir))
     (system (string-append
-             (units-chez '() (string-append *schevana-root* "/tests/units.ss")
-                         dir topic)
-             " > " (units-sh-word (string-append dir "/said.txt")) " 2>&1"))))
+             (test-chez '() (string-append *schevana-root* "/tests/units.ss")
+                        dir topic)
+             " > " (test-sh-word (string-append dir "/said.txt")) " 2>&1"))))
 
 ;; The topics that fail, each run as units-jobs allow at once, what each
 ;; said printed in the topics' order as each is done.
