@@ -1593,19 +1593,6 @@
 (check "a column draws and registers only the cards in view"
        (let ([todo (column-of 'todo)])
          (< 0 (length (filter card-of todo)) (length todo))))
-(let ([at (lambda ()
-            (map (lambda (id)
-                   (let ([r (ui-find tui id)]) (list (ui-region-x r)
-                                                     (ui-region-y r))))
-                 '(new (filter tag) done clear (column todo))))])
-  (let ([before (at)])
-    (set-task! 13 'tags '("render" "a-much-longer-tag-name"))
-    (steps 2)
-    (let ([long (at)])
-      (set-task! 13 'tags '("render" "gpu"))
-      (steps 2)
-      (check "a long tag moves nothing in the toolbar, nor the board below"
-             (equal? before long)))))
 
 ;; n, then typing at once: nothing is lost and the n is not typed.
 (type! "n")
@@ -1919,41 +1906,12 @@
 (steps 2)
 (check "Delete and Return: gone, and the task next to it selected"
        (and (not (memq copy *tasks*)) (selected)))
-(let ([t (add-task! (apply string-append (make-list 200 "very long title "))
-                    'status 'review)]
-      [orig ui-draw-dialog] [said #f])
-  (set! ui-draw-dialog   ; the lines the dialog's message shows
-        (lambda (x y w h flags title message)
-          (set! said (ui-dialog-lines
-                      message
-                      (caddr (cdr (assq 'message
-                                        (ui-dialog-areas x y w h '()))))))
-          (orig x y w h flags title message)))
-  (steps 1)
-  (let-values ([(x y) (region-center (list 'card (task-id t)))])
-    (tasks-click! x y))
-  (press! 'delete)
-  (steps 2)
-  (set! ui-draw-dialog orig)
-  (let ([b (ui-find tui '(confirm 1))])
-    (let-values ([(w h) (window-content-size tw)])
-      (check "a very long title makes the dialog no taller than a few lines: \
-              its buttons stay well inside the window, and it still says \
-              that this cannot be undone"
-             (and (< (+ (ui-region-y b) (ui-region-h b)) (* 3/4 h))
-                  (string-suffix? "undone." (car (last-pair said)))))))
-  (press! 'escape)
-  (delete-task! t)
-  (steps 2))
 
-;; A title cut inside a long word: the card's tooltip tells it, and the
-;; details' title, scrolled to the caret, shows its start again once left.
+;; A long title in the details, scrolled to the caret, shows its start
+;; again once left.
 (let ([long (add-task! (string-append "A " (make-string 80 #\W))
                        'status 'review)])
   (steps 2)
-  (check "a card whose title is cut, even inside a long word, has it as a \
-          tooltip"
-         (equal? (ui-region-tip (card-of long)) (task-title long)))
   (let-values ([(x y) (region-center (list 'card (task-id long)))])
     (tasks-click! x y))
   (press! 'return)
@@ -2021,35 +1979,9 @@
 (delete-task! (selected))
 (steps 2)
 
-;; Each task's details start at their top: a description wheeled down is
-;; not wheeled in the next task.
-(let* ([lines (lambda (what)
-                (apply string-append
-                       (map (lambda (i) (format "~a ~a.\n" what i))
-                            (iota 40))))]
-       [a (add-task! "Wheeled" 'status 'review 'description (lines "Para"))]
-       [b (add-task! "Next" 'status 'review 'description (lines "Other"))])
-  (steps 2)
-  (let-values ([(x y) (region-center (list 'card (task-id a)))])
-    (tasks-click! x y))
-  (let-values ([(x y) (region-center 'description)]
-               [(cx cy cw ch) (content-rect tw)])
-    (inject! `(mouse-move ,(+ cx (round x)) ,(+ cy (round y))) '(wheel 0 -4))
-    (steps 2))
-  (let ([wheeled (ui-memo tui 'description 0)])
-    (let-values ([(x y) (region-center (list 'card (task-id b)))])
-      (tasks-click! x y))
-    (check "a description wheeled down in one task starts at its top in the \
-            next"
-           (and (> wheeled 0) (eq? (selected) b)
-                (= 0 (ui-memo tui 'description 0)))))
-  (delete-task! a)
-  (delete-task! b)
-  (steps 2))
-;; Looks: the tag field draws no box inside the chip input's; a filter
-;; whose tag no task has any more still shows it; a disabled button does
-;; not light up under the pointer; a cut title says so, and so does a cut
-;; checklist item or List row with a tooltip.
+;; Looks: the tag field draws no box inside the chip input's; a disabled
+;; button does not light up under the pointer; a cut title says so, and so
+;; does a cut checklist item with a tooltip.
 (define (content-pixel x y)
   (let-values ([(cx cy cw ch) (content-rect tw)])
     (screen-pixel (exact (floor (* *scale* (+ cx x))))
@@ -2071,23 +2003,6 @@
   (check "the tag field draws no box of its own inside the chip input's"
          (= (content-pixel (- right 1) y) (content-pixel (- right 12) y))))
 (press! 'escape)
-(click-ui! tw '(filter tag))
-(test-menu-click! "genera")
-(set-task! 8 'tags '("style"))
-(steps 2)
-(let ([r (ui-find tui '(filter tag))])
-  (check "a Tag filter whose tag no task has any more still shows it"
-         (let loop ([ps (pixels-of (+ (ui-region-x r) 10) (+ (ui-region-y r) 6)
-                                   (- (ui-region-w r) 40)
-                                   (- (ui-region-h r) 12))]
-                    [seen '()])
-           (cond [(> (length seen) 2) #t]
-                 [(null? ps) #f]
-                 [else (loop (cdr ps) (if (memv (car ps) seen)
-                                          seen
-                                          (cons (car ps) seen)))]))))
-(set-task! 8 'tags '("style" "genera"))
-(click-ui! tw 'clear)
 (let-values ([(cx cy cw ch) (content-rect tw)] [(x y) (region-center 'clear)])
   (inject! `(mouse-move ,(+ cx 4) ,(+ cy 4)))
   (steps 2)
@@ -2116,14 +2031,6 @@
   (check "a checklist item cut short has its text as a tooltip"
          (equal? (ui-region-tip (ui-find tui '(item 0)))
                  (caar (task-checklist long))))
-  (type! "v")
-  (steps 2)
-  (check "and so does a List row whose title is cut"
-         (let ([i (list-index (lambda (t) (eq? t long)) (rows))])
-           (equal? (ui-region-tip (ui-find tui (list 'table 'row i)))
-                   (task-title long))))
-  (type! "v")
-  (type! "v")
   (delete-task! long)
   (steps 2))
 
@@ -2153,40 +2060,6 @@
        (ui-find tui 'empty-clear))
 (shot "nothing")
 (click-ui! tw 'empty-clear)
-;; A long word in the search: the empty state's message draws nothing past
-;; its width.
-(let ([drawn '()] [label ui-draw-label] [text draw-text] [in #f])
-  (set! ui-draw-label   ; a wrapped label's box, while it draws
-        (lambda (x y w h flags str)
-          (fluid-let ([in (and (memq 'wrap flags) (list x w))])
-            (label x y w h flags str))))
-  (set! draw-text
-        (lambda (x y str . more)
-          (when in
-            (set! drawn (cons (list x (text-width str (cadr more)) in)
-                              drawn)))
-          (apply text x y str more)))
-  (type! "/")
-  (type! (make-string 150 #\q))
-  (press! 'escape)
-  (steps 2)
-  (set! ui-draw-label label)
-  (set! draw-text text)
-  (check "a long word in the search: the empty state's message stays \
-          within its width"
-         (and (pair? drawn)
-              (for-all (lambda (d)
-                         (let ([x (car d)] [lx (car (caddr d))])
-                           (and (>= x (- lx 0.5))
-                                (<= (+ x (cadr d))
-                                    (+ lx (cadr (caddr d)) 0.5)))))
-                       drawn)))
-  (click-ui! tw 'empty-clear))
-(for-each delete-task! (map task-id *tasks*))
-(steps 2)
-(check "no tasks at all: an empty state that makes one"
-       (and (null? *tasks*) (ui-find tui 'empty-new)))
-(shot "empty")
 (tasks-reset!)
 
 ;; Dependencies. The details: what a task waits for, chips a × removes,

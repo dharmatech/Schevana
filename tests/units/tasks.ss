@@ -616,3 +616,101 @@
                                         (task-label born))))
                   (null? free))))))
 (tasks-reset!)
+
+;;; What the view shows of a task, with no window: its tips, its cut
+;;; titles, the toolbar's widths, a filter's label, the empty states.
+
+;; thunk drawn as a window's draw is, into an image w × h: v's ui laid out.
+(define (tasks-test-draw v w h thunk)
+  (let ([ui (tasks-view-ui v)])
+    (picture-free!
+     (image w h 1 (lambda () (ui-begin! ui) (thunk) (ui-end! ui w h))))))
+
+(let* ([v (tasks-view-new (make-ui))] [ui (tasks-view-ui v)])
+  (check "a card's title is at most three rows, cut past them; a tip is the \
+          title when it's cut, what the task waits for while it's blocked, \
+          both then, else none; a row's title is cut by its room, measured"
+         (let* ([w 200] [room (- w (* 2 (tasks-card-pad)))]
+                [long (let grow ([s "W"])
+                        (if (> (text-width s 'ui) (* 4 room))
+                            s
+                            (grow (string-append s "W"))))]
+                [cut (mk 900 (string-append "A " long) 'todo 'bug 'low #f '()
+                         #f)]
+                [short (mk 901 "Short" 'todo 'bug 'low #f '() #f)]
+                [blocked (find-task 13)]
+                [waits (tasks-tip blocked #f)]
+                [wide (text-width (task-title cut) 'ui)])
+           (let-values ([(lines cut?) (tasks-card-title w cut)]
+                        [(lines1 cut1?) (tasks-card-title w short)])
+             (and (= (length lines) 3) cut? (= (length lines1) 1) (not cut1?)
+                  (equal? (tasks-tip cut #t) (task-title cut))
+                  (not (tasks-tip short #f))
+                  (string-prefix? "Blocked by TASK-31 " waits)
+                  (string-contains-ci? waits ", TASK-10 ")
+                  (equal? (tasks-tip blocked #t)
+                          (string-append (task-title blocked) "\n" waits))
+                  (not (tasks-tip (find-task 12) #f))
+                  (tasks-title-cut? cut (quotient wide 2))
+                  (not (tasks-title-cut? cut (+ wide 1)))))))
+
+  (check "what a task holds moves nothing in the toolbar: its items are as \
+          wide with a long tag and a long name as without; a name quoted in \
+          a menu or a message is 20 line heights wide at most"
+         (let* ([widths (lambda ()
+                          (map car (tasks-toolbar-items v (tasks-visible v))))]
+                [before (widths)]
+                [name (apply string-append (make-list 20 "Grace Hopper "))])
+           (set-task! 13 'tags '("render" "a-much-longer-tag-name"))
+           (set-task! 9 'assignee name)
+           (let ([long (widths)])
+             (tasks-reset!)
+             (and (equal? before long)
+                  (<= (text-width (tasks-quoted name) 'ui)
+                      (* 20 (font-line-height 'ui)))
+                  (<= (text-width (tasks-quoted (make-string 150 #\q)) 'ui)
+                      (* 20 (font-line-height 'ui)))
+                  (equal? (tasks-quoted "Ada") "Ada")))))
+
+  (check "a filter whose value no task has any more still shows it"
+         (let ([shown #f] [plain ui-draw-dropdown])
+           (fluid-let ([ui-draw-dropdown
+                        (lambda (x y w h flags label)
+                          (set! shown label)
+                          (plain x y w h flags label))])
+             (tasks-test-draw v 300 60
+               (lambda ()
+                 (tasks-filter v 10 10 160 30 'tag "Tag" "gone"
+                               (lambda (v new) #f)
+                               '(("Any tag" . #f)) '(("ui" . "ui"))))))
+           (equal? shown "gone")))
+
+  (check "another task selected starts from its top, its drafts empty; the \
+          same one keeps where it was"
+         (begin
+           (tasks-select! v (find-task 13))
+           (ui-memo! ui 'description 120)
+           (tasks-view-tag-draft-set! v "dra")
+           (tasks-select! v (find-task 13))
+           (let ([kept (list (ui-memo ui 'description 0)
+                             (tasks-view-tag-draft v))])
+             (tasks-select! v (find-task 14))
+             (let ([fresh (list (ui-memo ui 'description 0)
+                                (tasks-view-tag-draft v))])
+               (tasks-select! v #f)
+               (and (equal? kept '(120 "dra")) (equal? fresh '(0 "")))))))
+
+  (check "the empty states: a search that matches nothing offers to clear \
+          it; no tasks at all, to make one"
+         (let ([offers (lambda ()
+                         (tasks-test-draw
+                          v 600 400 (lambda () (tasks-empty v 0 0 600 400)))
+                         (list (and (ui-find ui 'empty-clear) #t)
+                               (and (ui-find ui 'empty-new) #t)))])
+           (tasks-view-query-set! v "nothing-like-this")
+           (let ([none-match (offers)])
+             (tasks-clear-filters! v)
+             (for-each delete-task! (map task-id *tasks*))
+             (let ([none (offers)])
+               (tasks-reset!)
+               (and (equal? none-match '(#t #f)) (equal? none '(#f #t))))))))
