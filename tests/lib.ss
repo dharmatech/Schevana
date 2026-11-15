@@ -184,6 +184,16 @@
                `(mouse-up ,x ,my left))
       (steps 2))))
 
+;; thunk with status segments that never change, so the top bar stays put.
+(define (test-with-quiet-status thunk)
+  (let ([segs *status-segments*])
+    (set! *status-segments* (list (cons 'quiet (lambda () "quiet"))))
+    (steps 2)
+    (let ([v (thunk)])
+      (set! *status-segments* segs)
+      (steps 1)
+      v)))
+
 ;; The world as a scene starts from: no window, toast, hover, drag or menu.
 (define (test-clear-world!)
   (for-each close-window! (windows))
