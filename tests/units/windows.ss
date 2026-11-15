@@ -153,3 +153,111 @@
                (focus-window! w)
                (close-window! w)
                (and quiet (> (window-ref w 'wm-asked 0) asked)))))))
+
+;;; Frames: whenever something asks for one, everything is drawn again;
+;;; when nothing does, nothing is. The test's clock holds, so the top
+;;; bar's second, which asks for a frame of its own, comes only when said.
+
+(for-each close-window! (windows))
+(set! *toasts* '())
+(steps 2)
+
+;; Whether one step drew a frame.
+(define (windows-step-drew?)
+  (let ([n *frames-drawn*])
+    (schevana-step! 0)
+    (> *frames-drawn* n)))
+
+;; A counter of win's draws.
+(define (windows-count-draws! win)
+  (let ([n 0]
+        [draw (hashtable-ref (window-handlers win) 'draw
+                             (lambda args (void)))])
+    (window-on! win 'draw (lambda (w cw ch) (set! n (+ n 1)) (draw w cw ch)))
+    (lambda () n)))
+
+;; Input asks for a frame by itself, so a handler that only changes its
+;; state is seen.
+(let* ([seen #f] [state 0]
+       [bump (lambda (win . args) (set! state (+ state 1)))]
+       [w (windows-open "Quiet"
+                        'draw (lambda (win cw ch) (set! seen state))
+                        'key bump 'text bump 'wheel bump 'mouse-up bump)])
+  (steps 2)
+  (let-values ([(cx cy cw ch) (content-rect w)])
+    (define (shown-after kind . evs)
+      (apply inject! evs)
+      (steps 2)
+      (cons kind (eqv? seen state)))
+    (let* ([x (+ cx 50)] [y (+ cy 50)]
+           [key (shown-after 'key '(key-down #\a ()))]
+           [text (shown-after 'text '(text "x"))]
+           [wheel (shown-after 'wheel `(mouse-move ,x ,y) '(wheel 0 1))]
+           ;; (no 'mouse-down handler)
+           [up (shown-after 'mouse-up `(mouse-down ,x ,y left 1)
+                            `(mouse-up ,x ,y left))]
+           [shown (list key text wheel up)])
+      (check (format "input reaches windows that never invalidate ~s" shown)
+             (and (= state 4) (for-all cdr shown)))))
+  (close-window! w))
+
+;; A window that changes by itself says so, and the next frame shows it.
+(let* ([count 0]
+       [w (windows-open "Ticker"
+                        'open window-frame-soon!
+                        'frame (lambda (win at)
+                                 (window-frame-soon! win)
+                                 (set! count (+ count 1))
+                                 (invalidate! win))
+                        'draw (lambda (win cw ch)
+                                (fill-box 0 0 cw ch (if (even? count)
+                                                        #xff0000
+                                                        #x0000ff))))])
+  (let-values ([(x y cw ch) (content-rect w)])
+    (define (red?)
+      (= (canvas-pixel (+ x (quotient cw 2)) (+ y (quotient ch 2)))
+         #xffff0000))
+    (steps 2)
+    (let* ([a (red?)] [b (begin (steps 1) (red?))]
+           [c (begin (steps 1) (red?))])
+      (check (format "a window that invalidates itself as it ticks shows \
+                      each tick on the next frame ~s" (list a b c))
+             (and (not (eq? a b)) (not (eq? b c))))))
+  (close-window! w))
+
+;; Steps that nothing asked a frame of draw nothing. A frame the top bar
+;; asks for (its second's) draws no window, which keeps what it drew;
+;; (invalidate!) draws every window once; an expose shows a frame again:
+;; what the window showed may be gone.
+(test-clock-hold!)
+(let* ([a (windows-open "One")] [b (windows-open "Two" 'pos '(420 . 160))]
+       [na (windows-count-draws! a)] [nb (windows-count-draws! b)])
+  (steps 2)
+  (let ([a0 (na)] [b0 (nb)])
+    (let ([idle (let loop ([n 0] [drew 0])
+                  (if (= n 20)
+                      drew
+                      (loop (+ n 1) (if (windows-step-drew?) (+ drew 1)
+                                        drew))))])
+      (status-show!)   ; as at the clock's second
+      (let ([bar (windows-step-drew?)])
+        (check (format "idle steps draw nothing (~a of 20 drew); a frame \
+                        the top bar asks for draws no window" idle)
+               (and (= idle 0) bar (= (na) a0) (= (nb) b0))))))
+  (test-with-quiet-status
+   (lambda ()
+     (invalidate!)
+     (steps 1)   ; the quiet top bar drawn
+     (let ([a0 (na)] [b0 (nb)])
+       (invalidate!)
+       (steps 1)
+       (check "(invalidate!) draws every window again"
+              (and (= (na) (+ a0 1)) (= (nb) (+ b0 1))))
+       (let ([frames *frames-drawn*])
+         (inject! '(expose))
+         (steps 1)
+         (check "an expose draws a frame"
+                (= *frames-drawn* (+ frames 1)))))))
+  (close-window! a)
+  (close-window! b))
+(test-clock-release!)

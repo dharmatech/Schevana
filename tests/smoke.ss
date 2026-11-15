@@ -2541,158 +2541,9 @@
 (set! *toasts* '())
 
 
-;; The profiler: on at boot, it collects with Monitor closed. Monitor
-;; draws its graphs; a window's name focuses it and a process's Kill
-;; kills it; the Profiling checkbox turns it off, and Monitor lists the
-;; windows and processes in tables, whose rows focus and kill as they
-;; always did; and on again.
+;; The profiler and Monitor: tests/units/monitor.ss.
 (let ([m (find-window 'monitor)]) (when m (close-window! m)))
 (steps 2)
-(check "profiling is on at boot, and collects with Monitor closed"
-       (let ([s (car (profile-ticks))])
-         (steps 1)
-         (and (profile-on?) (not (find-window 'monitor))
-              (not (eqv? s (car (profile-ticks)))))))
-(let* ([target (open-window "Target"   ; drawn at every step, slowly: a top row
-                 'size '(200 . 100) 'pos '(1000 . 420)
-                 'open window-frame-soon!
-                 'frame (lambda (win at)
-                          (window-frame-soon! win)
-                          (invalidate! win))
-                 'draw (lambda (win w h)
-                         (let ([t (+ (real-time) 2)])
-                           (let loop () (when (< (real-time) t) (loop))))))]
-       [busy (lambda () (spawn "monitored" (lambda () (let loop () (loop)))))]
-       [p (busy)]
-       [m (monitor)]
-       [ui (window-ref m 'ui)]
-       [bars (lambda ()
-               (filter (lambda (r)
-                         (let ([id (ui-region-id r)])
-                           ;; the bars, not the strip's label
-                           (and (pair? id) (eq? (car id) 'monitor-ticks)
-                                (not (and (pair? (cdr id))
-                                          (eq? (cadr id) 'strip))))))
-                       (ui-state-regions ui)))]
-       [row (lambda (table x xs)   ; x's row in the table of xs, by id
-              (list table 'row (list-index (lambda (y) (eq? y x)) xs)))]
-       [window-row (lambda ()
-                     (row 'monitor-windows target
-                          (sort (lambda (a b) (< (window-id a) (window-id b)))
-                                (windows))))])
-  (move-window! m 20 40)
-  (focus-window! m)
-  (steps 2)
-  (check "Monitor opens on its Overview: the windows and processes in \
-          tables, no bars"
-         (and (null? (bars)) (ui-find ui (window-row))
-              (ui-find ui (row 'monitor-procs p (procs)))))
-  (click-ui! m '(tab ticks))
-  ;; the Consumers sum seconds done: one with Target in it done, and
-  ;; Monitor's view moved on (twice a second) since
-  (let ([until (+ (real-time) 1700)])
-    (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
-  (steps 1)
-  (png-write-screen (string-append out-dir "/monitor.png"))
-  (check "Monitor draws its graphs: a bar a tick, a row a consumer"
-         (and (not (window-error m)) (pair? (bars))
-              (ui-find ui (list 'monitor-kill (proc-id p)))
-              (ui-find ui (list 'monitor-focus (window-id target)))))
-  ;; the Consumers sorted by a heading: by name, again the other way, and
-  ;; back to ms/s, the most first
-  (let ([order (lambda (nodes)   ; the same nodes, in a fixed order
-                 (list-sort string<? (map (lambda (n) (format "~s" n))
-                                          nodes)))]
-        [roots (lambda ()
-                 (map ui-tree-row-node
-                      (filter (lambda (r) (= 0 (ui-tree-row-depth r)))
-                              (vector->list
-                               (ui-memo ui '(consumers rows) '#())))))])
-    (let ([by-rate (roots)])
-      (click-ui! m '(consumers header name))
-      (let ([by-name (roots)])
-        (click-ui! m '(consumers header name))
-        (let ([by-name-down (roots)])
-          (click-ui! m '(consumers header rate))
-          (check "a Consumers heading sorts its rows by it, again the other \
-                  way; the same rows each time"
-                 (and (> (length by-rate) 2)
-                      (not (equal? by-name by-name-down))
-                      (equal? (reverse by-name) by-name-down)
-                      (equal? (order by-rate) (order by-name))
-                      (equal? (order by-rate) (order (roots)))))))))
-  ;; The rows drawn selected, at a draw of Monitor's.
-  (let ([selected-rows
-         (lambda ()
-           (let ([n 0] [real ui-draw-highlight-over])
-             (fluid-let ([ui-draw-highlight-over
-                          (lambda args (set! n (+ n 1)) (apply real args))])
-               (invalidate! m)
-               (steps 1))
-             n))])
-    (click-ui! m '(consumers row 0))
-    (let ([chosen (selected-rows)])
-      (click-ui! m '(consumers row 0))
-      (let ([let-go (selected-rows)])
-        (check (format "a press selects a Consumers row, and a second lets it \
-                        go (~a, then ~a drawn selected)" chosen let-go)
-               (and (= chosen 1) (= let-go 0))))))
-  (check "a Consumers heading says what its column means"
-         (let ([r (ui-find ui '(consumers header avg))])
-           (and r (string? (ui-region-tip r))
-                (string-contains-ci? (ui-region-tip r) "average"))))
-  ;; the pointer resting on the newest bar: its tooltip, what it spent
-  (let ([r (car (bars))])
-    (let-values ([(cx cy cw ch) (content-rect m)])
-      (inject! `(mouse-move ,(+ cx (ui-region-x r) (ui-region-w r) -2)
-                            ,(+ cy (ui-region-y r)
-                                (quotient (ui-region-h r) 2)))))
-    (let ([until (+ (real-time) 800)])
-      (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
-    (png-write-screen (string-append out-dir "/monitor-tip.png"))
-    (let ([tip (let ([rs (bars)]) (and (pair? rs) (ui-region-tip (car rs))))])
-      (printf "  ~s\n" tip)
-      (check "hovering a bar of Monitor's Ticks shows its tooltip: its \
-              tick, whether it came late, and its phases"
-             (and (string? tip)
-                  (string-contains-ci? tip "tick ")
-                  (string-contains-ci? tip "(a tick is ")
-                  (< (+ (car (ui-state-rest ui)) ui-tip-ms) (now-ms))))))
-  (click-ui! m (list 'monitor-focus (window-id target)))
-  (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
-  (focus-window! m)
-  (steps 2)
-  (click-ui! m (list 'monitor-kill (proc-id p)))
-  (check "a process's Kill in Monitor kills it" (not (memq p (procs))))
-  (click-ui! m 'profiling)
-  (let ([p (busy)])
-    (steps 2)
-    (check "Monitor's Profiling turns it off: no bars"
-           (and (not (profile-on?)) (not *profile-span*) (null? (bars))))
-    (click-ui! m '(tab overview))
-    (check "its Overview lists the windows and processes in tables still \
-            (a new one by its next view: twice a second)"
-           (and (ui-find ui (window-row))
-                (wait-for (lambda ()
-                            (ui-find ui (row 'monitor-procs p (procs)))))))
-    (click-ui! m (window-row))
-    (check "where a window's row focuses it" (eq? (focused-window) target))
-    (focus-window! m)
-    (steps 2)
-    (click-ui! m (row 'monitor-procs p (procs)))
-    (check "a process's row only selects it" (memq p (procs)))
-    (click-ui! m (list 'monitor-proc-kill (proc-id p)))
-    (check "and its Kill kills it" (not (memq p (procs)))))
-  (click-ui! m '(tab ticks))
-  (click-ui! m 'profiling)
-  (let ([until (+ (real-time) 700)])
-    (let loop () (when (< (real-time) until) (schevana-step! 5) (loop))))
-  (check "and on again: the bars come back"
-         (and (profile-on?) (pair? *profile-span*)
-              (pair? (bars)) (not (window-error m))))
-  (close-window! m)
-  (close-window! target)
-  (steps 2))
 
 ;; Reloading the sources keeps the world's state, and the profiler's
 ;; history.
@@ -2716,24 +2567,11 @@
   (set-theme! 'window-style 'mac)
   (close-window! s))
 
-;;; Frames: whenever something asks for one, everything is drawn again.
+;;; Frames asked for and not: tests/units/windows.ss. What the checks
+;;; below still share:
 (for-each close-window! (windows))
 (set! *toasts* '())
 (steps 2)
-
-;; Whether one step drew a frame.
-(define (step-drew?)
-  (let ([n *frames-drawn*])
-    (schevana-step! 0)
-    (> *frames-drawn* n)))
-
-;; Steps until the frame the clock forces once a second has just been
-;; drawn, so that the next steps (well under a second of them) get none.
-(define (after-clock-frame!)
-  (let ([s (time-second (current-time))])
-    (let loop ()
-      (when (= s (time-second (current-time))) (schevana-step! 0) (loop)))
-    (steps 1)))
 
 ;; A counter of the window's draws.
 (define (count-draws! win)
@@ -2764,94 +2602,6 @@
                  [n n (if (= px (screen-pixel x y)) (+ n 1) n)])
                 ((= x (caddr b)) n))])
       ((= y (cadddr b)) n)))
-
-;; Input asks for a frame by itself, so a handler that only changes its
-;; state is seen.
-(let* ([seen #f] [state 0]
-       [bump (lambda (win . args) (set! state (+ state 1)))]
-       [w (plain-window "Quiet" 100 100
-                        'draw (lambda (win cw ch)
-                                (set! seen state)
-                                (draw-text 14 14 (number->string state)
-                                           'text 'big))
-                        'key bump 'text bump 'wheel bump 'mouse-up bump)])
-  (steps 2)
-  (let-values ([(cx cy cw ch) (content-rect w)])
-    (define (shown-after kind . evs)
-      (apply inject! evs)
-      (steps 2)
-      (cons kind (eqv? seen state)))
-    (let* ([x (+ cx 50)] [y (+ cy 50)]
-           [key (shown-after 'key '(key-down #\a ()))]
-           [text (shown-after 'text '(text "x"))]
-           [wheel (shown-after 'wheel `(mouse-move ,x ,y) '(wheel 0 1))]
-           ;; (no 'mouse-down handler)
-           [up (shown-after 'mouse-up `(mouse-down ,x ,y left 1)
-                            `(mouse-up ,x ,y left))]
-           [shown (list key text wheel up)])
-      (check (format "input reaches windows that never invalidate ~s" shown)
-             (and (= state 4) (for-all cdr shown)))))
-  (close-window! w))
-
-;; A window that changes by itself says so, and the next frame shows it
-;; (the frame the clock asks for once a second is the top bar's).
-(let* ([count 0]
-       [w (open-window "Ticker" 'size '(260 . 120) 'pos '(400 . 100)
-                       'open window-frame-soon!
-                       'frame (lambda (win at)
-                                (window-frame-soon! win)
-                                (set! count (+ count 1))
-                                (invalidate! win))
-                       'draw (lambda (win cw ch)
-                               (fill-box 0 0 cw ch (if (even? count)
-                                                       #xff0000
-                                                       #x0000ff))))])
-  (let-values ([(x y cw ch) (content-rect w)])
-    (define (red?) (> (canvas-pixels (device-box x y cw ch) #xffff0000) 0))
-    (steps 2)
-    (let* ([a (red?)] [b (begin (steps 1) (red?))]
-           [c (begin (steps 1) (red?))])
-      (check (format "a window that invalidates itself as it ticks shows \
-                      each tick on the next frame ~s" (list a b c))
-             (and (not (eq? a b)) (not (eq? b c))))))
-  (close-window! w))
-
-;; Steps that nothing asked a frame of draw nothing. The frame the clock
-;; asks for once a second draws no window, which keeps what it drew;
-;; (invalidate!) draws every window once.
-(let* ([a (plain-window "One" 100 100)] [b (plain-window "Two" 420 160)]
-       [na (count-draws! a)] [nb (count-draws! b)])
-  (steps 2)
-  (let ([a0 (na)] [b0 (nb)] [t0 (now-ms)])
-    (let loop ([n 0] [forced 0])
-      (if (< (- (now-ms) t0) 1100)
-          (loop (+ n 1) (if (step-drew?) (+ forced 1) forced))
-          (check (format "idle steps draw nothing; a frame the clock asks \
-                          for draws no window (~a steps, ~a forced)" n forced)
-                 (and (> n 3) (<= 1 forced 2) (= (na) a0) (= (nb) b0))))))
-  (test-with-quiet-status
-   (lambda ()
-     (invalidate!)
-     (steps 1)   ; the quiet top bar drawn
-     (let ([a0 (na)] [b0 (nb)])
-       (invalidate!)
-       (steps 1)
-       (check "(invalidate!) draws every window again"
-              (and (= (na) (+ a0 1)) (= (nb) (+ b0 1)))))))
-  (close-window! a)
-  (close-window! b))
-
-;; An expose shows a frame again: what the window showed may be gone.
-(test-with-quiet-status
- (lambda ()
-   (let ([w (plain-window "Plain" 300 200)])
-     (after-clock-frame!)
-     (let ([frames *frames-drawn*])
-       (inject! '(expose))
-       (steps 1)
-       (check "an expose draws a frame" (= *frames-drawn* (+ frames 1))))
-     (close-window! w)
-     (steps 1))))
 
 ;; Settings: input and the full-screen switch reach it.
 (let* ([s (settings)] [st (window-ref s 'state)])
