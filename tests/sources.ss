@@ -57,10 +57,13 @@
 ;;; ------------------------------------------------------------------
 ;;; 80 columns
 
-;; The sources directly in folder.
-(define (test-files folder)
+;; The sources directly in folder: those ending in .ss, or in one of
+;; extensions.
+(define (test-files folder . extensions)
   (map (lambda (f) (string-append folder "/" f))
-       (filter (lambda (f) (string=? (path-extension f) "ss"))
+       (filter (lambda (f)
+                 (member (path-extension f)
+                         (if (null? extensions) '("ss") extensions)))
                (sort string<? (directory-list (source-path folder))))))
 
 ;; Core0's own files, src/core0/: main.ss lists them for core0 alone, and
@@ -82,6 +85,9 @@
           (test-files "tests")
           (test-files "tests/units")
           (test-files "tests/fork")
+          ;; plain R6RS, which no folder's rules but these reach: the world
+          ;; doesn't load it, import finds it
+          (test-files "lib" "sls" "sps" "ss")
           '("main.ss" "world.ss" "schevana")))
 
 (define (long-lines f)

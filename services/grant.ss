@@ -169,6 +169,7 @@
   '((boids window draw ui timers crew)
     (boids3d window draw ui timers gpu)
     (clock window draw timers)
+    (gravity-l2-simple window draw)
     (life window draw ui timers crew)))
 
 ;;; ------------------------------------------------------------------ decisions
