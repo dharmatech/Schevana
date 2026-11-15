@@ -499,3 +499,120 @@
            (for-all (lambda (c) (and (= (car c) (caddr c))
                                      (= (cadr c) (cadddr c))))
                     counts))))
+
+;;; The view's keys and commands, with no window: a view of its own over
+;;; the seed.
+
+(tasks-reset!)
+(let ([v (tasks-view-new (make-ui))])
+  (define (key! k . mods) (tasks-key v k mods))
+  (define (column status) (tasks-in status (tasks-visible v)))
+  (define (rows) (tasks-rows v (tasks-visible v)))
+  (define (place t) (tasks-index t (column (task-status t))))
+
+  (check "the Board's keys: Down selects the next card of its column; \
+          Shift+Right moves the selected task to the next status, Shift+Up \
+          up its column; Escape lets go of it"
+         (let* ([t (find-task 13)]
+                [next (cadr (memq t (column 'todo)))])
+           (tasks-select! v t)
+           (key! 'down)
+           (let ([down (tasks-view-selected v)])
+             (key! 'right 'shift)
+             (let ([status (task-status next)] [before (place next)])
+               (key! 'up 'shift)
+               (let ([after (place next)])
+                 (key! 'escape)
+                 (and (eq? down next) (eq? status 'doing)
+                      (= after (max 0 (- before 1)))
+                      (not (tasks-view-selected v))))))))
+
+  (check "v goes from the Board to the List, the Tree and the Board again; \
+          a heading sorts the List by it, then the other way, then in board \
+          order; Down twice selects its second row"
+         (begin
+           (tasks-text v "v")
+           (let* ([listed (tasks-view-mode v)]
+                  [up (begin (tasks-sort-by! v 'priority)
+                             (task-priority (car (rows))))]
+                  [down (begin (tasks-sort-by! v 'priority)
+                               (task-priority (car (rows))))]
+                  [board (begin (tasks-sort-by! v 'priority)
+                                (tasks-view-sort v))])
+             (key! 'down)
+             (key! 'down)
+             (let ([second (tasks-view-selected v)])
+               (tasks-select! v #f)
+               (tasks-text v "v")
+               (let ([tree (tasks-view-mode v)])
+                 (tasks-text v "v")
+                 (and (eq? listed 'list) (eq? up 'urgent) (eq? down 'low)
+                      (not board) (eq? second (cadr (rows)))
+                      (eq? tree 'tree) (eq? (tasks-view-mode v) 'board)))))))
+
+  (check "Clear leaves no search or filter; with Show done off there is no \
+          Done column, and Shift+Right into it selects the task next to \
+          the one moved"
+         (begin
+           (tasks-view-query-set! v "sdl")
+           (tasks-view-kind-set! v 'bug)
+           (let ([some (length (tasks-visible v))])
+             (tasks-clear-filters! v)
+             (let ([all (length (tasks-visible v))])
+               (tasks-view-done?-set! v #f)
+               (let* ([columns (map car (tasks-columns v (tasks-visible v)))]
+                      [review (column 'review)]
+                      [t (car review)] [beside (cadr review)])
+                 (tasks-select! v t)
+                 (key! 'right 'shift)
+                 (let ([status (task-status t)] [sel (tasks-view-selected v)])
+                   (tasks-clear-filters! v)
+                   (tasks-select! v #f)
+                   (and (< some all) (= all (length *tasks*))
+                        (not (tasks-filtered? v))
+                        (not (memq 'done columns)) (memq 'todo columns)
+                        (eq? status 'done) (eq? sel beside))))))))
+
+  (check "Duplicate: a copy right after it, waiting for what it waits for; \
+          Delete asks first, and deleting it selects the task next to it"
+         (let* ([t (find-task 13)] [n (length *tasks*)]
+                [c (tasks-duplicate! t)])
+           (tasks-select! v c)
+           (key! 'delete)
+           (let ([asked (eq? (tasks-view-confirm v) c)]
+                 [after (eq? (cadr (memq t *tasks*)) c)])
+             (tasks-delete! v c)
+             (let ([sel (tasks-view-selected v)])
+               (tasks-select! v #f)
+               (and after asked
+                    (equal? (task-title c)
+                            (string-append (task-title t) " (copy)"))
+                    (equal? (task-blocked-by c) (task-blocked-by t))
+                    (= (length *tasks*) n) (not (memq c *tasks*))
+                    (not (tasks-view-confirm v))
+                    sel (eq? (task-status sel) (task-status t)))))))
+
+  (check "a task done while it still waits for others says so in a toast, \
+          naming them, and so does one added done; one that waits for \
+          nothing says nothing"
+         (let ([said (lambda (thunk)
+                       (set! *toasts* '())
+                       (thunk)
+                       (let ([texts (map (lambda (x) (vector-ref x 1))
+                                         *toasts*)])
+                         (set! *toasts* '())
+                         texts))])
+           (let* ([moved (said (lambda () (move-task! 22 'done)))]
+                  [born #f]
+                  [added (said (lambda ()
+                                 (set! born (add-task! "Born done" 'status 'done
+                                                       'blocked-by '(10)))))]
+                  [free (said (lambda () (move-task! 16 'done)))])
+             (and (equal? moved
+                          '("TASK-22 is done, though it waits for TASK-14"))
+                  (equal? added
+                          (list (format "~a is done, though it waits for \
+                                         TASK-10"
+                                        (task-label born))))
+                  (null? free))))))
+(tasks-reset!)

@@ -999,6 +999,15 @@
         (tasks-sorted visible (car sort) (cdr sort))
         (tasks-sorted visible 'board 'up))))
 
+;; A press on the List's heading key: sorted by it, then the other way,
+;; then in board order again.
+(define (tasks-sort-by! v key)
+  (let ([s (tasks-view-sort v)])
+    (tasks-view-sort-set! v (cond [(not (and s (eq? (car s) key)))
+                                   (cons key 'up)]
+                                  [(eq? (cdr s) 'up) (cons key 'down)]
+                                  [else #f]))))
+
 (define (tasks-filtered? v)
   (or (not (string=? (tasks-view-query v) "")) (tasks-view-kind v)
       (tasks-view-priority v) (tasks-view-assignee v) (tasks-view-tag v)
@@ -1871,13 +1880,7 @@
                                      flags)
                                  t key today))
               'sort (tasks-view-sort v) 'reveal (tasks-view-reveal? v)
-              'on-sort (lambda (key)
-                         (let ([s (tasks-view-sort v)])
-                           (tasks-view-sort-set!
-                            v (cond [(not (and s (eq? (car s) key)))
-                                     (cons key 'up)]
-                                    [(eq? (cdr s) 'up) (cons key 'down)]
-                                    [else #f]))))
+              'on-sort (lambda (key) (tasks-sort-by! v key))
               'on-open (lambda (t) (tasks-edit-title! v))
               'tip (lambda (t)
                      (tasks-tip t (tasks-title-cut? t (tasks-title-room
