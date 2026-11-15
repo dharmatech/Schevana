@@ -327,7 +327,8 @@
      frame 1
      (wayland-shown-ns frame
                        (+ (* 1000000000 (+ (* sec-hi 4294967296) sec-lo))
-                          nsec))
+                          nsec)
+                       refresh)
      refresh)
     (core0-trace! 10 frame)
     (wayland-destroy proxy)
@@ -351,32 +352,38 @@
     (set! *wayland-used* clock))
   (uptr uptr unsigned-32))
 
-;; A report's time t, on now-ns's clock. A frame shows after it's sent, and
-;; within a second: a compositor whose times break that on the clock it
-;; says (GNOME's with NVIDIA's vblank stamps, on CLOCK_MONOTONIC_RAW) is
-;; read on the first of Linux's clocks that fits.
-(define (wayland-shown-ns frame t)
-  (let ([sent (fxvector-ref *present-ring* (fx+ (present-at frame) 2))])
-    (unless (platform-fits? t *wayland-used* (- sent 1000000)
-                            (+ sent 1000000000))
-      (let ([clock (platform-fitting t *wayland-clock* (- sent 1000000)
-                                     (+ sent 1000000000))])
+;; A report's time t, on now-ns's clock, its refresh as the screen says
+;; (ns; 0, none). A frame shows after it's sent, and its report comes after
+;; it showed, or up to a refresh before where a compositor foretells the
+;; time: a compositor whose times break that on the clock it says (GNOME's
+;; with NVIDIA's vblank stamps, on CLOCK_MONOTONIC_RAW, which runs behind
+;; the monotonic clock on one machine and ahead of it on another) is read
+;; on the first of Linux's clocks that fits.
+(define (wayland-shown-ns frame t refresh)
+  (let ([low (- (fxvector-ref *present-ring* (fx+ (present-at frame) 2))
+                1000000)])
+    (unless (platform-fits? t *wayland-used* low refresh)
+      (let ([clock (platform-fitting t *wayland-clock* low refresh)])
         (when clock
           (set! *wayland-used* clock)
           (core0-platform-read!))))
     (+ t (platform-clock-offset *wayland-used*))))
 
-;; Whether time t on clock falls from low to high on now-ns's; the first of
-;; said and Linux's clocks on which it does, or #f. Numbers alone: no
-;; allocation a report or an input.
-(define (platform-fits? t clock low high)
-  (and clock (<= low (+ t (platform-clock-offset clock)) high)))
-(define (platform-fitting t said low high)
-  (cond [(platform-fits? t said low high) said]
-        [(platform-fits? t 4 low high) 4]
-        [(platform-fits? t 1 low high) 1]
-        [(platform-fits? t 7 low high) 7]
-        [(platform-fits? t 0 low high) 0]
+;; Whether time t on clock falls, on now-ns's, from low to ahead ns after
+;; now; the first of said and Linux's clocks on which it does, or #f. Now
+;; is read after the clock's offset: a time gone by never reads as one to
+;; come, however long core0 waited between the offset's two reads. Numbers
+;; alone: no allocation a report or an input.
+(define (platform-fits? t clock low ahead)
+  (and clock
+       (let ([at (+ t (platform-clock-offset clock))])
+         (<= low at (+ (now-ns) ahead)))))
+(define (platform-fitting t said low ahead)
+  (cond [(platform-fits? t said low ahead) said]
+        [(platform-fits? t 4 low ahead) 4]
+        [(platform-fits? t 1 low ahead) 1]
+        [(platform-fits? t 7 low ahead) 7]
+        [(platform-fits? t 0 low ahead) 0]
         [else #f]))
 
 ;; An input's time, its event's ms on the compositor's clock (which wraps

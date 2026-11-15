@@ -213,6 +213,14 @@ On Wayland core0 asks the compositor to report on each frame it presents
 was dropped. On a Mac, Metal tells a drawable's presented handlers when it
 was shown. X11 and headless runs report nothing yet.
 
+A compositor says which of the system's clocks its times are on, and may
+be wrong: GNOME's over NVIDIA's driver says the monotonic clock and stamps
+on the raw one, which runs behind it on one machine and ahead on another.
+A frame shows after it's sent, and its report comes after it showed, or
+at most a refresh before, where a compositor foretells the time. A time
+that breaks that on the clock said is read on the first of the system's
+clocks under which it holds, and so are the times after it.
+
 A report's time is a stamp, and core0 doesn't take one at its word. A
 screen that refreshes steadily is a clock, and a stamp is that clock read
 late: by nothing where the display stamps its own refresh, by a kernel

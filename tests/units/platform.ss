@@ -84,28 +84,36 @@
                   (string? text) (string-prefix? "| " text))))))
 
 ;; A compositor that says CLOCK_MONOTONIC and stamps on CLOCK_MONOTONIC_RAW
-;; (GNOME's with NVIDIA's): a report's time fits after its frame was sent on
-;; one clock or the other. The two a fixed way apart here, not as the
-;; machine's are: a desktop nine hours up has raw 165 ms behind, where the
-;; time doesn't fit the clock said; a laptop an hour up, 35 ms ahead, where
-;; it does. Both are Linux's and a Mac's numbers alike.
+;; (GNOME's with NVIDIA's): a report's time fits between its frame's
+;; sending and its own coming on one clock or the other. The two a fixed
+;; way apart here, and the report read at a fixed time, not as the
+;; machine's are: a desktop nine hours up has raw 165 ms behind, a laptop
+;; an hour up 35 ms ahead. Both are Linux's and a Mac's numbers alike.
 (check "a report's time is read on the first clock under which its frame \
-        shows after it was sent: the one said, where it fits; raw, where by \
-        the one said the frame would have shown before it was sent"
-       (let* ([frame 1000003] [at (present-at frame)]
-              [apart 165000000] [shown 7000000000000]
-              [sent (- shown 16000000)])
+        shows after it was sent and no later than a refresh after the \
+        report comes: the one said, where it fits, a time foretold too; \
+        raw, where by the one said the frame would have shown before it \
+        was sent, or long after its report came"
+       (let* ([frame 1000003] [at (present-at frame)] [refresh 8333333]
+              [shown 7000000000000] [sent (- shown 16000000)]
+              [read (+ shown 2000000)]
+              [foretold (+ read (quotient refresh 2))]
+              ;; t as it's read, raw apart ns behind the clock said: the
+              ;; time on now-ns's clock, and the clock used
+              [on (lambda (apart t)
+                    (fluid-let ([platform-clock-offset
+                                 (lambda (clock) (if (eqv? clock 4) apart 0))]
+                                [core0-now-ns (lambda () read)]
+                                [*wayland-clock* 1] [*wayland-used* 1]
+                                [core0-platform-read! void])
+                      (let ([ns (wayland-shown-ns frame t refresh)])
+                        (cons ns *wayland-used*))))])
          (fxvector-set! *present-ring* at frame)
          (fxvector-set! *present-ring* (+ at 2) sent)
-         (fluid-let ([platform-clock-offset
-                      (lambda (clock) (if (eqv? clock 4) apart 0))]
-                     [*wayland-clock* 1] [*wayland-used* 1]
-                     [core0-platform-read! void])
-           (let* ([said (wayland-shown-ns frame shown)]
-                  [said-on *wayland-used*]
-                  [raw (wayland-shown-ns frame (- shown apart))])
-             (and (= said shown) (eqv? said-on 1)
-                  (= raw shown) (eqv? *wayland-used* 4))))))
+         (and (equal? (on 165000000 shown) (cons shown 1))
+              (equal? (on 165000000 foretold) (cons foretold 1))
+              (equal? (on 165000000 (- shown 165000000)) (cons shown 4))
+              (equal? (on -35000000 (+ shown 35000000)) (cons shown 4)))))
 
 ;; The offset is read from two clocks one after the other, so it's off by
 ;; the time between the reads: that, not a bound in ms, which a busy
