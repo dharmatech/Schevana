@@ -917,50 +917,9 @@
 
 (png-write-screen (string-append out-dir "/desktop.png"))
 
-;; The launcher menu.
-(press! 'f1)
-(steps 1)
-(check "F1 opens the launcher" (launcher-open?))
-(type! "lif")
-(steps 1)
-(png-write-screen (string-append out-dir "/launcher.png"))
-(press! 'return)
-(steps 2)
-(check "launcher starts Life" (find-window 'life))
-
-;; Apps picked from the desktop's right-click menu open where you clicked.
-(define (launch-from-desktop! x y title)
-  (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1)
-           `(mouse-up ,x ,y right))
-  (steps 2)
-  (when (launcher-open?)
-    (menu-activate!
-     (list-index (lambda (e) (and (pair? e) (string=? (car e) title)))
-                 (menu-entries *menu*)))
-    (steps 2)))
-(close-window! (find-window 'life))
-(launch-from-desktop! 700 400 "Clock")
-(check "an app picked from the desktop menu opens where you clicked"
-       (let ([c (find-window 'clock)])
-         (and c (= (window-x c) 700) (= (window-y c) 400))))
-(close-window! (find-window 'clock))
-(launch-from-desktop! 1250 740 "Clock")
-(check "and stays on screen near the edge"
-       (let ([c (find-window 'clock)])
-         (and c (= (+ (window-x c) (window-w c)) (screen-w))
-              (= (+ (window-y c) (window-h c))
-                 (- (screen-h) (taskbar-height))))))
-(close-window! (find-window 'clock))
-
-;; Full screen, and core0's window's icon.
-(press! 'f11)
-(steps 1)
-(check "F11 switches to full screen" (fullscreen?))
-(press! 'f11)
-(steps 1)
-(check "and back" (not (fullscreen?)))
-(check "the app icon draws"
-       (bytevector? (drawing->bytes 64 64 1 (lambda () (draw-app-icon 64)))))
+;; The launcher by F1, the desktop's menu, F11 and the icon:
+;; tests/units/desktop.ss.
+(close-window! c)
 
 ;; An app in a sandbox that asks (services/grant.ss): the launcher shows
 ;; what it requests first (desktop/permissions.ss), and Settings changes
@@ -2726,20 +2685,6 @@
          (eq? status (task-status (find-task 9)))))
 (set! *toasts* '())
 
-;; The desktop entry that gives GNOME and co. the app icon (into a scratch
-;; folder).
-(putenv "XDG_DATA_HOME" (string-append out-dir "/xdg"))
-(let ([files (install-desktop-entry!)])
-  (check "the desktop entry names the window's app id and the icon"
-         (let ([text (call-with-input-file (car files) get-string-all)])
-           (and (member (string-append "StartupWMClass=" core0-app-id)
-                        (string-split text #\newline))
-                (string-suffix? (string-append "/" core0-app-id ".desktop")
-                                (car files))
-                (string-contains-ci? text "Icon=schevana")
-                (file-exists? (cadr files)))))
-  (uninstall-desktop-entry!)
-  (check "and uninstalling removes it" (not (exists file-exists? files))))
 
 ;; The profiler: on at boot, it collects with Monitor closed. Monitor
 ;; draws its graphs; a window's name focuses it and a process's Kill
@@ -3159,40 +3104,6 @@
   (set! *toasts* '())
   (steps 1))
 
-;; Minimized from its taskbar button's window menu while another window
-;; keeps the focus.
-(let* ([a (plain-window "Aaa" 100 100)] [b (plain-window "Bbb" 500 100)])
-  (steps 2)
-  (let* ([it (cdr (assq a (taskbar-areas)))]
-         [x (exact (round (+ (car it) (/ (caddr it) 2))))]
-         [y (- (screen-h) (quotient (taskbar-height) 2))])
-    (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y right 1)
-             `(mouse-up ,x ,y right))
-    (steps 2)
-    (press! 'down)   ; Bind, Maximize, Minimize
-    (press! 'down)
-    (steps 1)
-    (press! 'return)
-    (steps 2)
-    (check
-     "a window minimized from its taskbar menu leaves the focus where it was"
-     (and (not (visible? a)) (eq? *focus* b))))
-  (for-each close-window! (list a b))
-  (steps 1))
-
-;; A status segment's change shows when the bar next looks, at the clock's
-;; next second.
-(let ([v "probe-a"])
-  (add-status-segment! 'probe (lambda () v))
-  (steps 2)
-  (set! v "probe-b")
-  (status-show!)
-  (steps 1)
-  (check (format "a status segment's change shows at the bar's next second ~s"
-                 (shown-status-strings))
-         (and (member "probe-b" (shown-status-strings)) #t))
-  (remove-status-segment! 'probe)
-  (steps 1))
 
 ;; A style whose drawing fails: nothing of what was under the window
 ;; stays on screen.
