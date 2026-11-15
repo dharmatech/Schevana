@@ -305,11 +305,11 @@
 
 ;; A flock as a list of (x y vx vy), and the flocking the obvious way on
 ;; such lists, rule by rule, the flonum operations in the Niva version's
-;; order: the reference, to the last digit, for Boids, Boids (clear) and
-;; Boids (simple). Its rules are plain procedures to read; Boids' and
-;; Boids (clear)'s are one loop over flat numbers, for the crew, and
-;; Boids (simple)'s are procedures over records. rules is a plist, as the
-;; apps' are.
+;; order: the reference, to the last digit, for Boids, Boids (clear),
+;; Boids (simple) and Boids L3 (simple). Its rules are plain procedures to
+;; read; Boids' and Boids (clear)'s are one loop over flat numbers, for the
+;; crew, Boids (simple)'s procedures over records, and Boids L3 (simple)'s
+;; worklets over pairs. rules is a plist, as the apps' are.
 (define (ref-rule rules key) (cadr (memq key rules)))
 (define (ref-flock flock)
   (let loop ([l (flvector->list flock)] [acc '()])

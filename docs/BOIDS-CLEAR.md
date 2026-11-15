@@ -15,16 +15,18 @@ Two things keep each attempt honest:
 - `tests/units/boids-clear.ss` checks every step against the reference
   flock in `tests/units.ss` to the last digit, and against Boids' own
   steps number for number (2,000 boids, 30 frames, the heaviest rules
-  too). `tests/units/boids-simple.ss` does the same for Boids (simple),
-  on smaller flocks.
+  too). `tests/units/boids-simple.ss` and `tests/units/boids-l3-simple.ss`
+  do the same for Boids (simple) and Boids L3 (simple), on smaller
+  flocks.
 - `tests/bench-boids-clear.ss` times both on the same flocks, in
   alternating rounds, and prints the medians and their ratio. Boids
-  timed against itself gives 1.00. Boids (simple)'s rows come last,
-  against Boids too.
+  timed against itself gives 1.00. The grid's rows come last: Boids
+  (simple), Boids L3 (simple) and Boids, alone and on the crew.
 
 ```
 scheme --script tests/units.ss out boids-clear
 scheme --script tests/units.ss out boids-simple
+scheme --script tests/units.ss out boids-l3-simple
 scheme --script tests/bench-boids-clear.ss out
 ```
 
@@ -251,6 +253,99 @@ the last digit.
 
 The crew and the GPU don't need a sandbox: an app in the world uses them
 too. What a sandbox decides is what is in reach.
+
+## The grid, and a name for each place
+
+A version has a place on two axes: its level, what its step may reach
+(above), and how its step is written:
+
+- **simple**: the first port's way. A flock is a list, vecs and boids
+  are small structures, each rule is a procedure, and every vec is new.
+- **flat**: numbers side by side in an flvector, by hand, and one loop
+  over every pair.
+- **clear**: flat underneath, written over with names and vecs by
+  macros (T1 and T2, below).
+
+So a name gives both: "Boids L", the level, and the way in
+parentheses. Boids L3 (simple) is level 3 written simple; "L" keeps the
+level from reading as Boids 3D's 3. It is the first named so. The others
+keep their names for now, and would be Boids L2 (simple), Boids L3
+(flat) and Boids L3 (clear):
+
+| | simple | flat | clear |
+|---|---|---|---|
+| L2, a sandbox | Boids (simple) | (Boids, its threads at 0) | |
+| L3, the crew | Boids L3 (simple) | Boids | Boids (clear) |
+| L4, the GPU | none can be | (Boids 3D, another sim) | |
+
+A shader has no lists or procedures as values, so the GPU's row has no
+simple version. Boids with its threads at 0 runs as a flat level 2
+would, though it asks for the crew.
+
+### Boids L3 (simple): the simple step on the crew
+
+**What.** `apps/boids-l3-simple.ss` is Boids (simple)'s sim with what
+the crew asks of it, and no more:
+
+- A vec is a pair, `(x . y)`, and a boid a pair of them, `(position .
+  velocity)`: of what it is handed, a worklet opens pairs, vectors and
+  boxes, not records.
+- Each procedure the step calls is a worklet, `define-worklet` for
+  `define`, defined before those that call it: a worklet reaches no name
+  but other worklets'.
+- So the zero vec is a worklet, `(vec-zero)`, pi is written out (the
+  world's is out of reach), and `boids-rule` raises with R6RS's `error`.
+- `boids-step` hands the crew a chunk of boids a call,
+  `boids-steer-slice!`, which writes each one's next state into a vector.
+  The speed limits and the wrap stay on core1, as plain procedures.
+
+The rest reads as Boids (simple) does: `boid-neighbors` with `filter`,
+`vec-mean`, the `fold-left` of the pushes. Its rules window is Boids',
+the threads row too. `tests/units/boids-l3-simple.ss` checks it against
+the reference, on the crew and on the caller alone, and against Boids'
+own steps, Boids' pixels, its keys, and a step at its cap on the crew.
+
+**Speed.** One run of the bench, ms a step with the wrap, on this
+thread alone and on the crew of 8 and the caller ("simple" is Boids
+(simple)):
+
+| boids | rules | simple | L3 alone | L3 crew | Boids alone | Boids crew |
+|---|---|---|---|---|---|---|
+| 150 | default | 1.74 | 1.65 | 0.47 | 0.19 | 0.19 |
+| 450 | default | 15.5 | 13.8 | 2.59 | 1.59 | 0.42 |
+| 1,000 | default | 78.3 | 66.0 | 12.7 | 7.72 | 1.46 |
+| 150 | heaviest | 3.64 | 3.36 | 0.86 | 0.30 | 0.30 |
+| 450 | heaviest | 32.2 | 29.4 | 5.71 | 2.67 | 0.64 |
+| 1,000 | heaviest | 162 | 142 | 26.5 | 12.7 | 2.03 |
+
+- **The layout and the threads multiply.** On one thread, flat is 8.6
+  and 11 times as fast as simple at 1,000 boids (L3 alone against Boids
+  alone). On the crew, each gains about 5 times there: L3 5.2 and 5.4,
+  Boids 5.3 and 6.2. Together, Boids on the crew is 54 and 80 times as
+  fast as Boids (simple).
+- **Allocating costs the crew less than feared.** A step makes 56 MB at
+  1,000 boids under the default rules and 144 MB under the heaviest,
+  which stops every thread for each collection, and still gains about
+  what Boids does, which allocates 97 KB. At 450 it gains more than
+  Boids does, 5.3 times to 3.8: Boids' steps there are short enough for
+  the crew's own costs to show. At 150, Boids' flock is one chunk, run on
+  the caller.
+- **Pairs and worklets cost less than records**: on one thread, L3 is 5
+  to 16% faster than Boids (simple), and makes the same garbage.
+- **The crew walks what it is handed**, for procedures that aren't
+  worklets: a flock as lists is walked every step, 0.36 ms at 1,000
+  boids, where Boids' flvector isn't.
+
+In a window, a frame turn holds collections off till its frame is sent
+(`src/core1/system.ss`), so a step's garbage piles up first; the bench
+collects as it goes.
+
+**Its cap.** 1,000 boids. On core1 the crew gives a step 100 ms, then
+cancels it and raises, which crashes the window (`services/crew.ss`).
+2,000 boids under the heaviest rules run past that on the crew of 8;
+1,000 take 26 ms there and 78 on a crew of one. With no crew the step
+runs on core1, as Boids (simple)'s does, with the handler's fuel alone:
+142 ms at 1,000 under the heaviest rules, slow but whole.
 
 ## What the flat step costs a reader
 

@@ -1,0 +1,637 @@
+;;; apps/boids-l3-simple.ss — Boids L3 (simple): Boids (simple)'s step,
+;;; as the first port wrote it, on the crew. In docs/BOIDS-CLEAR.md's terms
+;;; it is level 3, worker threads, written simple, as at level 2: a flock
+;;; as a list, a procedure for each rule. Boids (simple) is level 2 written
+;;; so, and Boids level 3 written flat. All three step the same flock to the
+;;; last digit.
+;;;
+;;; What the crew asks of it: a worker runs only worklets, which reach no
+;;; name but other worklets' and open pairs, vectors and boxes but no
+;;; records. So a vec is a pair and a boid a pair of vecs, each procedure
+;;; the step calls is a worklet, and the zero vec and pi are a worklet and a
+;;; number. What it can't keep is the crew's rule for speed, that a call
+;;; allocates nothing: every vec here is new, and each collection stops
+;;; every thread.
+;;;
+;;; Boids is Craig Reynolds' flocking simulation (1987), ported from Boids
+;;; in Niva (github.com/dharmatech/boids-niva), which was in turn inspired
+;;; by Boids in Aloe, a Lisp whose kernel is sending a message
+;;; (github.com/dharmatech/2026-09-02-aloe-racket). Besides Reynolds' three
+;;; rules (cohesion, alignment, separation), two react to blockers, boids
+;;; close and straight ahead: clear view steps aside, back off steps away.
+;;; They come from Gary William Flake's "The Computational Beauty of
+;;; Nature" (MIT Press, 1998), written from his description, not copied
+;;; from his (GPL) source.
+;;;
+;;; The simulation is pure: a flock is a list of boids, and a step makes a
+;;; new one, a chunk of its boids a call of the crew. The window keeps the
+;;; flock and its rules, as plain data:
+;;; (boid-position (car (window-ref win 'flock)))   => (451.2 . 87.0)
+;;; (window-set! win 'rules (boids-random-rules))
+;;; R: random rules · D: the defaults · S: scatter · Space: pause
+;;; H: the rules window, beside the flock (it closes with the flock)
+;;;
+;;; It runs in a sandbox (services/grant.ss), where the names above are: a
+;;; REPL in /apps/boids-l3-simple has them.
+
+(app-requests window draw ui timers crew)
+
+;;; ------------------------------------------------------------------ vectors
+;;; What a worker runs is a worklet: it reaches only other worklets, and of
+;;; what it is handed it opens pairs, vectors and boxes, not records. So a
+;;; vec is a pair, and every procedure the step calls is a worklet, defined
+;;; before the worklets that call it.
+
+;; A 2D vector of flonums: a position, a velocity or a push, as (x . y).
+(define-worklet (make-vec x y) (cons x y))
+(define-worklet (vec-x v) (car v))
+(define-worklet (vec-y v) (cdr v))
+
+;; A worklet names no value but a worklet, so the zero vec is one's.
+(define-worklet (vec-zero) '(0.0 . 0.0))
+
+(define-worklet (vec+ a b)
+  (make-vec (+ (vec-x a) (vec-x b)) (+ (vec-y a) (vec-y b))))
+(define-worklet (vec- a b)
+  (make-vec (- (vec-x a) (vec-x b)) (- (vec-y a) (vec-y b))))
+(define-worklet (vec* v k) (make-vec (* (vec-x v) k) (* (vec-y v) k)))
+(define-worklet (vec/ v k) (make-vec (/ (vec-x v) k) (/ (vec-y v) k)))
+
+(define-worklet (vec-dot a b)
+  (+ (* (vec-x a) (vec-x b)) (* (vec-y a) (vec-y b))))
+
+;; The squared distance, so neighbor checks need no square root. Every
+;; pair of boids is checked, so it is worked out on the components, in
+;; flonums: a vec for the difference, and the flonums Chez boxes for it,
+;; were most of what a step allocated (99 MB at 500 boids).
+(define-worklet (vec-dist2 a b)
+  (let ([dx (fl- (vec-x a) (vec-x b))] [dy (fl- (vec-y a) (vec-y b))])
+    (fl+ (fl* dx dx) (fl* dy dy))))
+
+;; The centroid of a non-empty list of points.
+(define-worklet (vec-mean vs)
+  (vec/ (fold-left vec+ (vec-zero) vs) (inexact (length vs))))
+
+;;; ------------------------------------------------------------------ boids
+
+;; One bird: where it is and where it's heading, as (position . velocity).
+(define-worklet (make-boid position velocity) (cons position velocity))
+(define-worklet (boid-position b) (car b))
+(define-worklet (boid-velocity b) (cdr b))
+
+;; Other is in b's field of view: fov degrees wide, centered on b's
+;; heading. A boid standing still sees everything. pi is written out: the
+;; world's, (* 4 (atan 1)), is out of a worklet's reach.
+(define-worklet (boid-sees? b other fov)
+  (let* ([v (boid-velocity b)] [h2 (vec-dot v v)])
+    (or (= h2 0.0) (>= fov 360.0)
+        (let* ([to-other (vec- (boid-position other) (boid-position b))]
+               [lengths (sqrt (* h2 (vec-dot to-other to-other)))]
+               [half-angle (/ (* (/ fov 2.0) 3.141592653589793) 180.0)])
+          (> (vec-dot v to-other) (* (cos half-angle) lengths))))))
+
+;; The boids in flock that b can see closer than r, not counting itself.
+(define-worklet (boid-neighbors b flock r fov)
+  (let ([r2 (* r r)])
+    (filter (lambda (other)
+              (let ([d2 (vec-dist2 (boid-position b) (boid-position other))])
+                (and (> d2 0.0) (< d2 r2) (boid-sees? b other fov))))
+            flock)))
+
+;; The rules' raw pushes. boid-steer weighs them and adds them up.
+
+;; Toward the center of the neighbors.
+(define-worklet (boid-cohere b others)
+  (if (null? others)
+      (vec-zero)
+      (vec- (vec-mean (map boid-position others)) (boid-position b))))
+
+;; Toward the neighbors' average velocity.
+(define-worklet (boid-align b others)
+  (if (null? others)
+      (vec-zero)
+      (vec- (vec-mean (map boid-velocity others)) (boid-velocity b))))
+
+;; Away from every boid in flock closer than r, seen or not: you feel a
+;; bump from behind.
+(define-worklet (boid-separate b flock r)
+  (let ([p (boid-position b)] [r2 (* r r)])
+    (fold-left (lambda (sum other)
+                 (let ([d2 (vec-dist2 p (boid-position other))])
+                   (if (and (> d2 0.0) (< d2 r2))
+                       (vec+ sum (vec- p (boid-position other)))
+                       sum)))
+               (vec-zero) flock)))
+
+;; A unit step sideways out from behind each blocker: square to the line
+;; between them, on the side b is heading.
+(define-worklet (boid-step-aside b blockers)
+  (let ([p (boid-position b)] [v (boid-velocity b)])
+    (fold-left (lambda (sum other)
+                 (let* ([away (vec- p (boid-position other))]
+                        [d (sqrt (vec-dot away away))]
+                        [quarter-turn (make-vec (- 0.0 (vec-y away))
+                                                (vec-x away))]
+                        [side (if (< (vec-dot v quarter-turn) 0.0)
+                                  (vec* quarter-turn -1.0)
+                                  quarter-turn)])
+                   (vec+ sum (vec/ side d))))
+               (vec-zero) blockers)))
+
+;; A unit step straight away from each blocker.
+(define-worklet (boid-back-off b blockers)
+  (let ([p (boid-position b)])
+    (fold-left (lambda (sum other)
+                 (let* ([away (vec- p (boid-position other))]
+                        [d (sqrt (vec-dot away away))])
+                   (vec+ sum (vec/ away d))))
+               (vec-zero) blockers)))
+
+(define-worklet (boid-advance b velocity)
+  (make-boid (vec+ (boid-position b) velocity) velocity))
+
+;;; ------------------------------------------------------------------ rules
+
+;; The flocking rules, as a plist. Each rule has a weight (how hard it
+;; steers) and a radius (how far a boid looks for it). view-angle is the
+;; field of view in degrees, centered on the heading: 180 sees only
+;; ahead, 360 all around. Blockers are boids closer than blocker-radius
+;; inside a cone straight ahead, blocker-cone degrees wide.
+;;
+;; The speed limits belong to the screen, not the sim (boids-step leaves
+;; them out). With view-angle 180, cohesion pulls stragglers forward and
+;; nothing pulls the leaders back, so speed grows without bound: classic
+;; boids cap it. Back off, unchecked, brakes boids almost to a standstill:
+;; Flake's boids keep a minimum speed.
+;;
+;; These are the original settings: see only ahead, barely any
+;; separation, and the blocker rules off (their radius and cone are
+;; Flake's).
+(define boids-default-rules
+  '(cohesion 0.01
+    cohesion-radius 50.0
+    alignment 0.05
+    alignment-radius 50.0
+    separation 0.001
+    separation-radius 5.0
+    view-angle 180.0
+    clear-view 0.0
+    back-off 0.0
+    blocker-radius 40.0
+    blocker-cone 90.0
+    min-speed 1.0
+    max-speed 4.0))
+
+;; With memq, as Boids has it, and a worklet: the step reads the rules.
+(define-worklet (boids-rule rules key)
+  (let ([at (memq key rules)])
+    (if at (cadr at) (error 'boids-rule "no rule" key))))
+
+;; Each rule's range, in the order the rules window shows them. A weight
+;; starts at 0, and its useful values span orders of magnitude.
+(define boids-ranges
+  '((cohesion 0.0 0.2 weight)
+    (cohesion-radius 0.0 200.0)
+    (alignment 0.0 1.0 weight)
+    (alignment-radius 0.0 200.0)
+    (separation 0.0 1.0 weight)
+    (separation-radius 0.0 50.0)
+    (view-angle 0.0 360.0)
+    (clear-view 0.0 1.0 weight)
+    (back-off 0.0 1.0 weight)
+    (blocker-radius 0.0 100.0)
+    (blocker-cone 0.0 180.0)
+    (min-speed 0.0 5.0)
+    (max-speed 0.5 10.0)))
+
+;; Rules picked at random within their ranges. A weight is picked on a
+;; cube, so that small ones come up about as often as they would on a
+;; log scale. Max speed comes after min speed and is picked from it up,
+;; so the two never cross.
+(define (boids-random-rules)
+  (fold-left
+   (lambda (rules range)
+     (apply (lambda (key lo hi . weight)
+              (let* ([lo (if (eq? key 'max-speed)
+                             (max lo (boids-rule rules 'min-speed))
+                             lo)]
+                     [r (random 1.0)]
+                     [t (if (null? weight) r (* r r r))])
+                (append rules (list key (+ lo (* t (- hi lo)))))))
+            range))
+   '() boids-ranges))
+
+;; Rules with key's value v, the others as they were. Min and max speed
+;; can't cross: setting one past the other pushes the other along.
+(define (boids-set-rule rules key v)
+  (define (with rules key v)
+    (cond [(null? rules) (errorf 'boids-set-rule "no rule ~s" key)]
+          [(eq? (car rules) key) (cons* key v (cddr rules))]
+          [else (cons* (car rules) (cadr rules) (with (cddr rules) key v))]))
+  (let ([rules (with rules key v)])
+    (case key
+      [(min-speed) (if (> v (boids-rule rules 'max-speed))
+                       (with rules 'max-speed v)
+                       rules)]
+      [(max-speed) (if (< v (boids-rule rules 'min-speed))
+                       (with rules 'min-speed v)
+                       rules)]
+      [else rules])))
+
+;;; ------------------------------------------------------------------ flocks
+
+;; b's next state, given everyone's current state.
+(define-worklet (boid-steer b flock rules)
+  (define (rule key) (boids-rule rules key))
+  (define (seen radius fov) (boid-neighbors b flock (rule radius) fov))
+  ;; a rule's push times its weight, worked out only for a weight
+  (define (push weight thunk)
+    (let ([w (rule weight)]) (if (= w 0.0) (vec-zero) (vec* (thunk) w))))
+  (let* ([fov (rule 'view-angle)]
+         ;; blockers are in a cone ahead: a boid can't react to what it
+         ;; can't see
+         [cone (min (rule 'blocker-cone) fov)])
+    (boid-advance b
+      (fold-left vec+ (boid-velocity b)
+        (list (push 'cohesion
+                    (lambda () (boid-cohere b (seen 'cohesion-radius fov))))
+              (push 'alignment
+                    (lambda () (boid-align b (seen 'alignment-radius fov))))
+              (push 'separation
+                    (lambda ()
+                      (boid-separate b flock (rule 'separation-radius))))
+              (push 'clear-view
+                    (lambda ()
+                      (boid-step-aside b (seen 'blocker-radius cone))))
+              (push 'back-off
+                    (lambda ()
+                      (boid-back-off b (seen 'blocker-radius cone)))))))))
+
+;; Boids [lo, hi) of boids, the flock as a vector, each steered by
+;; everyone's current state into next.
+(define-worklet (boids-steer-slice! lo hi boids flock rules next)
+  (do ([i lo (fx+ i 1)]) ((fx= i hi))
+    (vector-set! next i (boid-steer (vector-ref boids i) flock rules))))
+
+;; Boids a call of the crew: at least this many pairs, about 130 µs, as a
+;; pair costs about eight times what it does in Boids (from 500 to 8,000,
+;; a step's time hardly moves). So a small flock runs on the caller alone,
+;; where waking the crew would cost more than it gives.
+(define boids-chunk-pairs 2000)
+
+(define (boids-chunk n) (max 1 (quotient boids-chunk-pairs (max n 1))))
+
+;; The next flock: every boid steered by the same current state, a chunk
+;; of them a call of the crew.
+(define (boids-step flock rules)
+  (let* ([boids (list->vector flock)]
+         [n (vector-length boids)]
+         [next (make-vector n)])
+    (crew-for* (boids-chunk n) 0 n boids-steer-slice! boids flock rules next)
+    (vector->list next)))
+
+;; Three boids close together, for the tests and the REPL:
+;; (boids-step boids-demo boids-default-rules)
+(define boids-demo
+  (list (make-boid (make-vec 0.0 0.0) (make-vec 1.0 0.0))
+        (make-boid (make-vec 1.0 1.0) (make-vec 0.0 1.0))
+        (make-boid (make-vec 2.0 0.0) (make-vec 1.0 1.0))))
+
+;;; ------------------------------------------------------------------ screen
+
+(define (boid-speed-at-least b lo)
+  (let* ([v (boid-velocity b)] [s2 (vec-dot v v)])
+    ;; standing still, it has no heading, so it stays put
+    (if (and (> s2 0.0) (< s2 (* lo lo)))
+        (make-boid (boid-position b) (vec* v (/ lo (sqrt s2))))
+        b)))
+
+(define (boid-speed-at-most b hi)
+  (let* ([v (boid-velocity b)] [s2 (vec-dot v v)])
+    (if (> s2 (* hi hi))
+        (make-boid (boid-position b) (vec* v (/ hi (sqrt s2))))
+        b)))
+
+;; Leaving one edge of a w × h screen brings b back on the opposite edge.
+(define (boid-wrap b w h)
+  (let ([p (boid-position b)])
+    (make-boid (make-vec (mod (vec-x p) w) (mod (vec-y p) h))
+               (boid-velocity b))))
+
+;; One frame on a w × h screen: a sim step, then the speed limits and
+;; the wrap.
+(define (boids-step-on flock rules w h)
+  (let ([lo (boids-rule rules 'min-speed)] [hi (boids-rule rules 'max-speed)]
+        [w (inexact w)] [h (inexact h)])
+    (map (lambda (b)
+           (boid-wrap (boid-speed-at-most (boid-speed-at-least b lo) hi) w h))
+         (boids-step flock rules))))
+
+;; n boids scattered over a w × h screen, moving in random directions.
+(define (boids-scatter n w h)
+  (map (lambda (i)
+         (make-boid (make-vec (random (inexact w)) (random (inexact h)))
+                    (make-vec (- (random 4.0) 2.0) (- (random 4.0) 2.0))))
+       (iota n)))
+
+;; n boids: the first n of flock, or all of it and random newcomers.
+(define (boids-resize flock n w h)
+  (let ([have (length flock)])
+    (if (<= n have)
+        (list-head flock n)
+        (append flock (boids-scatter (- n have) w h)))))
+
+;;; ------------------------------------------------------------------ the app
+
+;; How often the flock steps, in ms: about 60 times a second, however
+;; often the window ticks.
+(define boids-step-ms 15)
+
+(define boids-count 150)   ; how many a new window starts with
+
+(define (boids-bar-height) (max 26 (round (+ (font-line-height 'ui-small) 13))))
+
+;; The status line under the flock.
+(define (boids-status-text n step-ms running?)
+  (format "~a boids   ~a   r random · d defaults · s scatter · h rules · \
+           space pause"
+          n (if running? (format "~,1f ms a step" step-ms) "paused")))
+
+;; The flock's field in win: its content above the status line.
+(define (boids-field-size win)
+  (let-values ([(w h) (window-content-size win)])
+    (values w (max 1 (- h (boids-bar-height))))))
+
+;; What the keys and the rules window's buttons do to the flock in win.
+(define (boids-randomize! win) (window-set! win 'rules (boids-random-rules)))
+(define (boids-defaults! win) (window-set! win 'rules boids-default-rules))
+
+(define (boids-scatter! win)
+  (let-values ([(w h) (boids-field-size win)])
+    (window-set! win 'flock
+      (boids-scatter (length (window-ref win 'flock)) w h))))
+
+(define (boids-resize! win n)
+  (let-values ([(w h) (boids-field-size win)])
+    (window-set! win 'flock (boids-resize (window-ref win 'flock) n w h))))
+
+;; A dot, with a line toward where it's heading.
+(define (draw-boid b)
+  (let* ([p (boid-position b)] [tip (vec+ p (vec* (boid-velocity b) 4.0))])
+    (draw-line (vec-x p) (vec-y p) (vec-x tip) (vec-y tip) 'red 2)
+    (fill-circle (vec-x p) (vec-y p) 3 'yellow)))
+
+(define-app (boids-l3-simple) "Boids L3 (simple)"
+  (let ([w 760] [h 520]
+        [running? #t] [last-step 0]
+        [step-ms 0.0]      ; a step's time, smoothed
+        [rules-win #f])    ; the rules window, while it is open
+    (define (step! win)
+      (let-values ([(w h) (boids-field-size win)])
+        (let ([t0 (now-ns)])
+          (window-set! win 'flock
+            (boids-step-on (window-ref win 'flock) (window-ref win 'rules)
+                           w h))
+          ;; one step's time jumps around (collections): over about 20
+          (set! step-ms (+ (* step-ms 0.95)
+                           (* (/ (- (now-ns) t0) 1e6) 0.05))))))
+    (define (toggle-rules! win)
+      (if rules-win
+          (close-window! rules-win)
+          (set! rules-win
+                (boids-open-rules win (lambda () (set! rules-win #f))))))
+    (let ([win
+           (open-window "Boids L3 (simple)"
+             'size (cons w (+ h (boids-bar-height)))
+             'flock (boids-scatter boids-count w h)
+             'rules boids-default-rules
+             'open (lambda (win) (window-frame-soon! win))
+             'frame (lambda (win t)
+                      (window-frame-soon! win)
+                      (when (and running?
+                                 (>= (- t last-step) (* boids-step-ms 1000000)))
+                        (set! last-step t)
+                        (step! win)))
+             'draw (lambda (win w h)
+                     (let ([bar (boids-bar-height)]
+                           [flock (window-ref win 'flock)])
+                       (fill-box 0 0 w (- h bar) 'bg-0)
+                       (for-each draw-boid flock)
+                       (fill-box 0 (- h bar) w bar 'bg-1)
+                       (draw-text 10 (+ (- h bar) 5)
+                                  (boids-status-text (length flock) step-ms
+                                                     running?)
+                                  'text-faint 'ui-small)))
+             'key (lambda (win key mods)
+                    (case key
+                      [(#\r) (boids-randomize! win)]
+                      [(#\d) (boids-defaults! win)]
+                      [(#\s) (boids-scatter! win)]
+                      [(#\h) (toggle-rules! win)]
+                      [(#\space) (set! running? (not running?))])
+                    (invalidate! win))
+             'close (lambda (win) (when rules-win (close-window! rules-win))))])
+      ;; the rules show at first, as Niva's panel does. Moved to fit on
+      ;; the desktop, they'd cover the flock: it moves left to clear them.
+      (toggle-rules! win)
+      (let-values ([(dx dy dw dh) (desktop-rect)])
+        (let ([short (- (+ (window-x win) (window-w win) 12)
+                        (window-x rules-win))])
+          (when (> short 0)
+            (move-window! win (max dx (- (window-x win) short))
+                          (window-y win)))))
+      (focus-window! win)   ; the flock has the keyboard
+      win)))
+
+;;; ------------------------------------------------------------------
+;;; the rules window
+;;; A slider for the count, for the crew's threads and for each rule, and the
+;;; keys' buttons. It reads and sets the flock window's properties, so it shows
+;;; them as they are, whoever changed them: a key, a button or the REPL.
+
+;; A step's cost grows as the count squared, and so does its garbage. At
+;; 1,000, measured here, a step takes 13 ms on the crew of 8 with the
+;; default rules and 26 with the heaviest (both blocker rules, 360°, radii
+;; of 200), and makes 56 and 143 MB; on a thread alone, 65 and 136 ms,
+;; the crew 5 times as fast, as for Boids, though each collection stops
+;; every thread. Past 1,000 the crew runs out of time: on core1, a step
+;; still running after 100 ms is cancelled, and its window crashes
+;; (services/crew.ss). 2,000 boids under the heaviest rules are, on the
+;; crew of 8; 1,000 take 78 ms on a crew of one.
+(define boids-max-count 1000)
+
+;; A rule's name as its row shows it: cohesion-radius as cohesion radius.
+(define (boids-setting-label key)
+  (list->string (map (lambda (c) (if (char=? c #\-) #\space c))
+                     (string->list (symbol->string key)))))
+
+(define (boids-weight? range) (pair? (cdddr range)))
+
+;; Where v sits on range's slider, from 0 to 1, and back. A weight's
+;; slider is a cube: its middle is an eighth of its top, so the small
+;; weights that matter get most of it, as on Niva's log slider.
+(define (boids-slider-t range v)
+  (let ([t (/ (- v (cadr range)) (- (caddr range) (cadr range)))])
+    (if (boids-weight? range) (expt (max t 0.0) 1/3) t)))
+
+(define (boids-slider-value range t)
+  (+ (cadr range)
+     (* (- (caddr range) (cadr range))
+        (if (boids-weight? range) (* t t t) t))))
+
+;; A rule's value as its row shows it.
+(define (boids-readout range v)
+  (case (car range)
+    [(min-speed max-speed) (format "~,1f" v)]
+    [(view-angle blocker-cone) (format "~a°" (exact (round v)))]
+    [else (if (boids-weight? range)
+              (format "~,4f" v)
+              (format "~a" (exact (round v))))]))
+
+(define (boids-label-width)
+  (+ 12 (text-widest (cons* "boids" "threads"
+                            (map (lambda (r) (boids-setting-label (car r)))
+                                 boids-ranges))
+                     'ui)))
+
+(define (boids-readout-width)
+  (+ 12 (text-widest '("0.0000" "1 of 48") 'ui)))
+
+;; The threads a step of n boids uses, as its row shows them: one while a
+;; step is one call of the crew.
+(define (boids-threads-readout n)
+  (let ([threads (+ 1 (crew-size))])
+    (if (or (<= n (boids-chunk n)) (= threads 1))
+        (if (= threads 1) "1" (format "1 of ~a" threads))
+        (number->string threads))))
+
+(define boids-buttons
+  '("Randomize (R)"
+    "Defaults (D)"
+    "Scatter (S)"))
+
+;; As wide as the widest label's button, in the style's own.
+(define (boids-button-width)
+  (apply max (map (lambda (label)
+                    (let-values ([(w h) (ui-button-size label #f)]) w))
+                  boids-buttons)))
+
+;; The rules window's content size: room for its rows (as
+;; boids-draw-rules lays them out), with sliders 140 wide, and for three
+;; buttons as wide as the widest label.
+(define (boids-rules-size)
+  (let ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)])
+    (values (+ pad pad
+               (max (+ (boids-label-width) 140 (boids-readout-width))
+                    (+ (* 3 (boids-button-width)) (* 2 gap))))
+            (+ pad (* 2 (+ sh gap)) (+ (ui-control-height) (* 3 gap))
+               (* (length boids-ranges) (+ sh gap))
+               gap (font-line-height 'ui-small) pad))))
+
+;; The rows, top to bottom: the count, the threads, the buttons, a slider
+;; for each rule, and a hint. Returns the y below them.
+(define (boids-draw-rules ui flock-win w)
+  (let* ([pad (ui-pad)] [gap (ui-gap)] [sh (ui-slider-height)]
+         [lw (boids-label-width)] [rw (boids-readout-width)]
+         [rules (window-ref flock-win 'rules)]
+         [n (length (window-ref flock-win 'flock))])
+    (define (row y id label t readout set . tip)
+      (ui-draw-label pad y lw sh '(dim) label)
+      (ui-slider ui id (+ pad lw) y (- w pad lw rw pad) t 0.0 1.0 set #f
+                 'tip (and (pair? tip) (car tip)))
+      (ui-draw-label (- w pad rw) y rw sh '(right) readout)
+      (+ y sh gap))
+    (let* ([y (row pad 'count "boids"
+                   (/ (- n 10) (- boids-max-count 10.0))
+                   (number->string n)
+                   (lambda (t)
+                     (boids-resize! flock-win
+                       (exact (round (+ 10 (* t (- boids-max-count 10))))))))]
+           ;; the crew's, for every app; the caller makes one more
+           [y (let ([most (- (max 2 (platform-cpu-count)) 1)])
+                (row y 'threads "threads"
+                     (/ (crew-size) (inexact most))
+                     (boids-threads-readout n)
+                     (lambda (t) (crew-size-set! (exact (round (* t most)))))
+                     "The threads a step runs on: the crew's, which every \
+                      app shares"))]
+           [y (let ([bw (/ (- w pad pad gap gap) 3)] [ch (ui-control-height)])
+                (for-each (lambda (i label id act!)
+                            (ui-button ui id (+ pad (* i (+ bw gap))) y bw ch
+                                       label (lambda () (act! flock-win))))
+                          '(0 1 2) boids-buttons '(randomize defaults scatter)
+                          (list boids-randomize! boids-defaults!
+                                boids-scatter!))
+                (+ y ch (* 3 gap)))]
+           [y (fold-left
+               (lambda (y range)
+                 (let* ([key (car range)] [v (boids-rule rules key)])
+                   (row y key (boids-setting-label key)
+                        (boids-slider-t range v) (boids-readout range v)
+                        ;; the rules as they are then, not as drawn
+                        (lambda (t)
+                          (window-set! flock-win 'rules
+                            (boids-set-rule (window-ref flock-win 'rules) key
+                                            (boids-slider-value range t)))))))
+               y boids-ranges)])
+      (ui-draw-label pad (+ y gap) (- w pad pad) (font-line-height 'ui-small)
+                     '(hint) "h hides this window · space pauses")
+      (+ y gap (font-line-height 'ui-small) pad))))
+
+;; Opens the rules window for the flock in flock-win, beside it, and
+;; returns it; on-close is called when it closes. Its keys are the
+;; flock's.
+(define (boids-open-rules flock-win on-close)
+  (let ([ui (make-ui)]
+        [shown #f])   ; the rules, the count and the threads it last drew
+    (define (now-shown)
+      (list (window-ref flock-win 'rules)
+            (length (window-ref flock-win 'flock))
+            (crew-size)))
+    (let-values ([(w h) (boids-rules-size)])
+      (let ([win
+             (apply open-window "Boids L3 (simple) — Rules"
+                    'size (cons w h)
+                    'pos (cons (+ (window-x flock-win) (window-w flock-win) 12)
+                               (window-y flock-win))
+                    'app #f
+                    'draw (lambda (win w h)
+                            (set! shown (now-shown))
+                            (ui-begin! ui)
+                            (ui-draw-surface 0 0 w h '(page))
+                            (boids-draw-rules ui flock-win w)
+                            (ui-end! ui w h))
+                    'close (lambda (win) (on-close))
+                    (append
+                     (ui-handlers ui 'key (lambda (win key mods)
+                                            (window-call flock-win 'key key
+                                                         mods)
+                                            #t))
+                     ;; a change from elsewhere shows, and fonts grown in
+                     ;; Settings get room for the rows
+                     (list 'open (lambda (win) (window-frame-soon! win))
+                           'frame (lambda (win t)
+                                   (window-frame-soon! win)
+                                   (ui-frame ui win)
+                                   (let-values ([(w h) (boids-rules-size)])
+                                     (boids-grow-to! win w h))
+                                   (unless (equal? shown (now-shown))
+                                     (invalidate! win))))))])
+        (boids-keep-on-desktop! win)
+        win))))
+
+;; Grows win's content to at least w × h, moved left or up as far as it
+;; takes to stay on the desktop. It never shrinks: a size set by hand
+;; holds.
+(define (boids-grow-to! win w h)
+  (let-values ([(cw ch) (window-content-size win)])
+    (when (and (or (> w cw) (> h ch)) (not (shaded? win)))
+      (resize-window! win (max w cw) (max h ch))
+      (boids-keep-on-desktop! win))))
+
+;; Moves win left or up as far as it takes to stay on the desktop.
+(define (boids-keep-on-desktop! win)
+  (let-values ([(dx dy dw dh) (desktop-rect)])
+    (move-window! win
+      (max dx (min (window-x win) (- (+ dx dw) (window-w win))))
+      (max dy (min (window-y win) (- (+ dy dh) (window-h win)))))))

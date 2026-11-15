@@ -168,6 +168,7 @@
 (define grant-tree-apps
   '((boids window draw ui timers crew)
     (boids-clear window draw ui timers crew)
+    (boids-l3-simple window draw ui timers crew)
     (boids-simple window draw ui timers)
     (boids3d window draw ui timers gpu)
     (clock window draw timers)

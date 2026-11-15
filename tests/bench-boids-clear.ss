@@ -10,10 +10,14 @@
 ;;; the worklet called on the whole flock, on this thread; "crew" a step
 ;;; (boids-step-on: the steering, on the crew of 8, and the wrap).
 ;;;
-;;; Then Boids (simple), the plain step on lists of records, at 150 and 450
-;;; boids, its count's cap, and 1,000 under the default rules: "simple" is
-;;; its step against Boids' on this thread alone, both with the wrap, and
-;;; what one step of each allocates. It is slow, so fewer rounds.
+;;; Then the grid of docs/BOIDS-CLEAR.md, at 150, 450 and 1,000 boids: a
+;;; step (with the wrap) written simple, on lists, against one written
+;;; flat, on this thread alone and on the crew of 8. "simple" is Boids
+;;; (simple), level 2, on its records; "L3" Boids L3 (simple), the same step
+;;; in worklets on pairs, alone and on the crew; "Boids" Boids, alone and on
+;;; the crew. Each group's steps are timed in rounds, the first turning
+;;; round by round, and what one step of each way allocates. The simple
+;;; steps are slow, so fewer rounds.
 ;;;
 ;;; Prints, asserts nothing. output-dir only receives scratch files.
 
@@ -64,6 +68,21 @@
 (define (bench-median l)
   (let ([l (sort < l)]) (list-ref l (quotient (length l) 2))))
 
+;; The medians of rounds of thunks, each called its own k times a round,
+;; which goes first turning round by round.
+(define (bench-rounds thunks rounds)
+  (let* ([ths (list->vector thunks)]
+         [n (vector-length ths)]
+         [ks (vector-map bench-reps ths)]
+         [times (make-vector n '())])
+    (do ([r 0 (+ r 1)]) ((= r rounds))
+      (do ([j 0 (+ j 1)]) ((= j n))
+        (let ([i (mod (+ r j) n)])
+          (vector-set! times i
+                       (cons (bench-time (vector-ref ths i) (vector-ref ks i))
+                             (vector-ref times i))))))
+    (map bench-median (vector->list times))))
+
 ;; The medians of rounds of theirs and mine, alternating which goes first.
 ;; Each has its own k, so that a much slower step's rounds stay short too.
 (define (bench-pair theirs mine rounds)
@@ -84,23 +103,39 @@
     (printf "~a  Boids ~8,3f ms  clear ~8,3f ms  clear/Boids ~5,3f\n"
             label t m (/ m t))))
 
-;; The bytes a call of thunk allocates.
+;; The bytes a call of thunk allocates, on this thread alone.
 (define (bench-bytes thunk)
   (let ([b0 (+ (bytes-allocated) (bytes-deallocated))])
     (thunk)
     (- (+ (bytes-allocated) (bytes-deallocated)) b0)))
 
-(define (bench-simple-row label theirs mine)
-  (let-values ([(t m) (bench-pair theirs mine 7)])
-    (printf "~a  Boids ~8,3f ms  simple ~8,3f ms  simple/Boids ~5,1f  \
-             a step makes ~5,1f MB, Boids' ~5,1f KB\n"
-            label t m (/ m t) (/ (bench-bytes mine) 1e6)
-            (/ (bench-bytes theirs) 1e3))))
+;; A row of the grid: n boids under rules, every way.
+(define (bench-grid-row label rules n)
+  (let* ([flock ((bench-ref 'boids 'boids-scatter) n 1200 700)]
+         [records (bench-simple-flock 'boids-simple flock)]
+         [pairs (bench-simple-flock 'boids-l3-simple flock)]
+         [simple (bench-ref 'boids-simple 'boids-step-on)]
+         [l3 (bench-ref 'boids-l3-simple 'boids-step-on)]
+         [boids (bench-ref 'boids 'boids-step-on)]
+         [simple-step (lambda () (simple records rules 1200 700))]
+         [l3-step (lambda () (l3 pairs rules 1200 700))]
+         [boids-step (lambda () (boids flock rules 1200 700))])
+    (crew-size-set! 0)
+    (let ([alone (bench-rounds (list simple-step l3-step boids-step) 7)]
+          [bytes (list (bench-bytes l3-step) (bench-bytes boids-step))])
+      (crew-size-set! 8)
+      (let ([crew (bench-rounds (list l3-step boids-step) 7)])
+        (printf "~a  simple ~7,2f  L3 ~7,2f, crew ~6,2f  Boids ~6,2f, \
+                 crew ~5,2f ms  makes ~5,1f MB, Boids ~5,1f KB\n"
+                label (car alone) (cadr alone) (car crew) (caddr alone)
+                (cadr crew) (/ (car bytes) 1e6) (/ (cadr bytes) 1e3))))))
 
-;; Boids' flock, an flvector, as Boids (simple)'s, a list of boids.
-(define (bench-simple-flock flock)
-  (let ([make-boid (bench-ref 'boids-simple 'make-boid)]
-        [make-vec (bench-ref 'boids-simple 'make-vec)])
+;; Boids' flock, an flvector, as app's, a list of boids made by its
+;; make-boid and make-vec: records in Boids (simple), pairs in Boids L3
+;; (simple).
+(define (bench-simple-flock app flock)
+  (let ([make-boid (bench-ref app 'make-boid)]
+        [make-vec (bench-ref app 'make-vec)])
     (let loop ([at (- (flvector-length flock) 4)] [boids '()])
       (if (< at 0)
           boids
@@ -135,22 +170,14 @@
       '(150 450 2000 5000)))
    '(default heaviest)
    (list (bench-ref 'boids 'boids-default-rules) bench-heaviest))
-  (crew-size-set! 0)
   (for-each
-   (lambda (rules-name rules counts)
+   (lambda (rules-name rules)
      (for-each
       (lambda (n)
-        (let* ([flock ((bench-ref 'boids 'boids-scatter) n 1200 700)]
-               [boids (bench-simple-flock flock)]
-               [their-step (bench-ref 'boids 'boids-step-on)]
-               [simple-step (bench-ref 'boids-simple 'boids-step-on)])
-          (bench-simple-row (format "~8a ~5d simple" rules-name n)
-                            (lambda () (their-step flock rules 1200 700))
-                            (lambda () (simple-step boids rules 1200 700)))))
-      counts))
+        (bench-grid-row (format "~8a ~5d grid" rules-name n) rules n))
+      '(150 450 1000)))
    '(default heaviest)
-   (list (bench-ref 'boids 'boids-default-rules) bench-heaviest)
-   '((150 450 1000) (150 450)))
+   (list (bench-ref 'boids 'boids-default-rules) bench-heaviest))
   (crew-size-set! size))
 
 (exit)
