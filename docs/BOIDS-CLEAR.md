@@ -4,7 +4,8 @@ Boids' step (`boids-steer!` in `apps/boids.ss`) is fast because it is
 flat: a flock is an flvector of four numbers a boid, and one worklet
 loops over every pair with its flonums unboxed. The first port read
 differently, with a `vec` and a `boid` record and a procedure per rule
-(`git show a24fe98:apps/boids.ss`). The question here is how much of that
+(`git show a24fe98:apps/boids.ss`); `apps/boids-simple.ss` ("Boids
+(simple)") keeps it, running. The question here is how much of that
 clarity can come back without losing the speed, and without changing a
 number. `apps/boids-clear.ss` ("Boids (clear)") is the same app with its
 step rewritten; `apps/boids.ss` stays as it is.
@@ -14,18 +15,113 @@ Two things keep each attempt honest:
 - `tests/units/boids-clear.ss` checks every step against the reference
   flock in `tests/units.ss` to the last digit, and against Boids' own
   steps number for number (2,000 boids, 30 frames, the heaviest rules
-  too).
+  too). `tests/units/boids-simple.ss` does the same for Boids (simple),
+  on smaller flocks.
 - `tests/bench-boids-clear.ss` times both on the same flocks, in
   alternating rounds, and prints the medians and their ratio. Boids
-  timed against itself gives 1.00.
+  timed against itself gives 1.00. Boids (simple)'s rows come last,
+  against Boids too.
 
 ```
 scheme --script tests/units.ss out boids-clear
+scheme --script tests/units.ss out boids-simple
 scheme --script tests/bench-boids-clear.ss out
 ```
 
 Times below are from one machine (Ubuntu 26.04, 16 threads, Chez
 10.4.1); the ratios are what carry over.
+
+## The baseline: Boids (simple)
+
+**What.** The first port's sim, as written, with its comments: the
+plain version, which shows what a step means. A flock is a list of
+`boid` records, each a position and a velocity, both `vec` records. A
+rule is a procedure over a list of neighbors:
+
+```scheme no-run
+;; The boids in flock that b can see closer than r, not counting itself.
+(define (boid-neighbors b flock r fov)
+  (let ([r2 (* r r)])
+    (filter (lambda (other)
+              (let ([d2 (vec-dist2 (boid-position b) (boid-position other))])
+                (and (> d2 0.0) (< d2 r2) (boid-sees? b other fov))))
+            flock)))
+
+;; Toward the center of the neighbors.
+(define (boid-cohere b others)
+  (if (null? others)
+      vec-zero
+      (vec- (vec-mean (map boid-position others)) (boid-position b))))
+```
+
+A boid's new velocity is its own plus the five weighted pushes,
+`(fold-left vec+ (boid-velocity b) (list (push 'cohesion ...) ...))`,
+and a step maps that over the flock.
+
+The sim loaded into a v1 sandbox with two changes:
+
+- Its two `record-writer` forms are gone. A sandbox has no
+  `record-writer` (`services/env.ss`), so a boid prints as any record
+  does, its type's uid and its fields.
+- `boids-rule` uses `memq`, as Boids' does, because a sandbox has no
+  `plist-ref`.
+
+Its two plists are laid out a key a line, as `AGENTS.md` asks of
+configurations, and its records' uids are its own
+(`schevana-boids-simple-vec`). The window and the rules window are
+Boids', with `length` for `boids-size`, a `for-each` for the drawing,
+and no threads row. It asks for no crew: the step runs on the world's
+thread, in the window's frame handler.
+
+`tests/units/boids-simple.ss` checks it against the reference, against
+Boids for 8 frames of 300 boids under the default and the heaviest
+rules, and pixel for pixel against Boids' drawing.
+
+**Speed.** About 10 times Boids' time, and 12 to 13 times under the
+heaviest rules, from the bench (a step with the wrap, both on this
+thread alone), and 90 to 700 times the memory:
+
+| boids | rules | Boids (simple) | Boids | ratio | made: simple | Boids |
+|---|---|---|---|---|---|---|
+| 150 | default | 1.8 ms | 0.19 ms | 9.6 | 1.4 MB | 16 KB |
+| 450 | default | 16 ms | 1.6 ms | 9.7 | 11.7 MB | 44 KB |
+| 1,000 | default | 78 ms | 8.0 ms | 9.7 | 56 MB | 98 KB |
+| 150 | heaviest | 3.8 ms | 0.31 ms | 12.3 | 3.6 MB | 16 KB |
+| 450 | heaviest | 34 ms | 2.7 ms | 12.6 | 32 MB | 44 KB |
+
+Each boid goes through the whole flock once for each rule with a
+weight, and every `vec+` and `vec-` on the way makes a new record.
+
+**The fuel cap.** A window's handler gets 50M engine ticks
+(`handler-fuel`, `src/core1/proc.ss`), and one that runs out is stopped
+as a runaway: the window crashes, and shows the error. A step's ticks,
+default and heaviest rules:
+
+| boids | ticks |
+|---|---|
+| 150 | 0.2M, 0.4M |
+| 450 | 1.8M, 3.2M |
+| 1,000 | 8.7M, 15.6M |
+| 2,000 | 35M, 62M |
+
+So the count stops at 450, as the first port's did: a step there is
+one or two 60 Hz frames, well inside the fuel. 2,000 boids set from the
+REPL, under the heaviest rules, would crash the window at its first
+step.
+
+**The three apps.**
+
+| | Boids (simple) | Boids | Boids (clear) |
+|---|---|---|---|
+| file | `apps/boids-simple.ss` | `apps/boids.ss` | `apps/boids-clear.ss` |
+| a flock | a list of boid records | an flvector | an flvector |
+| a step | a procedure a rule | one worklet | one worklet, in vecs |
+| runs on | the world's thread | the crew | the crew |
+| boids, at most | 450 | 5,000 | 5,000 |
+| 450 boids, default, alone | 16 ms | 1.6 ms | 1.1 ms |
+| made a step, 450 boids | 11.7 MB | 44 KB | 45 KB |
+
+All three step the same flock to the last digit.
 
 ## What the flat step costs a reader
 
