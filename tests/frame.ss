@@ -23,13 +23,15 @@
 ;;;                 next frame shows them; a REPL evaluation asks for a frame
 ;;;                 as it ends
 ;;;   Life          each generation of 30 Life windows shows on the next frame
-;;;   Tasks         typing, the caret's blink, hover, a tooltip, a drag, the
-;;;                 wheel, a menu, the calendar, the dialog, a REPL change
-;;;                 and the narrow page leave the reference at 100, 150 and
-;;;                 200%; unfocused, or with the dialog over a field that
-;;;                 had the keyboard, Tasks asks for no frame; the Tree's
-;;;                 hover, twisties, keys, wheel, later rows, dimmed rows,
-;;;                 links and Add menu too
+;;;   the kit       in a window of widgets alone: typing, the caret's
+;;;                 blink, hover, a tooltip, the wheel, a menu, the
+;;;                 calendar and the dialog leave the reference at 100, 150
+;;;                 and 200%; unfocused, or with the dialog over a field
+;;;                 that had the keyboard, the window asks for no frame
+;;;   Tasks         a card selected, a drag across columns, the wheel, a
+;;;                 REPL change and the narrow page leave the reference;
+;;;                 the Tree's hover, twisties, keys, wheel, later rows,
+;;;                 dimmed rows, links and Add menu too
 ;;;   a long text   a description's scroll bar shows an estimate until idle
 ;;;                 steps have computed its rows; the step that finishes
 ;;;                 draws it again, and the screen is the reference
@@ -607,19 +609,150 @@
              (and (= keys 1) (> drawn 1) same told
                   (matches-reference? 'bleed-fixed))))))
 
+;;; ------------------------------------------------------------------ the kit
+;;; The widget kit changes the screen on input and by itself, in a window
+;;; of widgets alone: typing into a field and a wrapping area, the caret's
+;;; blink, hover and a tooltip, the wheel (rows scrolled under a still
+;;; pointer), a dropdown's menu, the calendar, the dialog. After each step
+;;; the screen is the reference, at 100, 150 and 200%; unfocused, or with
+;;; the dialog over a field that had the keyboard (no caret blinks under
+;;; it), the window asks for none.
+
+(define (kit-scene pct)
+  (set-theme! 'scale pct)
+  (test-clear-world!)
+  (let* ([title (box "A title")] [notes (box "Notes.")] [status (box 'todo)]
+         [due (box #f)] [confirm (box #f)] [bad '()]
+         [ch (ui-control-height)]
+         [w (test-kit-window "Kit"
+              (lambda (ui w h)
+                (ui-text-field ui 'title 20 20 300 ch (unbox title)
+                               (lambda (t) (set-box! title t)))
+                (ui-button ui 'new 340 20 120 ch "New" void
+                           'tip "Makes a new one")
+                (ui-text-area ui 'notes 20 (+ 30 ch) 300 90 (unbox notes)
+                              (lambda (t) (set-box! notes t)))
+                (ui-dropdown ui 'status 20 (+ 130 ch) 140 ch
+                             '(("To do" . todo) ("Doing" . doing)
+                               ("Done" . done))
+                             (unbox status) (lambda (v) (set-box! status v)))
+                (ui-date-field ui 'due 180 (+ 130 ch) 140 ch (unbox due)
+                               (lambda (d) (set-box! due d)))
+                (ui-button ui 'delete 340 (+ 130 ch) 120 ch "Delete"
+                           (lambda () (set-box! confirm #t)))
+                (ui-scroll ui 'rows 20 (+ 140 ch ch) 440 120
+                  (lambda (top)
+                    (do ([i 0 (+ i 1)]) ((= i 30))
+                      (ui-region! ui (list 'row i) 30 (+ top (* i 24)) 400 22
+                                  'tip (format "Row ~a" i))
+                      (fill-box 30 (+ top (* i 24)) (+ 100 (* i 10)) 22
+                                'accent))
+                    (+ top (* 30 24))))
+                (when (unbox confirm)
+                  (ui-dialog ui 'confirm "Delete it?" "It can't be undone."
+                             (list (list "Cancel"
+                                         (lambda () (set-box! confirm #f)))
+                                   (list "Delete"
+                                         (lambda () (set-box! confirm #f))))
+                             (lambda () (set-box! confirm #f)))))
+              (cons 480 (+ 280 ch ch)))])
+    (define (try! label)
+      (unless (matches-reference? (list pct label))
+        (set! bad (cons label bad))))
+    (define (outside)   ; on the desktop, right of the window
+      (values (+ (window-x w) (window-w w) 60) (+ (window-y w) 40)))
+    (define (move! label id)
+      (let-values ([(x y) (test-point w id)]) (inject! `(mouse-move ,x ,y)))
+      (steps 1)
+      (try! label))
+    (define (click! label id)
+      (let-values ([(x y) (test-point w id)])
+        (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                 `(mouse-up ,x ,y left)))
+      (steps 1)
+      (try! label))
+    (define (key! label key . mods)
+      (inject! `(key-down ,key ,mods))
+      (steps 1)
+      (try! label))
+    (define (type! label str)
+      (for-each (lambda (c) (inject! `(text ,(string c)))) (string->list str))
+      (steps 1)
+      (try! label))
+    (fixed-status!)
+    (steps 1)
+    (try! 'open)
+    (click! 'field 'title)
+    (type! 'typed " and more")
+    (steps 1 530)
+    (try! 'blink-off)
+    (steps 1 530)
+    (try! 'blink-on)
+    (click! 'area 'notes)
+    (type! 'wrapped " Words that wrap across the rows of the area, and more.")
+    ;; unfocused, the caret goes and no frame shows the window
+    (let-values ([(x y) (outside)])
+      (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+               `(mouse-up ,x ,y left)))
+    (steps 1)
+    (try! 'unfocused)
+    (when (asks-while-waiting? w 500)
+      (set! bad (cons 'unfocused-asked bad)))
+    (focus-window! w)
+    (steps 1)
+    (try! 'refocused)
+    (key! 'area-left 'escape)
+    (move! 'hover 'new)
+    (steps 1 700)
+    (try! 'tooltip)
+    (let-values ([(x y) (outside)]) (inject! `(mouse-move ,x ,y)))
+    (steps 1)
+    (try! 'pointer-left)
+    (let-values ([(x y) (test-point w 'rows)])
+      (inject! `(mouse-move ,x ,y) '(wheel 0 -2))
+      (steps 1)
+      (try! 'wheel))
+    (click! 'menu 'status)
+    (unless (menu-open?) (set! bad (cons 'no-menu bad)))
+    (key! 'menu-closed 'escape)
+    (click! 'calendar 'due)
+    (key! 'calendar-key 'right)
+    (key! 'calendar-picked 'return)
+    (unless (unbox due) (set! bad (cons 'no-date bad)))
+    (click! 'dialog 'delete)
+    (unless (unbox confirm) (set! bad (cons 'no-dialog bad)))
+    (key! 'dialog-canceled 'escape)
+    (unless (string-suffix? " and more" (unbox title))
+      (set! bad (cons 'not-typed bad)))
+    ;; the dialog over a focused field: the field lets go of the keyboard,
+    ;; so no caret blinks under the scrim and no frame shows the window
+    (click! 'field-again 'title)
+    (click! 'dialog-over-field 'delete)
+    (when (asks-while-waiting? w 530)
+      (set! bad (cons 'dialog-asked bad)))
+    (key! 'dialog-closed 'escape)
+    (close-window! w)
+    (check (format "the kit at ~a%: typing, the caret's blink, hover, a \
+                    tooltip, the wheel, a menu, the calendar and the dialog \
+                    show the reference, and unfocused or under the dialog \
+                    the window asks for no frame~a"
+                   pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
+           (null? bad))))
+
+(for-each (lambda (pct)
+            (test-scene (format "~a at ~a%" 'kit pct)
+                        (lambda () (kit-scene pct))))
+          '(100 150 200))
+(set-theme! 'scale 100)
+
 ;;; ------------------------------------------------------------------ Tasks
-;;; The widget kit changes the screen on input and by itself: typing into
-;;; a title, a wrapping description and the search, the caret's blink,
-;;; hover and a tooltip, a drag across columns, the wheel (rows scrolled
-;;; under a still pointer), a field brought back into view, a dropdown's
-;;; menu, the calendar, the dialog, a change from the REPL, the narrow
-;;; page. After each step the screen is the reference, at 100, 150 and
-;;; 200%; unfocused, or with the dialog over a field that had the keyboard
-;;; (no caret blinks under it), Tasks asks for none.
+;;; What is Tasks' own to show: a card selected, a drag across columns,
+;;; the wheel on a column, a change from the REPL, the narrow page. After
+;;; each step the screen is the reference, at 100, 150 and 200%. (What
+;;; its widgets show is the kit's scene.)
 
 ;; Tasks sized by its own measures, at the screen's left: wide, from where
-;; its details sit beside its view; narrow, its least width. And a point
-;; outside it, on the desktop below it.
+;; its details sit beside its view; narrow, its least width.
 (define (frame-tasks-wide! w)
   (let-values ([(mw mh) (tasks-min-size)])
     (resize-window! w (max mw (tasks-wide-width (window-ref w 'state)))
@@ -628,8 +761,6 @@
 (define (frame-tasks-narrow! w)
   (let-values ([(mw mh) (tasks-min-size)])
     (resize-window! w mw (max 600 mh))))
-(define (frame-tasks-outside w)
-  (values 640 (min (- (screen-h) 40) (+ (window-y w) (window-h w) 20))))
 
 (define (tasks-scene pct)
   (set-theme! 'scale pct)
@@ -659,47 +790,12 @@
       (inject! `(key-down ,key ,mods))
       (steps 1)
       (try! label))
-    (define (type! label str)
-      (for-each (lambda (c) (inject! `(text ,(string c)))) (string->list str))
-      (steps 1)
-      (try! label))
     (fixed-status!)
     (frame-tasks-wide! w)
     (steps 1)
     (try! 'open)
     (click! 'select '(card 9))
-    (key! 'title 'return)
-    (type! 'title-typed " and more")
-    (steps 1 530)
-    (try! 'blink-off)
-    (steps 1 530)
-    (try! 'blink-on)
-    (click! 'description 'description)
-    (type! 'wrapped " Words that wrap across the rows of the description.")
-    (key! 'search '#\/)
-    (type! 'search-typed "kit")
-    (key! 'search-left 'escape)
-    ;; unfocused, the caret goes and no frame shows Tasks
-    (click! 'title-again 'title)
-    (let-values ([(x y) (frame-tasks-outside w)])
-      (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
-               `(mouse-up ,x ,y left)))
-    (steps 1)
-    (try! 'unfocused)
-    (when (asks-while-waiting? w 500)
-      (set! bad (cons 'unfocused-asked bad)))
-    (focus-window! w)
-    (steps 1)
-    (try! 'refocused)
-    (key! 'title-left 'escape)
     (move! 'hover-card '(card 10))
-    (move! 'hover-new 'new)
-    (steps 1 700)
-    (try! 'tooltip)
-    (let-values ([(x y) (frame-tasks-outside w)])
-      (inject! `(mouse-move ,x ,y)))
-    (steps 1)
-    (try! 'pointer-left)
     (let-values ([(x0 y0) (point '(card 16))]
                  [(x1 y1) (point '(column review))])
       (inject! `(mouse-move ,x0 ,y0) `(mouse-down ,x0 ,y0 left 1))
@@ -722,28 +818,6 @@
       (inject! `(mouse-move ,x ,y) '(wheel 0 -2))
       (steps 1)
       (try! 'wheel-details))
-    ;; the title scrolled out of the details comes back when Return
-    ;; focuses it
-    (key! 'title-revealed 'return)
-    (key! 'title-revealed-left 'escape)
-    (click! 'menu 'status)
-    (key! 'menu-closed 'escape)
-    (click! 'calendar 'due)
-    (key! 'calendar-key 'right)
-    (key! 'calendar-picked 'return)
-    (key! 'dialog 'delete)
-    (key! 'dialog-canceled 'escape)
-    ;; the dialog over a focused field: the field lets go of the keyboard,
-    ;; so no caret blinks under the scrim and no frame shows Tasks
-    (let-values ([(x y) (point 'details)])
-      (inject! `(mouse-move ,x ,y) '(wheel 0 -20))
-      (steps 1)
-      (try! 'details-end))
-    (click! 'item-field 'new-item)
-    (click! 'dialog-over-field 'delete)
-    (when (asks-while-waiting? w 530)
-      (set! bad (cons 'dialog-asked bad)))
-    (key! 'dialog-closed 'escape)
     (set-task! 9 'title "Changed from the REPL")
     (steps 1)
     (try! 'repl)
@@ -753,12 +827,9 @@
     (click! 'page '(card 10))
     (key! 'page-closed 'escape)
     (close-window! w)
-    (check (format "Tasks at ~a%: typing, the caret's blink, hover, a \
-                    tooltip, a drag, the wheel, a field revealed, a menu, \
-                    the calendar, the dialog, a REPL change and the narrow \
-                    page show the \
-                    reference, and unfocused or under the dialog it asks \
-                    for no frame~a"
+    (check (format "Tasks at ~a%: a card selected, hover, a drag across \
+                    columns, the wheel, a REPL change and the narrow page \
+                    show the reference~a"
                    pct (if (null? bad) "" (format " (not: ~s)" (reverse bad))))
            (null? bad))))
 
