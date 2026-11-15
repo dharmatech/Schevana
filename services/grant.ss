@@ -169,7 +169,8 @@
   '((boids window draw ui timers crew)
     (boids3d window draw ui timers gpu)
     (clock window draw timers)
-    (life window draw ui timers crew)))
+    (life window draw ui timers crew)
+    (springies window draw ui timers)))
 
 ;;; ------------------------------------------------------------------ decisions
 ;;; The person's, kept in a file of plain data, one app a form:
