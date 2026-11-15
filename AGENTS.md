@@ -184,8 +184,8 @@ before it:
   of which style is on.
 - Everything drawn is a record; a form like `with-clip` allocates no closure,
   and recording whole numbers allocates nothing (`tests/units/pipeline.ss`).
-- **Mimicked styles** (Mac, Windows, Genera, the CADR, Interlisp, and in
-  future CDE and Platinum) use the original's widgets. Where the original
+- **Mimicked styles** (Mac, Windows, Genera, the CADR, Interlisp, OPEN
+  LOOK, and in future CDE and Platinum) use the original's widgets. Where the original
   has none, make what its designers would have made. **Our own styles**
   (Cons, Curses, Draft, Fold, Halo, Lambda, Reticle, Slab, Spine) are free,
   as long as they stay coherent.
@@ -193,6 +193,8 @@ before it:
   - GPL desktops (NsCDE, ZacOS 9): facts only (sizes, colors, rules), with
     references; copy no code, pixmaps, icons, fonts or backdrops.
   - MIT's CADR sources (BSD) and Medley Interlisp (MIT): use, and attribute.
+  - XView 3.2's OLGX and olwm (Sun's notice) and Sun's glyph fonts
+    (X-style): use, and attribute with their notices (`CREDITS.md`).
   - Genera's sources: never. Its manuals and screenshots only.
 
 ## Formatting

@@ -133,6 +133,27 @@ has none, what its designers would have made:
 - **The CADR**, from MIT's System 99 sources (BSD), is Genera in a few
   settings: a 1-pixel border and margin, the label upright in the code
   font, its 5X5 font in people's lozenges, its 3-pixel scroll bar.
+- **OPEN LOOK** (Sun, 1988) as OpenWindows drew it: olwm's frames
+  through OLGX, from XView 3.2's sources on the X11R6 contrib tape, with
+  Sun's Functional Specification of 1989 where the code is silent. A
+  window is its window color in a 2-pixel outline, 3 while it has the
+  focus; its header holds the window button, which closes it to the
+  taskbar, and the title, bold, centered right of it; an L-shaped resize
+  corner at each corner is the only place it resizes from. The focus is a
+  band across the header, of ink in 2D and recessed in 3D
+  (`open-look-depth`), or olwm's two lines (`open-look-focus`). A window
+  opened `'above` another is a pop-up: a pushpin instead of the button,
+  pinned in, that dismisses it when pulled out, and no corners, as
+  XView's pop-ups keep their size. A window's `'footer`, a string or
+  `(left . right)`, shows under the pane. Everything comes in OPEN LOOK's
+  four sizes, 10, 12, 14 and 19 point, the nearest the text size: OLGX's
+  glyph fonts drawn pixel for pixel (`kits/olgl.ss`), olwm's numbers, and
+  the 3D shades OLGX takes from the window color (`open-look-window`):
+  BG2 90 % of its value, BG3 50 %, the highlight 120 %. Drawn where olwm's
+  own screenshots have their frames, at every size in 2D and 3D, its
+  frames are olwm's to the pixel but for three, where olwm's corner shows
+  the desktop through. It asks for Lucida Sans, OpenWindows' face, and
+  takes the sans where that isn't installed.
 - **Mac** and **Windows**, as their names say.
 
 Each brings the palette of the same name and its wallpaper. Our own

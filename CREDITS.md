@@ -39,3 +39,38 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## OPEN LOOK
+
+The OPEN LOOK style's glyphs in `kits/olgl.ss` are Sun's glyph fonts,
+`olgl10/12/14/19.bdf` from the X11R6 contrib tape, under their notice:
+
+Copyright 1989 by Sun Microsystems, Inc. Mountain View, CA. Permission
+to use, copy, modify, and distribute this software and its documentation
+for any purpose and without fee is hereby granted, provided that the
+above copyright notices appear in all copies and that both those
+copyright notices and this permission notice appear in supporting
+documentation, and that the name of Sun Microsystems not be used in
+advertising or publicity pertaining to distribution of the software
+without specific, written prior permission. Sun Microsystems make no
+representations about the suitability of this software for any purpose.
+It is provided "as is" without express or implied warranty. SUN
+MICROSYSTEMS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO
+EVENT SHALL SUN MICROSYSTEMS BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF
+USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+Its shades and frame in `styles/open-look.ss` are translated from OLGX
+and olwm (XView 3.2), whose notice asks for these words:
+
+(c) Copyright 1989, 1990, 1991 Sun Microsystems, Inc. Sun design patents
+pending in the U.S. and foreign countries. OPEN LOOK is a trademark of
+USL. Used by written permission of the owners.
+
+(c) Copyright Bigelow & Holmes 1986, 1985. Lucida is a registered
+trademark of Bigelow & Holmes. Permission to use the Lucida trademark is
+hereby granted only in association with the images and fonts described
+in this file.
