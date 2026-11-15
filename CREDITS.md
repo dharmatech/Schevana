@@ -12,6 +12,14 @@ description. Boids 3D (`apps/boids3d.ss`) takes the same rules into three
 dimensions, as Craig Reynolds' "Flocks, Herds, and Schools: A Distributed
 Behavioral Model" (SIGGRAPH 1987) first had them.
 
+## Springies
+
+Springies (`apps/springies.ss`) is ported from Eduardo Cavazos's
+Springies in [Agave](https://github.com/dharmatech/agave) (Apache 2.0),
+which followed Douglas DeCarlo's XSpringies. Its physics is written
+from XSpringies' behavior, not its (GPL) source, and its models are
+made in code, not read from XSpringies' example files.
+
 ## The CADR's 5X5 font
 
 The CADR's 5X5 font in `kits/px.ss` (the glyphs of `px-5x5`) is MIT's,
