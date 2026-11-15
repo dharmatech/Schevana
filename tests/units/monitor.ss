@@ -216,3 +216,171 @@
                                    "brackets"))])
              (close-window! m)
              (and ticks flags)))))
+
+;;; The profiler and Monitor, driven: on at boot, the profiler collects
+;;; with Monitor closed; Monitor's graphs, tables, rows and Kill.
+
+;; A click on Monitor's region id, and a step for what it changed.
+(define (monitor-test-click! win id)
+  (test-click! win id)
+  (steps 1))
+
+;; The profiler: on at boot, it collects with Monitor closed. Monitor
+;; draws its graphs; a window's name focuses it and a process's Kill
+;; kills it; the Profiling checkbox turns it off, and Monitor lists the
+;; windows and processes in tables, whose rows focus and kill as they
+;; always did; and on again.
+(let ([m (find-window 'monitor)]) (when m (close-window! m)))
+(steps 2)
+(check "profiling is on at boot, and collects with Monitor closed"
+       (let ([s (car (profile-ticks))])
+         (steps 1)
+         (and (profile-on?) (not (find-window 'monitor))
+              (not (eqv? s (car (profile-ticks)))))))
+(let* ([target (open-window "Target"   ; drawn at every step, slowly: a top row
+                 'size '(200 . 100) 'pos '(1000 . 420)
+                 'open window-frame-soon!
+                 'frame (lambda (win at)
+                          (window-frame-soon! win)
+                          (invalidate! win))
+                 'draw (lambda (win w h)
+                         (let ([t (+ (real-time) 2)])
+                           (let loop () (when (< (real-time) t) (loop))))))]
+       [busy (lambda () (spawn "monitored" (lambda () (let loop () (loop)))))]
+       [p (busy)]
+       [m (monitor)]
+       [ui (window-ref m 'ui)]
+       [bars (lambda ()
+               (filter (lambda (r)
+                         (let ([id (ui-region-id r)])
+                           ;; the bars, not the strip's label
+                           (and (pair? id) (eq? (car id) 'monitor-ticks)
+                                (not (and (pair? (cdr id))
+                                          (eq? (cadr id) 'strip))))))
+                       (ui-state-regions ui)))]
+       [row (lambda (table x xs)   ; x's row in the table of xs, by id
+              (list table 'row (list-index (lambda (y) (eq? y x)) xs)))]
+       [window-row (lambda ()
+                     (row 'monitor-windows target
+                          (sort (lambda (a b) (< (window-id a) (window-id b)))
+                                (windows))))])
+  (move-window! m 20 40)
+  (focus-window! m)
+  (steps 2)
+  (check "Monitor opens on its Overview: the windows and processes in \
+          tables, no bars"
+         (and (null? (bars)) (ui-find ui (window-row))
+              (ui-find ui (row 'monitor-procs p (procs)))))
+  (monitor-test-click! m '(tab ticks))
+  ;; the Consumers sum seconds done: until one with Target in it is done,
+  ;; and Monitor's view has moved on (twice a second) since
+  (test-wait 10000
+             (lambda ()
+               (and (pair? (bars))
+                    (ui-find ui (list 'monitor-kill (proc-id p)))
+                    (ui-find ui (list 'monitor-focus (window-id target)))
+                    (> (vector-length (ui-memo ui '(consumers rows) '#()))
+                       2))))
+  (steps 1)
+  (png-write-screen (string-append out-dir "/monitor.png"))
+  (check "Monitor draws its graphs: a bar a tick, a row a consumer"
+         (and (not (window-error m)) (pair? (bars))
+              (ui-find ui (list 'monitor-kill (proc-id p)))
+              (ui-find ui (list 'monitor-focus (window-id target)))))
+  ;; the Consumers sorted by a heading: by name, again the other way, and
+  ;; back to ms/s, the most first
+  (let ([order (lambda (nodes)   ; the same nodes, in a fixed order
+                 (list-sort string<? (map (lambda (n) (format "~s" n))
+                                          nodes)))]
+        [roots (lambda ()
+                 (map ui-tree-row-node
+                      (filter (lambda (r) (= 0 (ui-tree-row-depth r)))
+                              (vector->list
+                               (ui-memo ui '(consumers rows) '#())))))])
+    (let ([by-rate (roots)])
+      (monitor-test-click! m '(consumers header name))
+      (let ([by-name (roots)])
+        (monitor-test-click! m '(consumers header name))
+        (let ([by-name-down (roots)])
+          (monitor-test-click! m '(consumers header rate))
+          (check "a Consumers heading sorts its rows by it, again the other \
+                  way; the same rows each time"
+                 (and (> (length by-rate) 2)
+                      (not (equal? by-name by-name-down))
+                      (equal? (reverse by-name) by-name-down)
+                      (equal? (order by-rate) (order by-name))
+                      (equal? (order by-rate) (order (roots)))))))))
+  ;; The rows drawn selected, at a draw of Monitor's.
+  (let ([selected-rows
+         (lambda ()
+           (let ([n 0] [real ui-draw-highlight-over])
+             (fluid-let ([ui-draw-highlight-over
+                          (lambda args (set! n (+ n 1)) (apply real args))])
+               (invalidate! m)
+               (steps 1))
+             n))])
+    (monitor-test-click! m '(consumers row 0))
+    (let ([chosen (selected-rows)])
+      (monitor-test-click! m '(consumers row 0))
+      (let ([let-go (selected-rows)])
+        (check (format "a press selects a Consumers row, and a second lets it \
+                        go (~a, then ~a drawn selected)" chosen let-go)
+               (and (= chosen 1) (= let-go 0))))))
+  (check "a Consumers heading says what its column means"
+         (let ([r (ui-find ui '(consumers header avg))])
+           (and r (string? (ui-region-tip r))
+                (string-contains-ci? (ui-region-tip r) "average"))))
+  ;; the pointer resting on the newest bar: its tooltip, what it spent
+  (let ([r (car (bars))])
+    (let-values ([(cx cy cw ch) (content-rect m)])
+      (inject! `(mouse-move ,(+ cx (ui-region-x r) (ui-region-w r) -2)
+                            ,(+ cy (ui-region-y r)
+                                (quotient (ui-region-h r) 2)))))
+    ;; until it has rested there a tooltip's wait
+    (test-wait 5000 (lambda ()
+                      (< (+ (car (ui-state-rest ui)) ui-tip-ms 100)
+                         (now-ms))))
+    (png-write-screen (string-append out-dir "/monitor-tip.png"))
+    (let ([tip (let ([rs (bars)]) (and (pair? rs) (ui-region-tip (car rs))))])
+      (printf "  ~s\n" tip)
+      (check "hovering a bar of Monitor's Ticks shows its tooltip: its \
+              tick, whether it came late, and its phases"
+             (and (string? tip)
+                  (string-contains-ci? tip "tick ")
+                  (string-contains-ci? tip "(a tick is ")
+                  (< (+ (car (ui-state-rest ui)) ui-tip-ms) (now-ms))))))
+  (monitor-test-click! m (list 'monitor-focus (window-id target)))
+  (check "a window's name in Monitor focuses it" (eq? (focused-window) target))
+  (focus-window! m)
+  (steps 2)
+  (monitor-test-click! m (list 'monitor-kill (proc-id p)))
+  (check "a process's Kill in Monitor kills it" (not (memq p (procs))))
+  (monitor-test-click! m 'profiling)
+  (let ([p (busy)])
+    (steps 2)
+    (check "Monitor's Profiling turns it off: no bars"
+           (and (not (profile-on?)) (not *profile-span*) (null? (bars))))
+    (monitor-test-click! m '(tab overview))
+    (check "its Overview lists the windows and processes in tables still \
+            (a new one by its next view: twice a second)"
+           (and (ui-find ui (window-row))
+                (test-wait 10000
+                           (lambda ()
+                             (ui-find ui (row 'monitor-procs p (procs)))))))
+    (monitor-test-click! m (window-row))
+    (check "where a window's row focuses it" (eq? (focused-window) target))
+    (focus-window! m)
+    (steps 2)
+    (monitor-test-click! m (row 'monitor-procs p (procs)))
+    (check "a process's row only selects it" (memq p (procs)))
+    (monitor-test-click! m (list 'monitor-proc-kill (proc-id p)))
+    (check "and its Kill kills it" (not (memq p (procs)))))
+  (monitor-test-click! m '(tab ticks))
+  (monitor-test-click! m 'profiling)
+  (test-wait 10000 (lambda () (pair? (bars))))
+  (check "and on again: the bars come back"
+         (and (profile-on?) (pair? *profile-span*)
+              (pair? (bars)) (not (window-error m))))
+  (close-window! m)
+  (close-window! target)
+  (steps 2))

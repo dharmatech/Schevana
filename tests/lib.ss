@@ -148,16 +148,19 @@
            (apply ui-handlers ui app))))
 
 ;; Region id of win's ui: its middle on the screen, dx to its right, or at
-;; x within it (a number from the region's left) if given as 'at x.
+;; x within it (a number from the region's left) if given as 'at x; whole
+;; pixels, whatever fractions the region is laid at.
 (define (test-point win id . dx)
   (let ([r (test-region (window-ref win 'ui) id)])
     (let-values ([(cx cy cw ch) (content-rect win)])
-      (values (+ cx (ui-region-x r)
-                 (if (and (pair? dx) (eq? (car dx) 'at))
-                     (cadr dx)
-                     (+ (quotient (ui-region-w r) 2)
-                        (if (pair? dx) (car dx) 0))))
-              (+ cy (ui-region-y r) (quotient (ui-region-h r) 2))))))
+      (values (exact
+               (floor (+ cx (ui-region-x r)
+                         (if (and (pair? dx) (eq? (car dx) 'at))
+                             (cadr dx)
+                             (+ (/ (ui-region-w r) 2)
+                                (if (pair? dx) (car dx) 0))))))
+              (exact (floor (+ cy (ui-region-y r)
+                               (/ (ui-region-h r) 2))))))))
 
 ;; The pointer moved over region id (test-point's dx), a step.
 (define (test-move! win id . dx)
