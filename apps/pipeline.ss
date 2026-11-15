@@ -270,8 +270,9 @@
    again, the next frame late, or, by VSync, the compositor dropped one, \
    two having come in one refresh. Orange: the compositor dropped one for \
    a newer, as Mailbox does. None: nothing new was due, or no word yet. \
-   A pip: the screen's count and its times disagree on how far its frame \
-   came after the one before.")
+   A pip: the screen stamped its frame a quarter of a millisecond late or \
+   more, as a driver that stamps in software does now and then; the frame \
+   is placed by the screen's clock all the same.")
 
 (define (pipeline-river-new)
   (ui-stream-new pipeline-river-rows (length pipeline-draw-river-parts)
@@ -458,13 +459,9 @@
                (format "~atick to screen ~a ms" (if in "; " "\n")
                        (ms (- shown tick)))
                "")
-           (if (and (= at k) (inspect-frame-seq-off? i))
-               (format "\nafter the frame before, in refreshes: ~a by \
-                        the screen's count, ~,2f by its times"
-                       (- at (inspect-frame-report (- i 1) 5))
-                       (inexact
-                        (/ (- shown (inspect-frame-at (- i 1) 'shown))
-                           (inspect-frame-report i 4))))
+           (if (and (= at k) (pipeline-stamp-late? i))
+               (format "\nthe screen stamped it ~a ms late"
+                       (ms (inspect-frame-stamp-late i)))
                "")
            (apply string-append
                   (map (lambda (from to name)
@@ -599,10 +596,18 @@
            (list (inspect-refresh-of g (pipeline-tick-began tick)))]
           [else '()])))
 
-;; The refreshes from oldest on where the screen's count and its times
-;; disagree on how far the frame there came after the one before
-;; (inspect-frame-seq-off?): none on an estimated grid, which has no word.
-(define (pipeline-river-seq-off g oldest)
+;; A stamp this late, ns, is marked: past what a stamp read in time
+;; strays, tens of microseconds.
+(define pipeline-stamp-late-ns 250000)
+
+;; Whether the screen stamped frame i late (inspect-frame-stamp-late).
+(define (pipeline-stamp-late? i)
+  (let ([late (inspect-frame-stamp-late i)])
+    (and late (>= late pipeline-stamp-late-ns))))
+
+;; The refreshes from oldest on whose frame the screen stamped late: none
+;; on an estimated grid, which has no word.
+(define (pipeline-river-late-stamps g oldest)
   (if (inspect-refresh-estimated? g)
       '()
       (let loop ([i (- *frame-ring-n* 1)] [ks '()])
@@ -610,12 +615,12 @@
             ks
             (let ([k (and (inspect-frame-shown? i) (inspect-frame-report i 5))])
               (cond [(and k (< k oldest)) ks]
-                    [(and k (inspect-frame-seq-off? i))
+                    [(and k (pipeline-stamp-late? i))
                      (loop (- i 1) (cons k ks))]
                     [else (loop (- i 1) ks)]))))))
 
 ;; A pip in the screen's cell of each refresh in ks, over its color.
-(define (pipeline-draw-river-seq-off areas count newest ks)
+(define (pipeline-draw-river-pips areas count newest ks)
   (let ([py (cadr (cdr (assq 'plot areas)))]
         [lane (- (cadr (assq 'lane areas)) (caddr (assq 'lane areas)))])
     (for-each
@@ -748,6 +753,101 @@
                    (loop (- i 1) (+ ahead 1) (+ n 1))]
                   [else (loop (- i 1) ahead (+ n 1))]))))))
 
+;; The frames' rules for a refresh of r ns, with the ticks' labels in the
+;; gutter: every chart laid out by them starts its columns at the same x.
+(define (pipeline-river-frame-rules r)
+  (append (pipeline-river-rules r)
+          (pipeline-river-gutter (pipeline-river-tick-rules r)
+                                 pipeline-draw-river-tick-strips)))
+
+;; The refreshes the River shows across w, the frame being drawn at now:
+;; (values newest oldest). Now's own frame is the one being drawn.
+(define (pipeline-river-span now w)
+  (let ([newest (- now 1)])
+    (values newest
+            (- newest (min pipeline-river-kept (max 1 (quotient w 2))) -1))))
+
+;;; ---- the screen's clock's drift, under the River on Latency
+;;; How far core0's clock moved at each refresh (inspect-clock-moves), a
+;;; refresh under its column of the River.
+
+;; The graph's height under its heading.
+(define pipeline-drift-high 64)
+
+(define (pipeline-drift-height w)
+  (let-values ([(gw gh) (ui-label-size '(group) "Clock drift" w)])
+    (+ gh 4 pipeline-drift-high)))
+
+;; The graph's reach either side of 0, ns: the first of 1, 2 and 5 times a
+;; power of ten that holds every move, 10 µs at least.
+(define (pipeline-drift-reach moves)
+  (let ([peak (fold-left (lambda (most m) (max most (abs (cdr m)))) 0 moves)])
+    (let loop ([step 10000])
+      (cond [(>= step peak) step]
+            [(>= (* 2 step) peak) (* 2 step)]
+            [(>= (* 5 step) peak) (* 5 step)]
+            [else (loop (* 10 step))]))))
+
+;; Where refresh k's column is across, its middle, by the River's layout
+;; (ui-stream-layout's count and areas); #f left of the plot.
+(define (pipeline-drift-x areas count newest k)
+  (let ([i (- count 1 (- newest k))])
+    (and (>= i 0) (<= k newest)
+         (let-values ([(bx bw) (ui-bar-chart-bar areas count i)])
+           (+ bx (/ bw 2))))))
+
+;; The moves in x y w h, a line from each to the next, 0 across the
+;; middle and reach ns to either edge.
+(define (pipeline-draw-drift x y w h areas count newest moves reach)
+  (let* ([half (max 1 (- (quotient h 2) 2))]
+         [mid (+ y (quotient h 2))]
+         [lh (font-line-height 'ui-small)]
+         [at (lambda (m)
+               (let ([px (pipeline-drift-x areas count newest (car m))])
+                 (and px (cons px (- mid (/ (* (cdr m) half) reach))))))])
+    (ui-draw-surface x y w h '(well))
+    (draw-line x mid (+ x w) mid 'chart-rule)
+    (draw-text (+ x 6) (+ y 2) (format "+~a µs" (quotient reach 1000))
+               'text-faint 'ui-small)
+    (draw-text (+ x 6) (- (+ y h) lh 2)
+               (format "−~a µs" (quotient reach 1000)) 'text-faint 'ui-small)
+    (let loop ([moves moves] [from #f])
+      (when (pair? moves)
+        (let ([to (at (car moves))])
+          (when (and from to)
+            (draw-line (car from) (cdr from) (car to) (cdr to) 'chart-5))
+          (loop (cdr moves) to))))))
+
+(define (pipeline-drift-pane v x y w h)
+  (let*-values ([(g) (inspect-refresh-grid)]
+                [(newest oldest)
+                 (pipeline-river-span (pipeline-river-now v g) w)]
+                [(gw gh) (ui-label-size '(group) "Clock drift" w)]
+                [(py) (+ y gh 4)]
+                [(ph) (max 1 (- h gh 4))]
+                [(count areas)
+                 (ui-stream-layout (pipeline-view-river v) x py w ph newest
+                                   oldest
+                                   (pipeline-river-frame-rules
+                                    (inspect-refresh-period g))
+                                   1 'whole)]
+                [(moves) (if (inspect-refresh-estimated? g)
+                             '()
+                             (inspect-clock-moves oldest))]
+                [(reach) (pipeline-drift-reach moves)])
+    (ui-draw-label x y w gh '(group) "Clock drift")
+    (ui-draw-label x y w gh '(dim right)
+                   (format "the screen's clock's moves, within ~a µs"
+                           (quotient reach 1000)))
+    (pipeline-draw-drift x py w ph areas count newest moves reach)
+    (ui-region! (pipeline-view-ui v) '(pipeline drift) x py w ph
+      'tip "How far the screen's clock moved at each refresh, under its \
+            column of the River: the refresh's time past the one before's \
+            and the periods between them. Under 0, a stamp came earlier \
+            than the clock had it; over 0, the clock gave way to late \
+            stamps, a 4096th of the time since at most, or to eight in a \
+            row.")))
+
 (define (pipeline-river-pane v x y w h)
   (let*-values
       ([(ui) (pipeline-view-ui v)]
@@ -760,17 +860,12 @@
                         1000)]
        [(rules) (pipeline-river-rules r)]
        [(tick-rules) (pipeline-river-tick-rules r)]
-       [(frame-rules) (append rules
-                              (pipeline-river-gutter
-                               tick-rules pipeline-draw-river-tick-strips))]
+       [(frame-rules) (pipeline-river-frame-rules r)]
        [(tick-rules*) (append tick-rules
                               (pipeline-river-gutter
                                rules pipeline-draw-river-strips))]
        [(now) (pipeline-river-now v g)]
-       ;; now's own frame is the one being drawn
-       [(newest) (- now 1)]
-       [(oldest) (- newest (min pipeline-river-kept (max 1 (quotient w 2)))
-                    -1)]
+       [(newest oldest) (pipeline-river-span now w)]
        [(keys) (pipeline-river-keys)]
        [(tick-keys) (pipeline-river-tick-keys)]
        [(gw gh) (ui-label-size '(group) "River" w)]
@@ -829,9 +924,9 @@
                'on-pick (lambda (k) (pipeline-pick-refresh! v g k))
                'marked (pipeline-river-marked v g)
                'over (lambda (areas count)
-                       (pipeline-draw-river-seq-off
+                       (pipeline-draw-river-pips
                         areas count newest
-                        (pipeline-river-seq-off g oldest))))
+                        (pipeline-river-late-stamps g oldest))))
     (ui-draw-legend x (+ sy sh 4) w kh '() keys)
     (ui-draw-legend x (+ y row 4) w th '() tick-keys)
     (ui-live-badge ui '(pipeline hold) (+ x gw 12) (+ y (quotient (- row lh) 2))
@@ -3034,11 +3129,14 @@
          ;; Latency is the clock over the River, which takes the rest: no
          ;; small screen beside it, no Tape under it
          [latency? (eq? (pipeline-view-stage v) 'latency)]
+         ;; and under the River, the screen's clock's drift
+         [drift-h (if latency? (pipeline-drift-height (- w pad pad)) 0)]
          [river-h (if latency?
-                      (- h pad top (pipeline-latency-height (- w pad pad)) gap)
+                      (- h pad top (pipeline-latency-height (- w pad pad)) gap
+                         drift-h gap)
                       (pipeline-river-height (- w pad pad) 80))]
          [bottom (max top (- h pad river-h gap
-                             (if latency? 0 (+ tape-h gap))))]
+                             (if latency? (+ drift-h gap) (+ tape-h gap))))]
          [l (pipeline-view-shown v)]
          [ch (ui-control-height)]
          [screen-w (- side pad)]
@@ -3112,7 +3210,10 @@
                             is left out of it here.")))))
     (unless latency?
       (pipeline-tape-pane v pad (+ bottom gap) (- w pad pad) tape-h))
-    (pipeline-river-pane v pad (- h pad river-h) (- w pad pad) river-h)
+    (pipeline-river-pane v pad (- h pad river-h (if latency? (+ drift-h gap) 0))
+                         (- w pad pad) river-h)
+    (when latency?
+      (pipeline-drift-pane v pad (- h pad drift-h) (- w pad pad) drift-h))
     (ui-end! ui w h)))
 
 ;; Each frame while it's seen and flows: the frame just drawn is kept, a new

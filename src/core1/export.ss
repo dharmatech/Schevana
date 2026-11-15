@@ -110,7 +110,8 @@
     gpu-call? gpu-call-shader *gpu-facts* core0-display core0-frame-ns
     core0-hidden? core0-flags core0-error-text core0-step-state
     core0-frame-report core0-window-sizes core0-window-scale clipboard-get
-    core0-set-cursor! clipboard-set! core0-eval! core0-environment
+    core0-set-cursor! clipboard-set! core0-eval! core0-refresh-ns!
+    core0-environment
     core0-recorder-environment platform-cpu-count
     ;; Given again: the recorder's (src/recorder/export.ss), which the
     ;; Pipeline reads of a list

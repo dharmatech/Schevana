@@ -47,6 +47,7 @@
     ;; thread.
     core0-window-minimum! core0-window-fullscreen! core0-window-icon!
     core0-set-cursor! clipboard-set! core0-trace-dump! core0-eval!
+    core0-refresh-ns!
     ;; a step of the calling thread's, on its own ring
     core0-trace!
     ;; and its wake, ending core0's wait; frames published, whether the last

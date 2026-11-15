@@ -316,7 +316,11 @@
               (lock-object code)
               (foreign-callable-entry-point code))))]))
 
-;; presented: tv_sec high and low, ns, refresh, sequence high and low, flags
+;; presented: tv_sec high and low, ns, refresh, sequence high and low, flags.
+;; The sequence, the display's count of its refreshes, is left unread: the
+;; protocol lets it be 0, as KWin's is, and Mutter's counts frames where
+;; the driver counts nothing. The refreshes are counted from the times
+;; (present-shown!).
 (define-wayland-callback wayland-shown-code
   (lambda (frame proxy sec-hi sec-lo nsec refresh seq-hi seq-lo flags)
     (present-reported!
@@ -324,8 +328,7 @@
      (wayland-shown-ns frame
                        (+ (* 1000000000 (+ (* sec-hi 4294967296) sec-lo))
                           nsec))
-     refresh
-     (+ (* seq-hi 4294967296) seq-lo))
+     refresh)
     (core0-trace! 10 frame)
     (wayland-destroy proxy)
     (unless (eqv? flags *wayland-flags*)
@@ -335,7 +338,7 @@
    unsigned-32 unsigned-32))
 (define-wayland-callback wayland-dropped-code
   (lambda (frame proxy)
-    (present-reported! frame 2 0 0 0)
+    (present-reported! frame 2 0 0)
     (core0-trace! 11 frame)
     (wayland-destroy proxy))
   (uptr uptr))
@@ -735,32 +738,17 @@
               (mac-reported! frame (fxvector-ref s (fx+ at 1)))
               (fxvector-set! w i -1))))))))
 
-;; The display's refreshes as Metal's times count them, from the first
-;; shown, and when the last shown came (now-ns).
-(defvar *mac-refresh* 0)
-(defvar *mac-refresh-at* 0)
-
 ;; Frame's word from Metal: t, when it was shown in Apple's host time, or 0
 ;; for never. A time is taken on now-ns's clock when its frame shows after
-;; it was sent, and within a second; else the report says nothing. The
-;; display's sequence is the refreshes since the last shown, at the
-;; window's rate, as Metal gives none.
+;; it was sent, and within a second; else the report says nothing. Metal
+;; says no refresh, and the display may vary its own: the refreshes are
+;; counted at the window's rate, each time as it is (present-shown!).
 (define (mac-reported! frame t)
   (if (fx= t 0)
-      (begin (present-reported! frame 2 0 0 0)
+      (begin (present-reported! frame 2 0 0)
              (core0-trace! 11 frame))
       (let ([shown (+ t (platform-clock-offset 8))]
-            [sent (fxvector-ref *present-ring* (fx+ (present-at frame) 2))]
-            [r (core0-frame-ns)])
-        (when (and (<= (- sent 1000000) shown (+ sent 1000000000)) (> r 0))
-          (let ([seq (if (= *mac-refresh-at* 0)
-                         1
-                         (+ *mac-refresh*
-                            (div (+ (- shown *mac-refresh-at*)
-                                    (quotient r 2))
-                                 r)))])
-            (when (> shown *mac-refresh-at*)
-              (set! *mac-refresh* seq)
-              (set! *mac-refresh-at* shown))
-            (present-reported! frame 1 shown r seq)
-            (core0-trace! 10 frame))))))
+            [sent (fxvector-ref *present-ring* (fx+ (present-at frame) 2))])
+        (when (<= (- sent 1000000) shown (+ sent 1000000000))
+          (present-reported! frame 1 shown 0)
+          (core0-trace! 10 frame)))))

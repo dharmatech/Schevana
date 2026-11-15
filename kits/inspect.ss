@@ -44,8 +44,10 @@
                      (+ k (* frame-ring-words (modulo i frame-ring-rows))))))
 
 ;; Word k of frame i's report: 1 its kind (0 sent, 1 shown, 2 dropped), 2
-;; when sent, 3 when shown (now-ns), 4 the refresh, 5 the display's
-;; sequence, 6 when its GPU work was seen done (0, not yet); or #f.
+;; when sent, 3 when the refresh it showed at came, by the screen's clock
+;; (now-ns), 4 the refresh, 5 that refresh's number, counted from the
+;; reports' times, 6 when its GPU work was seen done (0, not yet), 10 the
+;; screen's own stamp of its showing; or #f.
 (define (inspect-frame-report i k)
   (let ([n (inspect-frame-ref i 6)])
     (and n (> n 0) (core0-frame-report n k))))
@@ -74,19 +76,12 @@
                         (inspect-frame-report (- i 1) 5)
                         1))))))
 
-;; Whether the screen's two words on frame i disagree, its count and its
-;; time: from the frame before, shown too, the refreshes its sequence steps
-;; and those its time steps, a period each, half a refresh apart or more.
-;; The River trusts the sequence for its columns, the times for its now.
-(define (inspect-frame-seq-off? i)
-  (and (inspect-frame-shown? i) (inspect-frame-shown? (- i 1))
-       (let ([p (inspect-frame-report i 4)])
-         (and (> p 0)
-              (>= (* 2 (abs (- (- (inspect-frame-report i 3)
-                                  (inspect-frame-report (- i 1) 3))
-                               (* p (- (inspect-frame-report i 5)
-                                       (inspect-frame-report (- i 1) 5))))))
-                  p)))))
+;; How long after the refresh frame i showed at, by the screen's clock,
+;; the screen stamped it, ns: a stamp that ran late (0, one that didn't);
+;; #f when it didn't show.
+(define (inspect-frame-stamp-late i)
+  (and (inspect-frame-shown? i)
+       (max 0 (- (inspect-frame-report i 10) (inspect-frame-report i 3)))))
 
 ;; Frame i on the screen: shown, late (inspect-frame-missed), dropped by the
 ;; compositor, or #f (no report, none yet).
@@ -115,7 +110,8 @@
 ;; tick, its draw and its publish on core1; core0
 ;; taking it (taken), asking for a swapchain image for it and having one
 ;; (acquiring, acquired), and sending it (sent); its GPU work seen done
-;; (gpu); on the screen (shown).
+;; (gpu); on the screen, by the screen's clock (shown), and by the
+;; screen's own stamp (stamped).
 (define (inspect-frame-at i point)
   (let ([t (case point
              [(sdl) (inspect-frame-ref i 7)]
@@ -132,6 +128,8 @@
              [(gpu) (inspect-frame-report i 6)]
              [(shown) (and (inspect-frame-shown? i)
                            (inspect-frame-report i 3))]
+             [(stamped) (and (inspect-frame-shown? i)
+                             (inspect-frame-report i 10))]
              [else #f])])
     (and t (> t 0) t)))
 
@@ -143,6 +141,32 @@
 
 ;; The same, by SDL's stamp.
 (define (inspect-frame-latency i) (inspect-frame-latency-from i 'sdl))
+
+;;; ---- the screen's clock's drift
+;; How far core0's clock (src/core0/present.ss) moved at each refresh from
+;; oldest on that a frame showed at, ns: the refresh's time past that of
+;; the frame shown before and the periods between them, negative when
+;; earlier. ((refresh . ns) ...), oldest first; none for the first frame
+;; shown, one reported out of order, or a screen with no steady refresh.
+(define (inspect-clock-moves oldest)
+  (let loop ([i (- *frame-ring-n* 1)] [later #f] [moves '()])
+    (cond
+      [(not (inspect-frame-ref i 6)) moves]
+      [(not (and (inspect-frame-shown? i) (> (inspect-frame-report i 4) 0)))
+       (loop (- i 1) later moves)]
+      [else
+       (let ([t (inspect-frame-report i 3)] [k (inspect-frame-report i 5)])
+         (cond
+           [(not later) (if (< k oldest) moves (loop (- i 1) (cons t k) moves))]
+           [(> (cdr later) k)
+            (let ([move (cons (cdr later)
+                              (- (car later) t
+                                 (* (- (cdr later) k)
+                                    (inspect-frame-report i 4))))])
+              (if (< k oldest)
+                  (cons move moves)
+                  (loop (- i 1) (cons t k) (cons move moves))))]
+           [else (loop (- i 1) (cons t k) moves)]))])))
 
 ;; The frames kept, and how many of them had no room on the screen.
 ;; => (values kept not-shown)
@@ -196,10 +220,11 @@
              missed))))))
 
 ;;; ---- refreshes
-;;; The screen's rhythm, a refresh a number: the display's own sequence,
-;;; anchored at the newest frame the screen reported showing; where it
-;;; reports none, counted from now-ns's 0 a period apart, an estimate. A
-;;; refresh's time is its vblank's (now-ns).
+;;; The screen's rhythm, a refresh a number: core0's count from the
+;;; reports' times (src/core0/present.ss), anchored at the newest frame
+;;; the screen reported showing; where it reports none, counted from
+;;; now-ns's 0 a period apart, an estimate. A refresh's time is its
+;;; vblank's (now-ns).
 
 ;; The grid as it stands: #(refresh time period estimated?), its anchor.
 (define (inspect-refresh-grid)
@@ -222,7 +247,7 @@
 (define (inspect-refresh-time g k)
   (+ (vector-ref g 1) (* (- k (vector-ref g 0)) (vector-ref g 2))))
 
-;; The refresh frame i showed at, by grid g: the screen's word; with no
+;; The refresh frame i showed at, by grid g: its report's; with no
 ;; reports, once core0 sent it, the one after it was sent (with no screen,
 ;; published), an estimate. #f when it didn't show, or hasn't yet.
 (define (inspect-frame-refresh g i)
@@ -1181,7 +1206,9 @@
       (frame-ns . ,(core0-frame-ns))
       (jobs . ,(cdr (assq 'jobs state)))
       (events . ,(cdr (assq 'events state)))
-      (failed . ,(cdr (assq 'failed state))))))
+      (failed . ,(cdr (assq 'failed state)))
+      ;; the refresh's length said in place of the screen's (0, none)
+      (refresh-said . ,(cdr (assq 'refresh-said state))))))
 
 ;; The pacer: its period and its grid's next tick (ns), whether the screen
 ;; paces it (frames back by vsync), and its t; the

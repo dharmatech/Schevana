@@ -664,4 +664,5 @@
 (define (core0-step-state)
   (list (cons 'jobs (length (unbox *core0-jobs*)))
         (cons 'events (length (unbox *core0-inbox*)))
-        (cons 'failed (and *core0-job-failed* (car *core0-job-failed*)))))
+        (cons 'failed (and *core0-job-failed* (car *core0-job-failed*)))
+        (cons 'refresh-said *present-refresh-said*)))

@@ -3,16 +3,31 @@
 ;;; show (kits/inspect.ss). Headless, nothing reports, so the reports here
 ;;; are written as the screen's callbacks would write them.
 
+;; Frame n's row begun, as core0 sends it at sent: none of the screen's
+;; word yet.
+(define (present-test-sent! n sent)
+  (let ([at (present-at n)])
+    (do ([k 1 (+ k 1)]) ((= k present-words))
+      (fxvector-set! *present-ring* (+ at k) 0))
+    (fxvector-set! *present-ring* (+ at 2) sent)
+    (fxvector-set! *present-ring* at n)))
+
 ;; Frame i's report, as core0 begins it at sent and the screen fills it:
-;; kind (1 shown, 2 dropped), shown, the display's sequence, GPU done.
-(define (present-test-report! i sent kind shown seq done)
-  (let* ([n (inspect-frame-ref i 6)]
-         [r *present-ring*]
-         [at (* present-words (modulo n present-rows))])
-    (fxvector-set! r at n)
-    (fxvector-set! r (+ at 2) sent)
-    (fxvector-set! r (+ at 6) done)
-    (present-reported! n kind shown (core0-frame-ns) seq)))
+;; kind (1 shown, 2 dropped), the screen's stamp, GPU done.
+(define (present-test-report! i sent kind stamp done)
+  (let ([n (inspect-frame-ref i 6)])
+    (present-test-sent! n sent)
+    (fxvector-set! *present-ring* (+ (present-at n) 6) done)
+    (present-reported! n kind stamp (core0-frame-ns))))
+
+;; thunk with the screen's clock as at boot: no refresh placed, no report
+;; held.
+(define (present-test-fresh thunk)
+  (fluid-let ([*present-refresh* 0] [*present-refresh-at* 0]
+              [*present-late-run* 0] [*present-late-least* 0]
+              [*present-shown* 0] [*present-sent* 0]
+              [*present-held* -1] [*present-held-last* -1])
+    (thunk)))
 
 ;; Four frames drawn, the second showing input that came at in.
 (define present-test-in 0)
@@ -31,12 +46,20 @@
        [i present-test-first])
   ;; sent a refresh apart; shown 3 refreshes on, the third a refresh late
   ;; (its GPU done only after the refresh it missed), the fourth dropped
-  (present-test-report! i t 1 (+ t (* 3 p)) 100 (+ t 1000000))
-  (present-test-report! (+ i 1) (+ t p) 1 (+ t (* 4 p)) 101
-                        (+ t p 1000000))
-  (present-test-report! (+ i 2) (+ t (* 2 p)) 1 (+ t (* 6 p)) 103
-                        (+ t (* 5 p) 1000000))
-  (present-test-report! (+ i 3) (+ t (* 3 p)) 2 0 0 0)
+  (present-test-fresh
+   (lambda ()
+     (present-test-report! i t 1 (+ t (* 3 p)) (+ t 1000000))
+     (present-test-report! (+ i 1) (+ t p) 1 (+ t (* 4 p)) (+ t p 1000000))
+     (present-test-report! (+ i 2) (+ t (* 2 p)) 1 (+ t (* 6 p))
+                           (+ t (* 5 p) 1000000))
+     (present-test-report! (+ i 3) (+ t (* 3 p)) 2 0 0)
+     (let ([held (inspect-frame-screen (+ i 2))])
+       ;; no report follows: three refreshes on, it stands
+       (present-held-poll! (+ t (* 9 p)))
+       (present-held-poll! (+ t (* 9 p) 1))
+       (check "a report that says a refresh was missed says nothing till \
+               the next frame's agrees, or three refreshes pass with none"
+              (and (not held) (eq? (inspect-frame-screen (+ i 2)) 'late))))))
   (check (format "a frame's report says where it went: shown in time, late \
                   by the refreshes the screen showed the one before again, \
                   or dropped (~a ~a ~a ~a, ~a missed)"
@@ -69,6 +92,234 @@
 (check "a report taken over by a later frame's says nothing of the earlier"
        (let ([n (inspect-frame-ref present-test-first 6)])
          (not (core0-frame-report (+ n present-rows) 1))))
+
+;;; The screen's clock, inferred from the reports' stamps alone
+;;; (src/core0/present.ss): frames by numbers no frame drawn has, each sent
+;;; and reported as the screen's callbacks would.
+
+;; Frames from first on: each (sent stamp), or (sent stamp refresh), sent
+;; and reported shown in turn, a refresh p ns long by the screen's word.
+(define (present-test-shown! first p frames)
+  (for-each (lambda (f k)
+              (present-test-sent! (+ first k) (car f))
+              (present-reported! (+ first k) 1 (cadr f)
+                                 (if (pair? (cddr f)) (caddr f) p)))
+            frames (iota (length frames))))
+
+;; A flow from first on: frame k sent at t and k refreshes, two before its
+;; own, and stamped late ns after the refresh at (the k of lates' pair);
+;; => what (word frame k) reads of each.
+(define (present-test-flow first p t lates)
+  (present-test-shown!
+   first p
+   (map (lambda (l)
+          (list (+ t (* (- (car l) 2) p)) (+ t (* (cadr l) p) (caddr l))))
+        (map (lambda (l k) (cons k l)) lates (iota (length lates))))))
+
+(define (present-test-word n k) (core0-frame-report n k))
+(define (present-test-step n) (- (present-test-word n 5)
+                                 (present-test-word (- n 1) 5)))
+
+(check "refreshes are counted from the reports' times, whatever the \
+        display's own count says: issue 9's three frames, a second apart \
+        at 30 Hz, show 30 and 31 refreshes apart, each in view at once"
+       (present-test-fresh
+        (lambda ()
+          (let ([f 2000001])
+            (present-test-shown! f 33354900
+                                 '((256136000000 256199000000)
+                                   (257137000000 257200000000)
+                                   (258135000000 258233000000)))
+            (and (= 30 (present-test-step (+ f 1)))
+                 (= 31 (present-test-step (+ f 2)))
+                 (eqv? 1 (present-test-word (+ f 2) 1))
+                 (= 33354900 (present-test-word (+ f 2) 4)))))))
+
+(check "a stamp that runs late in a flow is still its refresh's: the frame \
+        showed a refresh after the one before, when the screen's clock \
+        says, to the 4096th it may have drifted, and its stamp is kept; \
+        the pacer reads the clock's time"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000011])
+            (present-test-flow f p t '((0 0) (1 0) (2 5000000) (3 0)))
+            (and (= 1 (present-test-step (+ f 2)))
+                 (= 1 (present-test-step (+ f 3)))
+                 (<= 0 (- (present-test-word (+ f 2) 3) (+ t (* 2 p)))
+                     (quotient p 4096))
+                 (= (present-test-word (+ f 2) 10) (+ t (* 2 p) 5000000))
+                 (= (present-test-word (+ f 3) 3) (+ t (* 3 p)))
+                 (= (pacer-refresh-seen (+ f 2))
+                    (present-test-word (+ f 2) 3)))))))
+
+(check "a stamp that runs more than a refresh late reads as a refresh \
+        missed, so its report is held; the next frame's, which leaves it \
+        no room, settles it: a refresh before, and none missed"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000021]
+                 [late (quotient (* 13 p) 10)])
+            (present-test-flow f p t `((0 0) (1 0) (2 ,late)))
+            (let ([held? (and (eqv? 0 (present-test-word (+ f 2) 1))
+                              (= *present-held* (+ f 2)))])
+              ;; a kernel thread sends them in order: the next stamp comes
+              ;; right after the late one
+              (present-test-flow (+ f 3) p t `((2 ,(+ late 2000))))
+              (and held?
+                   (eqv? 1 (present-test-word (+ f 2) 1))
+                   (eqv? 1 (present-test-word (+ f 3) 1))
+                   (= 1 (present-test-step (+ f 2)))
+                   (= 1 (present-test-step (+ f 3)))
+                   (<= 0 (- (present-test-word (+ f 2) 3) (+ t (* 2 p)))
+                       (quotient p 1024))
+                   (= *present-held* -1)))))))
+
+(check "a frame that did miss a refresh is held too, and shown as it said \
+        once the next frame's report agrees: a refresh after it"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000031])
+            (present-test-flow f p t '((0 0) (1 0) (3 0)))
+            (let ([held? (eqv? 0 (present-test-word (+ f 2) 1))])
+              (present-test-flow (+ f 3) p t '((4 0)))
+              (and held?
+                   (= 2 (present-test-step (+ f 2)))
+                   (= 1 (present-test-step (+ f 3)))
+                   (= (present-test-word (+ f 2) 3) (+ t (* 3 p)))))))))
+
+(check "two stamps in a row that ran late, as a thread that stalled sends \
+        them, are both held, and both settled by the frame after: each \
+        showed a refresh before the next"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000041]
+                 [late (quotient (* 22 p) 10)])
+            ;; frames 2 and 3 stamped as the stall ends, 2.2 refreshes on
+            (present-test-flow f p t `((0 0) (1 0) (2 ,late)
+                                       (2 ,(+ late 2000))))
+            (let ([held (list *present-held* *present-held-last*)])
+              (present-test-flow (+ f 4) p t `((2 ,(+ late 4000)) (5 0)))
+              (and (equal? held (list (+ f 2) (+ f 3)))
+                   (for-all (lambda (k) (= 1 (present-test-step (+ f k))))
+                            '(2 3 4 5))
+                   (= *present-held* -1)))))))
+
+(check "with no steady refresh said (a Mac's, a variable one), each stamp \
+        is taken as it is, at the window's rate, to the nearest refresh, \
+        and no report is held; one that comes out of order is placed \
+        before the newest"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000051]
+                 [frame (lambda (k at)
+                          (list (+ t (* (- k 2) p)) (+ t at) 0))])
+            (present-test-shown!
+             f p (list (frame 0 0) (frame 1 (quotient (* 17 p) 10))
+                       (frame 3 (* 4 p)) (frame 2 (* 3 p))))
+            (and (= 2 (present-test-step (+ f 1)))
+                 (= (present-test-word (+ f 1) 3)
+                    (+ t (quotient (* 17 p) 10)))
+                 (= p (present-test-word (+ f 1) 4))
+                 (eqv? 1 (present-test-word (+ f 1) 1))
+                 (= -1 (- (present-test-word (+ f 3) 5)
+                          (present-test-word (+ f 2) 5)))
+                 (= *present-refresh-at* (+ t (* 4 p))))))))
+
+(check "no two frames at one refresh: a frame whose stamp is the one \
+        before's own is numbered the next"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000061])
+            (present-test-flow f p t '((0 0) (0 0)))
+            (and (= 1 (present-test-step (+ f 1)))
+                 (eqv? 1 (present-test-word (+ f 1) 1)))))))
+
+(check "after a pause a stamp is read to the nearest refresh, early or \
+        late, and shown at once; the flow that follows counts on from it"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000071]
+                 [early (- (quotient (* 4 p) 10))])
+            (present-test-shown!
+             f p (list (list (- t (* 2 p)) t)
+                       (list (+ t (* 98 p)) (+ t (* 100 p) early))
+                       (list (+ t (* 99 p)) (+ t (* 101 p)))))
+            (and (= 100 (present-test-step (+ f 1)))
+                 (eqv? 1 (present-test-word (+ f 1) 1))
+                 (= 1 (present-test-step (+ f 2))))))))
+
+(check "the clock follows an earlier stamp at once, and later ones only \
+        when eight in a row say so, by the least of them: a screen whose \
+        refreshes moved 2 ms later is followed at the eighth frame"
+       (present-test-fresh
+        (lambda ()
+          (let* ([p (core0-frame-ns)] [t (* 1000 p)] [f 2000081]
+                 [off (lambda (k) (- (present-test-word (+ f k) 3)
+                                     (+ t (* k p))))])
+            (present-test-flow
+             f p t (cons '(0 0)
+                         (map (lambda (k)
+                                (list (+ k 1) (+ 2000000 (* k 1000))))
+                              (iota 9))))
+            ;; frames 1 to 9 stamped 2 ms late and more; then one in time
+            (present-test-flow (+ f 10) p t '((10 0)))
+            (and (< (off 7) 100000)
+                 (<= 1900000 (off 8) 2010000)
+                 (<= 1900000 (off 9) 2020000)
+                 (= (off 10) 0)
+                 (for-all (lambda (k) (= 1 (present-test-step (+ f k))))
+                          (cdr (iota 11))))))))
+
+;; A stream of n frames from first on, a refresh p ns long as the screen
+;; says: each shows a refresh after the one before, one in 53 two (the
+;; compositor held it), is sent two refreshes before it shows, and is
+;; stamped tens of microseconds after its refresh, one in 97 between 0.5
+;; and 9 ms after, none before the stamp before it, as one thread sends
+;; them. Core0's step runs before each report. => (wrong off): the steps
+;; counted wrong, and the most a frame's time by the clock is off its
+;; refresh's, ns.
+(define (present-test-stream first p n)
+  (let ([t (* 1000 p)] [truth (make-vector n 0)])
+    (let feed ([k 0] [tick 0] [before 0])
+      (when (< k n)
+        (let* ([at (+ t (* tick p))]
+               [late (+ 5000 (* 1000 (modulo (* k 7919) 31))
+                        (if (= 0 (modulo (* k 7919) 97))
+                            (+ 500000 (* 100000 (modulo (* k 31) 86)))
+                            0))]
+               [stamp (max (+ at late) (+ before 2000))])
+          (vector-set! truth k tick)
+          (present-held-poll! stamp)
+          (present-test-sent! (+ first k) (+ t (* (- k 2) p)))
+          (present-reported! (+ first k) 1 stamp p)
+          (feed (+ k 1) (+ tick (if (= 0 (modulo k 53)) 2 1)) stamp))))
+    (present-held-poll! (* 2 (+ t (* 2 n p))))
+    (let verdict ([k 1] [wrong 0] [off 0])
+      (if (= k n)
+          (list wrong off)
+          (verdict (+ k 1)
+                   (if (= (present-test-step (+ first k))
+                          (- (vector-ref truth k) (vector-ref truth (- k 1))))
+                       wrong
+                       (+ wrong 1))
+                   (max off (abs (- (present-test-word (+ first k) 3)
+                                    (+ t (* (vector-ref truth k) p))))))))))
+
+(let* ([p (core0-frame-ns)]
+       [at-60 (present-test-fresh
+               (lambda () (present-test-stream 2001001 p 3000)))]
+       ;; a screen at 144 Hz: a stamp may run more than a refresh late
+       [at-144 (present-test-fresh
+                (lambda () (present-test-stream 2005001 6944444 3000)))])
+  (check (format "3,000 frames stamped as a kernel thread stamps them, one \
+                  in 97 late by 0.5 to 9 ms, one in 53 held a refresh by \
+                  the compositor: every step is counted right, at the \
+                  window's rate and at 144 Hz, and at the window's rate \
+                  each frame's time by the clock is within 0.1 ms of its \
+                  refresh's (~a wrong, ~a ns off; at 144 Hz ~a wrong)"
+                 (car at-60) (cadr at-60) (car at-144))
+         (and (= 0 (car at-60)) (< (cadr at-60) 100000)
+              (= 0 (car at-144)))))
 
 (check "input that asked for no frame shows in none: the next frame says \
         nothing of it"
@@ -143,3 +394,36 @@
            (override! 'frames-in-flight)
            (let ([three (in-flight)])
              (and (equal? two '(2 . 2)) (equal? three '(3 . 3)))))))
+
+(check "a person may say the refresh's length in place of the screen's: \
+        from 1 to 100 ms, or 0 for the screen's own again; anything else \
+        is refused and changes nothing; a screen that says none keeps none"
+       (present-test-fresh
+        (lambda ()
+          (fluid-let ([*present-refresh-said* 0])
+            (let* ([word (lambda (frame stamp refresh)
+                           (present-test-sent! frame stamp)
+                           (present-reported! frame 1 stamp refresh)
+                           (fxvector-ref *present-ring*
+                                         (+ (present-at frame) 4)))]
+                   [refused (map core0-refresh-ns!
+                                 '(-1 999999 100000001 16.7 #f "16"))]
+                   [unsaid *present-refresh-said*]
+                   [own (word 1 1000000000 16666667)]
+                   [taken (core0-refresh-ns! 16667505)]
+                   [posted (begin (steps 1) *present-refresh-said*)]
+                   [said (word 2 2000000000 16666667)]
+                   [none (word 3 3000000000 0)]
+                   [back (begin (core0-refresh-ns! 0) (steps 1)
+                                (word 4 4000000000 16666667))])
+              (present-refresh-say! 5)
+              (and (equal? refused '(#f #f #f #f #f #f))
+                   (= unsaid 0)
+                   (= own 16666667)
+                   taken
+                   (= posted 16667505)
+                   (= said 16667505)
+                   (= none (core0-frame-ns))
+                   (= back 16666667)
+                   (= *present-refresh-said* 0)
+                   (= 0 (cdr (assq 'refresh-said (inspect-core0))))))))))

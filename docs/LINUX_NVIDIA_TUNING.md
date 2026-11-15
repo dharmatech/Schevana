@@ -26,7 +26,16 @@ The first should say `Y`, and the second `0`. To undo it, delete the file,
 run `sudo update-initramfs -u` again and reboot.
 
 Measured on Debian 13 (Linux 6.12), NVIDIA 615.71.10 and GNOME Shell 48.7,
-at 60 Hz. Other versions may differ: NVIDIA ships the option off.
+at 60 Hz. NVIDIA ships the option off, and only from its 610 drivers on:
+those to 595 have no vblank support to turn on (`modinfo -p nvidia_drm`
+lists no `vblank`), and nothing cures the stutter there.
+
+Schevana itself doesn't need the option. It infers the screen's clock from
+the stamps it gets, late ones among them, so it counts each repeated
+refresh and paces its frames the same with or without it
+([INTERNALS.md](INTERNALS.md)); the Pipeline's River marks each late stamp
+with a pip. What the option removes is the repeats themselves, which are
+the compositor's.
 
 ## Why
 

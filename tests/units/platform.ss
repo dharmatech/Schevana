@@ -224,13 +224,13 @@
 
 ;; CLOCK_UPTIME_RAW, Metal's clock, is 8 on a Mac alone.
 (check "Metal's word on a drawable is its frame's report: shown on now-ns's \
-        clock at the window's refresh, its sequence the refreshes since the \
-        last shown; a time before the frame was sent says nothing; 0 is \
-        dropped"
+        clock at the window's refresh, its refresh counted from the last \
+        shown; a time before the frame was sent says nothing; 0 is dropped"
        (or (not (platform-mac?))
            (let* ([r (core0-frame-ns)] [f 1000021] [t (now-ns)]
                   [mach (lambda (ns) (- ns (platform-clock-offset 8)))])
-             (fluid-let ([*mac-refresh* 0] [*mac-refresh-at* 0])
+             (fluid-let ([*present-refresh* 0] [*present-refresh-at* 0]
+                         [*present-shown* 0] [*present-sent* 0])
                (for-each (lambda (n) (platform-test-sent! n (- t (* 4 r))))
                          (list f (+ f 1) (+ f 2)))
                (platform-test-sent! (+ f 3) (- t 20000000))

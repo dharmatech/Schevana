@@ -209,17 +209,62 @@ seldom waits, and a newer frame replaces one not shown yet.
 ## What the screen reports
 
 On Wayland core0 asks the compositor to report on each frame it presents
-(`wp_presentation`): the vblank it showed at, the refresh and the
-display's sequence, or that it was dropped. On a Mac, Metal tells a
-drawable's presented handlers when it was shown, and core0 counts the
-sequence from the times. X11 and headless runs report nothing yet. The
-world reads the reports by frame number, `(inspect-frame-screen n)` and
+(`wp_presentation`): when it showed and how long a refresh is, or that it
+was dropped. On a Mac, Metal tells a drawable's presented handlers when it
+was shown. X11 and headless runs report nothing yet.
+
+A report's time is a stamp, and core0 doesn't take one at its word. A
+screen that refreshes steadily is a clock, and a stamp is that clock read
+late: by nothing where the display stamps its own refresh, by a kernel
+thread's turn where a driver stamps the flip's event as it sends it, as
+NVIDIA's does with no vblank support. So core0 infers the clock from the
+stamps alone. A refresh comes its period after the one before; an earlier
+stamp moves the clock at once, a later one only as far as the clock may
+have drifted, and eight later in a row by the least of them, which is the
+few frames it takes to learn a screen at the start, or a change of it.
+Each report then says the refresh its frame showed at, by number, and when
+that refresh came by the clock; the stamp is kept beside it. A stamp can
+run a whole refresh late, which only the next frame's report can tell,
+since a frame shows after the one before it: so a report that says a
+refresh was missed in a flow of frames is held till the next agrees, or
+three refreshes pass. Where the screen says it keeps no steady refresh (a
+variable one; a Mac's, which says none), each stamp is taken as it is.
+
+The display's own count of its refreshes, the protocol's sequence, isn't
+read. The protocol lets it be 0, and KWin's always is; Mutter's counts
+frames, not refreshes, where the driver has no count to give, and steps by
+one when a window changes screens.
+
+The world reads the reports by frame number, `(inspect-frame-screen n)` and
 `(inspect-frame-latency n)`, and joins them to the input each frame shows.
 So a refresh frozen where an update was due is counted from the screen's
-own sequence, not guessed from waits, and Monitor and the Pipeline say how
+own times, not guessed from waits, and Monitor and the Pipeline say how
 long input takes to reach the screen: at the median and the 99th, from the
 compositor's own time where it gives one, else SDL's stamp, else when
-core0 first saw it.
+core0 first saw it. The pacer reads the same reports, so a stamp that ran
+late doesn't make its frame late.
+
+The Pipeline's Latency shows the clock's drift under the River, a
+refresh under its column: how far the clock moved at each one
+(`inspect-clock-moves`). Under 0, a stamp came earlier than the clock had
+it; over 0, the clock gave way to late stamps.
+
+The refresh's length is the screen's own word, which is the display
+mode's rate and can be a little off the display's real one. To try
+another, say it at a REPL, in nanoseconds:
+
+```scheme
+(core0-refresh-ns! 16667505)   ; => #t, taken from the next report on
+(core0-refresh-ns! 0)          ; the screen's own word again
+(cdr (assq 'refresh-said (inspect-core0)))   ; what is said now
+```
+
+A length is taken from 1 to 100 ms (1,000,000 to 100,000,000), or 0;
+anything else is refused with `#f` and changes nothing. It stands in for
+the screen's word only where the screen says one: a screen with no
+steady refresh keeps none. It isn't saved: it lasts till it's set to 0 or
+Schevana quits. A length that suits the display shows as a drift that
+keeps to 0 between the clock's real moves.
 
 Which OS, windowing system and GPU API this is comes from predicates
 (`platform-mac?`, `platform-wayland?`, `platform-vulkan?`) and facts core0

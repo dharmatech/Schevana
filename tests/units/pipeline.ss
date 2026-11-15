@@ -1701,28 +1701,22 @@
                     (pipeline-test-has? text "0.0 ms before this picture")
                     (pipeline-test-has? text "new at this refresh")
                     (pipeline-test-has? text "in the box 1.0 ms"))))
-      ;; the frame before shown at refresh 999 by the count, and by its
-      ;; times one refresh before, then two
-      (let* ([m (inspect-frame-ref (- i 1) 6)]
-             [at0 (present-at m)]
-             [saved (map (lambda (k) (fxvector-ref r (+ at0 k))) (iota 10))]
-             [before! (lambda (refreshes)
-                        (fxvector-set! r at0 m)
-                        (fxvector-set! r (+ at0 1) 1)
-                        (fxvector-set! r (+ at0 3) (- shown (* refreshes p)))
-                        (fxvector-set! r (+ at0 4) p)
-                        (fxvector-set! r (+ at0 5) 999))]
-             [agree (begin (before! 1) (pipeline-river-seq-off g 990))]
-             [apart (begin (before! 2) (pipeline-river-seq-off g 990))]
+      ;; the screen's own stamp of this frame, in time and then 2 ms after
+      ;; the refresh it showed at
+      (let* ([stamp! (lambda (late) (fxvector-set! r (+ at 10) (+ shown late)))]
+             [in-time (begin (stamp! 40000) (pipeline-river-late-stamps g 990))]
+             [late (begin (stamp! 2000000) (pipeline-river-late-stamps g 990))]
              [text (pipeline-river-text g 1000 1000)]
+             [by (inspect-frame-stamp-late i)]
+             [stamped (inspect-frame-at i 'stamped)]
              [s (pipeline-river-new)]
              [areas (ui-stream-areas s 0 0 400 100 40 '())]
              [plot (cdr (assq 'plot areas))]
              [lane (cdr (assq 'lane areas))]
              [pic (image 400 100 1
                          (lambda ()
-                           (pipeline-draw-river-seq-off areas 40 1005
-                                                        '(1000))))])
+                           (pipeline-draw-river-pips areas 40 1005
+                                                     '(1000))))])
         (let-values ([(bx bw) (ui-bar-chart-bar areas 40 34)])
           (let ([pip (pixel-at pic (exact (round (+ bx (/ bw 2))))
                                (+ (cadr plot) (quotient (car lane) 2)
@@ -1730,17 +1724,18 @@
                 [back (pixel-at pic 1 1)])
             (picture-free! pic)
             (ui-stream-release! s)
-            (for-each (lambda (k v) (fxvector-set! r (+ at0 k) v))
-                      (iota 10) saved)
-            (check (format "where the screen's count says a frame came a \
-                            refresh after the one before and its times say \
-                            two, the screen's cell has a pip, and the \
-                            tooltip says both (~a; ~a)" agree apart)
-                   (and (> m 0)
-                        (null? agree)
-                        (equal? apart '(1000))
-                        (pipeline-test-has? text "1 by the screen's count, \
-                                                  2.00 by its times")
+            (stamp! 0)
+            (check (format "where the screen stamped a frame late, 2 ms \
+                            after the refresh it showed at by the screen's \
+                            clock, the screen's cell has a pip, and the \
+                            tooltip says by how much; a stamp 40 us after \
+                            has none (~a; ~a)" in-time late)
+                   (and (null? in-time)
+                        (equal? late '(1000))
+                        (= by 2000000)
+                        (= stamped (+ shown 2000000))
+                        (pipeline-test-has? text "the screen stamped it \
+                                                  2.0 ms late")
                         (not (= pip back)))))))
       ;; the frame before shown at 999, a refresh before; then the
       ;; screen's word on this one not in yet
@@ -1882,3 +1877,93 @@
                     "brings it back")])
            (close-window! w)
            ok)))
+
+;; The screen's clock's drift (inspect-clock-moves): twenty frames a
+;; refresh apart, reported to core0's own clock, the stamps a ms late from
+;; the third on, as on a screen whose refreshes moved.
+(let* ([w (pipeline)] [v (window-ref w 'state)])
+  (do ([k 0 (+ k 1)]) ((= k 24)) (request-frame!) (steps 1))
+  (let* ([count 20]
+         [first (- *frame-ring-n* count)]
+         [p 16666667]
+         [r *present-ring*]
+         [numbers (map (lambda (j) (inspect-frame-ref (+ first j) 6))
+                       (iota count))]
+         [saved (map (lambda (n)
+                       (map (lambda (k) (fxvector-ref r (+ (present-at n) k)))
+                            (iota present-words)))
+                     numbers)]
+         [base (* 1000 p)])
+    (fluid-let ([*present-refresh* 5000] [*present-refresh-at* 0]
+                [*present-late-run* 0] [*present-late-least* 0]
+                [*present-shown* 0] [*present-sent* 0]
+                [*present-held* -1] [*present-held-last* -1])
+      (for-each
+       (lambda (n j)
+         (let ([at (present-at n)])
+           (fxvector-set! r at n)
+           (fxvector-set! r (+ at 1) 0)
+           (fxvector-set! r (+ at 2) (+ base (* j p)))
+           (fxvector-set! r (+ at 10) 0)
+           (present-reported! n 1 (+ base (* j p) (if (< j 2) 0 1000000))
+                              p)))
+       numbers (iota count))
+      (let* ([oldest (inspect-frame-report first 5)]
+             ;; the oldest's own move is from a frame of another check's
+             [moves (filter (lambda (m) (> (car m) oldest))
+                            (inspect-clock-moves oldest))])
+        (check (format "the screen's clock's moves, a refresh each: none \
+                        while the stamps keep to it, a 4096th of a refresh \
+                        a late stamp, and the rest of the ms at the eighth \
+                        (~a)" moves)
+               (and (= (length moves) (- count 1))
+                    (equal? (map car moves)
+                            (map (lambda (j) (+ oldest j 1))
+                                 (iota (- count 1))))
+                    (= 0 (cdr (list-ref moves 0)) (cdr (list-ref moves 11)))
+                    (= (cdr (list-ref moves 3)) (quotient p 4096))
+                    (> (cdr (list-ref moves 8)) 900000)
+                    (= 1000000 (apply + (map cdr moves)))
+                    (= (pipeline-drift-reach moves) 1000000)))
+        (pipeline-view-stage-set! v 'latency)
+        (invalidate! w)
+        (steps 2)
+        (let* ([ui (window-ref w 'ui)]
+               [river (ui-find ui '(pipeline-river))]
+               [drift (ui-find ui '(pipeline drift))]
+               [g (inspect-refresh-grid)])
+          (let*-values
+              ([(newest oldest)
+                (pipeline-river-span (pipeline-river-now v g)
+                                     (ui-region-w drift))]
+               [(count areas)
+                (ui-stream-layout (pipeline-view-river v) (ui-region-x drift)
+                                  (ui-region-y drift) (ui-region-w drift)
+                                  (ui-region-h drift) newest oldest
+                                  (pipeline-river-frame-rules
+                                   (inspect-refresh-period g))
+                                  1 'whole)]
+               [(bx bw) (ui-bar-chart-bar areas count (- count 1))])
+            (check (format "on Latency the drift's graph is under the \
+                            River, and a refresh is at its column's x in \
+                            both (~a ~a; ~a ~a)"
+                           (and river (ui-region-x river))
+                           (and river (ui-region-w river))
+                           (car (cdr (assq 'plot areas)))
+                           (caddr (cdr (assq 'plot areas))))
+                   (and (not (window-error w)) river drift
+                        (> (ui-region-y drift)
+                           (+ (ui-region-y river) (ui-region-h river)))
+                        (= (car (cdr (assq 'plot areas))) (ui-region-x river))
+                        (= (caddr (cdr (assq 'plot areas)))
+                           (ui-region-w river))
+                        (= (pipeline-drift-x areas count newest newest)
+                           (+ bx (/ bw 2)))
+                        (not (pipeline-drift-x areas count newest
+                                               (+ newest 1)))))))))
+    (for-each
+     (lambda (n words)
+       (for-each (lambda (k v) (fxvector-set! r (+ (present-at n) k) v))
+                 (iota present-words) words))
+     numbers saved)
+    (close-window! w)))

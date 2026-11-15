@@ -189,7 +189,7 @@
 ;; run; everything else belongs in a folder. The export.ss files are left
 ;; out: they declare what each layer gives, sized by what's given, each a
 ;; reviewed change.
-(define src-budget 37014)
+(define src-budget 37458)
 
 ;; The tokens of a datum as read; a list's end is none.
 (define (tokens x)
@@ -609,7 +609,7 @@
     (gpu-present! memory-order-release)
     (core0-frame-report memory-order-acquire)
     (present-sent! memory-order-release)
-    (present-reported! memory-order-release)
+    (present-publish! memory-order-release)
     (mac-presented! memory-order-release)
     (mac-pump! memory-order-acquire)
     (core0-trace! memory-order-release)

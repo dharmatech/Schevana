@@ -25,12 +25,6 @@ haven't tried):
 sudo apt install chezscheme libsdl3-0 mesa-vulkan-drivers
 ```
 
-With NVIDIA's driver on Wayland, turn on its hardware vblank stamps (one
-module option and a reboot,
-[docs/LINUX_NVIDIA_TUNING.md](docs/LINUX_NVIDIA_TUNING.md)). It's not
-required, but can improve VSYNC experience with animated apps such as
-Boids 3D.
-
 On a Mac:
 
 ```bash

@@ -200,7 +200,8 @@
        (and (not (core0-hidden?))
             (= (core0-frame-ns) (quotient 1000000000 60))
             (equal? (map car (inspect-core0))
-                    '(sizes scale flags frame-ns jobs events failed))))
+                    '(sizes scale flags frame-ns jobs events failed
+                      refresh-said))))
 
 ;; Core0's sleep, on a thread of its own: a job posted or a frame published
 ;; wakes it, at once or from the next sleep; its events never do, so a
