@@ -123,6 +123,135 @@ step.
 
 All three step the same flock to the last digit.
 
+## What each level takes away
+
+Boids (simple)'s two changes were both the sandbox's. Schevana has
+levels, each giving up some of Scheme for something in return, and the
+speed of the apps above comes from climbing them. The bottom is a plain
+R6RS program with a drawing library, which owns its main loop, its
+files and its threads.
+
+**Any window, in the world or a sandbox.**
+
+- The world owns the loop. An app is handlers (`'frame` with the time,
+  `'draw` with the size, `'key` ...), each of which returns;
+  `window-frame-soon!` asks for the next frame. State lives in the
+  window (`window-ref`, `window-set!`) or in a closure.
+- A handler's call has a budget, 50M engine ticks (about 0.1 s,
+  `handler-fuel`). One that runs out crashes its window, not the
+  desktop. So a handler can't start engines of its own: Chez won't nest
+  them ("cannot nest engines").
+- Drawing is in `'draw` alone, as records: the draw bundle's boxes,
+  lines, polygons, circles, gradients, transforms, clips and text, not a
+  library's paths. A color is a theme key or `rgb`.
+- One thread, core1, owns the windows, the drawing and every global.
+- Definitions stay at the top level, so a REPL can redefine them live.
+
+For Boids (simple) this level is its window code; the sim needed
+nothing.
+
+**Outside a sandbox.** The world, "/", is all of Chez (a copy of
+`scheme-environment`) and every name of the world's: `syntax-case`,
+`record-writer`, `eval`, files, threads and C are all there. Three ways
+in:
+
+- A world namespace, a child of the world on all of Chez, with every
+  name of the world's and what it defines its own.
+- A REPL at "/", `(repl)`, where what is defined is the world's itself.
+- A tree app without `app-requests`, which loads into "/", as Settings,
+  Monitor, Tasks and Environments do. An app of the person's own, in
+  `~/.schevana.d`, gets a sandbox even without one.
+
+The first port's sim, its `record-writer` forms and `plist-ref` and all,
+loads into a world namespace unchanged, and its names stay there:
+
+```scheme no-run
+(define lab (env-fork (env-root) 'world 'name 'lab))
+(env-load lab "boids-sim.ss")     ; a24fe98's vectors through screen
+(env-eval lab '(car boids-demo))  ; => #<boid at 0.0 0.0 moving 1.0 0.0>
+(top-level-bound? 'vec+ *world-env*)          ; => #f
+```
+
+What holds there is the tree's rules, which `tests/sources.ss` checks,
+not the runtime: the world is one namespace (in "/" the sim's `vec+`
+would be the world's, and `AGENTS.md` would have it `boids-vec+`), only
+`src/` calls C, and only core1 writes the world's state. So for an app
+in the tree the sandbox is the smaller change, since it keeps the plain
+names; for one's own use, a world namespace is.
+
+**A sandbox** (`app-requests`), and why:
+
+- No `import` and no `library`: the confined base has neither, so an
+  R6RS program's `(import (rnrs))` goes, and the file is top-level forms
+  and `define-app`.
+- No I/O, files, `eval`, record inspection, `exit`, threads, sleep or C:
+  that is the confinement. `display` and `printf` write to the
+  sandbox's log.
+- `syntax-rules`, not `syntax-case`: `datum->syntax` on an identifier a
+  world macro hands in would name any of the world's bindings.
+- No `record-writer`: a type's writer is the whole process's, so one set
+  on a condition type would change how the world prints. A record
+  type's uid is taken under the sandbox's path, so a boid prints as
+  `#[/apps/boids-simple:schevana-boids-simple-boid ...]`.
+- Of the world's names, only its bundles' (window, draw, ui, timers,
+  crew, gpu, toasts, launch): not `plist-ref`, which is the world's
+  (`src/base.ss`), and not the clock without `timers`.
+- No processes and no vats: no bundle has `spawn`, and an app's sandbox
+  forks nothing. So long work can't run a slice at a time between
+  frames: a step fits a handler's fuel, or goes to the crew or the GPU.
+  Hence Boids (simple)'s cap.
+
+In return it has a namespace of its own, permissions the person
+approves, and records that open again after a reload.
+
+**The crew.** The step becomes a worklet, compiled in an environment of
+its own (`src/core1/proc.ss`): R6RS's base, control, lists, fixnums,
+flonums, bitwise operations, bytevectors and exceptions; fxvectors,
+flvectors, boxes, `now-ns`, and the other worklets.
+
+- None of the app's names: not its procedures, not its macros (they are
+  written inside the body), not its records. There's no
+  `define-record-type`, and a record handed in can't be opened; pairs,
+  vectors and boxes can.
+- Nothing handed in but data and worklets, and no top-level name set.
+- A call writes only its own slice and should allocate nothing, since a
+  collection stops every thread: 20 to 200 µs a call, and on core1 one
+  still running after 100 ms is cancelled.
+
+A worker never touches the world's state: a worklet that could is
+refused as it is defined, not when it races. That is Boids' flvector,
+and why Boids (clear) writes its vec macros into the body. A step on
+lists of pairs would still be accepted, `filter` and `fold-left` and
+all, but it allocates, which is what the crew pays most for.
+
+A vat is the crew's sibling: a thread, its mailbox, and a sandbox on
+the worklets' base (no records), handing its results back to core1 (see
+`docs/THREADS.md`).
+
+**The GPU.** A shader (`docs/SHADERS.md`) has three types, 32-bit whole
+numbers, 32-bit floats and booleans: no pairs, vectors, strings or
+procedures as values. It has no recursion (a local function is
+inlined), no loop without a bound (`do-bounded`), and no memory but the
+buffers it is handed, each read or written in a run, not both. Its
+results show through a paint or come back to Scheme later
+(`gpu-buffer-read-then!`): a handler can't wait. The language asks only
+what every GPU API has, and the twin runs it in Scheme to the same
+answers. Its floats are 32 bits, so a flock there can't be the CPU's to
+the last digit.
+
+| level | runs in | gives up |
+|---|---|---|
+| R6RS and a library | its own program | nothing |
+| any window | handlers | the main loop, unbounded calls, the library |
+| world namespace | all of Chez | nothing; in the tree, its rules |
+| sandbox | the confined base | `import`, I/O, `syntax-case`, `record-writer` |
+| | | most of the world's names, processes, vats |
+| crew | worklets | the app's names, records, closures, allocation |
+| GPU | shaders | all but 32-bit numbers in buffers, recursion |
+
+The crew and the GPU don't need a sandbox: an app in the world uses them
+too. What a sandbox decides is what is in reach.
+
 ## What the flat step costs a reader
 
 - **The layout has no names.** A boid is x, y, vx, vy at offset 4i, but
