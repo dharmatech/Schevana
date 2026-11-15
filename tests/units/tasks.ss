@@ -714,3 +714,42 @@
              (let ([none (offers)])
                (tasks-reset!)
                (and (equal? none-match '(#t #f)) (equal? none '(#f #t))))))))
+
+;;; The Tree's selection, with no window.
+
+(let ([v (tasks-view-new (make-ui))])
+  (tasks-view-mode-set! v 'tree)
+  (check "the Tree's selection: a later row picked is where it is, and \
+          opened there it goes to the task's own row; a later row a change \
+          takes away falls back to the task's own"
+         (begin
+           (tasks-pick! v '(17 . 31))
+           (let ([picked (list (task-id (tasks-view-selected v))
+                               (tasks-tree-node v))])
+             (tasks-tree-open! v '(17 . 31))
+             (let ([opened (list (task-id (tasks-view-selected v))
+                                 (tasks-tree-node v))])
+               (tasks-pick! v '(17 . 31))
+               ;; 17 first in board order: 31's own row is under it
+               (move-task! 13 'doing)
+               (let ([fell (tasks-tree-node v)])
+                 (tasks-select! v #f)
+                 (tasks-reset!)
+                 (and (equal? picked '(31 (17 . 31)))
+                      (equal? opened '(31 31))
+                      (equal? fell 31)))))))
+
+  (check "a task deleted in the Tree: what waited for it waits no more, and \
+          the row after it is selected"
+         (let* ([shared (add-task! "Shared" 'status 'todo)]
+                [a (add-task! "Waits A" 'blocked-by (list shared))]
+                [b (add-task! "Waits B" 'blocked-by (list shared))])
+           (tasks-select! v shared)
+           (tasks-delete! v shared)
+           (let ([sel (tasks-view-selected v)])
+             (tasks-select! v #f)
+             (let ([ok (and (not (memq shared *tasks*))
+                            (null? (task-blocked-by a))
+                            (null? (task-blocked-by b)) (eq? sel b))])
+               (tasks-reset!)
+               ok)))))

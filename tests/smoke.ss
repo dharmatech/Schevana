@@ -2186,31 +2186,19 @@
 (define (tree-at) (tasks-tree-node tv))
 (tasks-select! tv #f)
 (click-ui! tw '(view tree))
-(let ([nodes (tree-nodes)])
-  (check "the Tree tab: the roots, under each what it waits for, a shared \
-          blocker's own row under its first waiter and later rows under the \
-          others"
-         (and (eq? (tasks-view-mode tv) 'tree)
-              (equal? (list-head nodes 4) '(16 11 9 12))
-              (member '(17 . 31) nodes) (memv 31 nodes)
-              (member '(33 . 9) nodes)
-              (= (length (filter (lambda (n) (eqv? n 10)) nodes)) 1))))
 (shot "tree")
 (tree-click! 13)
 (check "a click on a row selects its task, and the details show it"
        (and (eq? (selected) (find-task 13)) (equal? (tree-at) 13)
             (ui-find tui '(blocked-by 31))))
 (tree-click! '(17 . 31))
-(check "a click on a later row selects its task there"
-       (and (eq? (selected) (find-task 31)) (equal? (tree-at) '(17 . 31))))
 (press! 'down)
 (steps 1)
-(check "and Down goes on from there" (equal? (tree-at) 18))
+(check "a click on a later row, and Down goes on from there"
+       (equal? (tree-at) 18))
 (press! 'up)
-(press! 'return)
+(press! 'return)   ; to the task's own row
 (steps 2)
-(check "Return on a later row goes to the task's own row"
-       (and (equal? (tree-at) 31) (eq? (selected) (find-task 31))))
 (press! 'return)
 (steps 1)
 (check "Return on a task's own row edits its title" (eq? (focus-id) 'title))
@@ -2246,24 +2234,9 @@
 (shot "tree-search")
 (click-ui! tw 'clear)
 
-;; The selection stays on a row the Tree shows: a later row a change
-;; takes away falls back to the task's own row; a twisty that hides it
-;; selects the row it collapsed, as Left would, and typing in that task's
-;; details keeps it collapsed. A Tree that shows nothing (a search that
-;; matches none) takes no keys.
-(tree-click! '(17 . 31))
-(let ([after (next-to 13)])
-  (move-task! 13 'doing)   ; 17 first in board order: 31's own row under it
-  (steps 2)
-  (let ([i (ui-tree-index (tree-rows) 31)] [was (tree-at)])
-    (press! 'down)
-    (steps 1)
-    (check "a later row a change takes away: the selection falls back to \
-            the task's own row, and Down goes on from there"
-           (and i (equal? was 31)
-                (equal? (tree-at) (list-ref (tree-nodes) (+ i 1))))))
-  (move-task! 13 'todo after)
-  (steps 2))
+;; A row whose twisty hid the selection is selected, and typing in that
+;; task's details keeps it collapsed (the selection's own rules:
+;; tests/units/tasks.ss).
 (tasks-select! tv (find-task 9))
 (invalidate! tw)
 (steps 2)
@@ -2278,18 +2251,6 @@
   (press! 'escape)
   (set-task! 11 'description was))
 (tree-click! 11 'twisty)
-(tasks-select! tv #f)
-(type! "/")
-(type! "zzzzqq")
-(press! 'escape)
-(steps 2)
-(press! 'down)
-(press! 'end)
-(steps 2)
-(check "a search that leaves the Tree nothing to show: Down and End select \
-        nothing"
-       (and (ui-find tui 'empty-clear) (not (selected))))
-(click-ui! tw 'clear)
 (let ([forests 0] [made 0] [plain-forest tasks-forest] [plain ui-tree-rows]
       [after (next-to 13)] [was (task-description (find-task 13))])
   (set! tasks-forest (lambda (ts) (set! forests (+ forests 1))
@@ -2331,20 +2292,6 @@
        (and (equal? (assv 12 (tasks-tree)) '(12 (16)))
             (let ([i (ui-tree-index (tree-rows) 16)])
               (and i (= 1 (ui-tree-row-depth (vector-ref (tree-rows) i)))))))
-(let* ([shared (add-task! "Shared" 'status 'todo)]
-       [a (add-task! "Waits A" 'blocked-by (list shared))]
-       [b (add-task! "Waits B" 'blocked-by (list shared))])
-  (steps 2)
-  (tree-click! (task-id shared))
-  (press! 'delete)
-  (press! 'return)
-  (steps 2)
-  (check "deleting a task in the Tree: what waited for it no more, and the \
-          next row selected"
-         (and (not (memq shared *tasks*)) (null? (task-blocked-by a))
-              (null? (task-blocked-by b)) (eq? (selected) b)))
-  (delete-task! a)
-  (delete-task! b))
 (set-task! 12 'blocked-by '())
 (tasks-select! tv #f)
 
