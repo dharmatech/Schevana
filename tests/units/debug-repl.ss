@@ -90,8 +90,12 @@
            (socket-write fd bytes 0)
            (socket-end-writing fd)
            (socket-close fd)
-           (steps 10)
-           (and (null? (debug-repl-clients (window-ref win 'state)))
+           ;; it serves by a timer and answers from a process: waited for
+           ;; by the clock, as an answer is, not by a count of steps
+           (and (test-wait 5000
+                           (lambda ()
+                             (null? (debug-repl-clients
+                                     (window-ref win 'state)))))
                 (eq? (car (debug-repl-test-ask "1")) 'ok))))
   (check "closing the window closes the socket, and takes it away"
          (begin
