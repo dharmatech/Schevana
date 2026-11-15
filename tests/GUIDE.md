@@ -147,6 +147,11 @@ level above tests only what it adds, trusting the levels below.
   others among them. A scene such a read would change holds the clock
   (`test-clock-hold!`), holds the view as a person would (Monitor's
   Pause), or acts on what was last drawn, not on where it was a step ago.
+- The least of several samples leaves out only what some of them lack. A
+  slow run puts in every step what a fast one puts in few: a late tick's
+  flag in the profiler, what the world does once a second. Steps whose
+  allocation is measured run on a clock of their own
+  (`tests/units/allocation.ss`).
 - The held clock isn't held while a process runs that never yields: a
   process's turn ends by that clock, so it would never end. The clock
   fails the run when a tick reads it 100,000 times (`tests/lib.ss`).

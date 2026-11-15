@@ -24,21 +24,40 @@
           (let ([d (- (allocation-now) a)])
             (loop (+ i 1) (if least (min least d) d)))))))
 
+;; Thunk's value, on a clock that goes on a microsecond each time it's
+;; read, and the machine's again once it has caught up.
+(define (allocation-on-clock thunk)
+  (let* ([ns now-ns] [ms now-ms] [t (ns)])
+    (dynamic-wind
+      (lambda ()
+        (set! now-ns (lambda () (set! t (+ t 1000)) t))
+        (set! now-ms (lambda () (set! t (+ t 1000)) (quotient t 1000000))))
+      thunk
+      (lambda ()
+        (set! now-ns ns)
+        (set! now-ms ms)
+        (let wait () (when (< (ns) t) (wait)))))))
+
 ;; The least a step allocates, of 20, each after a call of before, which
 ;; isn't counted: a step now and then also keeps the profiler's second,
-;; which allocates.
+;; which allocates. On a clock of their own: by the machine's, each step of
+;; a slow run comes late, a flag the profiler keeps three ticks on (some
+;; 11 KB), and with a second between them each has what the world does
+;; once a second (40 KB). The least of 20 leaves out only what some lack.
 (define (allocation-step-least before)
-  (before)
-  (schevana-step! 0)
-  (let loop ([i 0] [least #f])
-    (if (= i 20)
-        least
-        (begin
-          (before)
-          (let ([a (allocation-now)])
-            (schevana-step! 0)
-            (let ([d (- (allocation-now) a)])
-              (loop (+ i 1) (if least (min least d) d))))))))
+  (allocation-on-clock
+   (lambda ()
+     (before)
+     (schevana-step! 0)
+     (let loop ([i 0] [least #f])
+       (if (= i 20)
+           least
+           (begin
+             (before)
+             (let ([a (allocation-now)])
+               (schevana-step! 0)
+               (let ([d (- (allocation-now) a)])
+                 (loop (+ i 1) (if least (min least d) d))))))))))
 
 (let* ([surfaces *surfaces*]
        [draws 0]
