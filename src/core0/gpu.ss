@@ -285,6 +285,24 @@
       (gpu-facts-refresh!)
       r)))
 
+;; Waits till the device has done all it was sent, if one is open: before
+;; the window goes, and before the process ends.
+(define (gpu-idle!)
+  (when *renderer* (sdl-wait-gpu-idle (renderer-device *renderer*))))
+
+;; Every exit waits for the GPU first, whoever calls it: the world's quit,
+;; a suite's verdict, a script. A driver's own threads may still be at
+;; work, lavapipe compiling a frame's new shaders with LLVM, whose globals
+;; exit() would tear down under them. Set on the thread that loads core0,
+;; the process's first, whose exit alone ends the process (on one that
+;; Chez forked, exit ends that thread).
+(exit-handler
+ (let ([chez (exit-handler)])
+   (lambda args
+     ;; a wait that fails never keeps the process from ending
+     (guard (c [#t #f]) (gpu-idle!))
+     (apply chez args))))
+
 ;; Frames in flight, as many images in the swapchain: three, the most SDL
 ;; allows, by default (the world's 'frames-in-flight, with each frame).
 ;; With two, GPU work of most of a refresh missed refreshes; three cover a

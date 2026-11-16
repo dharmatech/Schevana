@@ -246,3 +246,18 @@
                 (= (px 0 50) (px 17 51) (color #\f))
                 (= (px 18 50) (px 35 51) (color #\t))
                 (= (px 32 47) (color #\#))))))
+
+;; The process's end: whoever exits, core0 waits for the GPU first, as a
+;; driver's threads may still be at work (lavapipe compiling a frame's
+;; shaders) when exit() tears down what they use. Here the wait, once
+;; done, leaves by a continuation, before Chez's handler would end the run;
+;; an exit that never waited ends it with status 1, failed.
+(check "an exit waits for the GPU first: core0's exit handler waits for \
+        the device, by name, before Chez's ends the process"
+       (let ([real gpu-idle!])
+         (eq? 'waited
+              (call/cc
+               (lambda (k)
+                 (fluid-let ([gpu-idle! (lambda () (real) (k 'waited))])
+                   ((exit-handler) 1)
+                   'went-on))))))

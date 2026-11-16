@@ -74,7 +74,7 @@
   (core0-facts-refresh! #t))
 
 (define (core0-window-close!)
-  (sdl-wait-gpu-idle (renderer-device *renderer*))
+  (gpu-idle!)
   (sdl-release-window (renderer-device *renderer*) *sdl-window*)
   (sdl-destroy-window *sdl-window*)
   (sdl-quit)
