@@ -147,9 +147,9 @@ has none, what its designers would have made:
   XView's pop-ups keep their size. A window's `'footer`, a string or
   `(left . right)`, shows under the pane. Everything comes in OPEN LOOK's
   four sizes, 10, 12, 14 and 19 point, the nearest the text size: OLGX's
-  glyph fonts drawn pixel for pixel (`kits/olgl.ss`), olwm's numbers, and
-  the 3D shades OLGX takes from the window color (`open-look-window`):
-  BG2 90 % of its value, BG3 50 %, the highlight 120 %. Drawn where olwm's
+  glyph fonts drawn pixel for pixel, olwm's numbers, and the 3D shades
+  OLGX takes from the window color (`open-look-window`): BG2 90 % of its
+  value, BG3 50 %, the highlight 120 %. Drawn where olwm's
   own screenshots have their frames, at every size in 2D and 3D, its
   frames are olwm's to the pixel but for three, where olwm's corner shows
   the desktop through. It asks for Lucida Sans, OpenWindows' face, and

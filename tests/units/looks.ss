@@ -158,8 +158,8 @@
        (let* ([img (image 30 12 1
                           (lambda ()
                             (fill-box 0 0 30 12 #xffffff)
-                            (px-lozenge 0 0 "a" #x000000)))]
-              [r (list (px-lozenge-width "AB")
+                            (genera-lozenge 0 0 "a" #x000000)))]
+              [r (list (genera-lozenge-width "AB")
                        (map (lambda (p) (= (apply pixel-at img p) #xff000000))
                             '((0 4) (3 1) (3 7) (4 0) (4 8) (14 4) (11 1)
                               (6 2) (5 2) (5 4) (9 4) (6 6) (5 6))))])
@@ -954,6 +954,25 @@
          (and (equal? (of #xcccccc) '(#xb7b7b7 #x666666 #xf4f4f4))
               (equal? (of #x40a0c0) '(#x3a8fac #x204f5f #x4dc0e6))
               (equal? (of #xffffff) '(#xe5e5e5 #x7f7f7f #xffffff)))))
+
+(check "OPEN LOOK has OLGX's four glyph fonts: resize corners 10, 11, 12 \
+        and 14 square, the window button 14, 16, 18 and 22 wide, the \
+        pushpin two sizes, 10's as 12's and 14's as 19's"
+       (let* ([glyph open-look-font-glyph]
+              [wh (lambda (size name)
+                    (let ([g (glyph size name)]) (list (car g) (cadr g))))])
+         (and (equal? (map (lambda (s) (wh s 'ul-resize-outline))
+                           '(10 12 14 19))
+                      '((10 10) (11 11) (12 12) (14 14)))
+              (equal? (map (lambda (s) (car (wh s 'abbrev-menu-button)))
+                           '(10 12 14 19))
+                      '(14 16 18 22))
+              (equal? (glyph 10 'menu-pin-out) (glyph 12 'menu-pin-out))
+              (equal? (glyph 14 'menu-pin-in) (glyph 19 'menu-pin-in))
+              (not (equal? (glyph 12 'menu-pin-in) (glyph 14 'menu-pin-in)))
+              (not (glyph 12 'no-such-glyph))
+              (equal? (map open-look-size-near '(9 12 13 15 20))
+                      '(10 12 12 14 19)))))
 
 (check "OPEN LOOK's frame is olwm's at each size: arms of 5, 5, 6 and 6, \
         23, 25, 29 and 35 above the pane, a footer's 16, 18, 21 and 27 \

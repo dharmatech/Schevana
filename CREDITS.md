@@ -14,8 +14,8 @@ Behavioral Model" (SIGGRAPH 1987) first had them.
 
 ## The CADR's 5X5 font
 
-The CADR's 5X5 font in `kits/px.ss` (the glyphs of `px-5x5`) is MIT's,
-decoded from System 99's `fonts/5x5.qfasl`, under this license:
+The CADR's 5X5 font in `styles/genera.ss` (the glyphs of `genera-5x5`) is
+MIT's, decoded from System 99's `fonts/5x5.qfasl`, under this license:
 
 Copyright (c) 1980, Massachusetts Institute of Technology. All rights
 reserved. Redistribution and use in source and binary forms, with or
@@ -42,8 +42,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## OPEN LOOK
 
-The OPEN LOOK style's glyphs in `kits/olgl.ss` are Sun's glyph fonts,
-`olgl10/12/14/19.bdf` from the X11R6 contrib tape, under their notice:
+The OPEN LOOK style's glyphs in `styles/open-look.ss` are Sun's glyph
+fonts, `olgl10/12/14/19.bdf` from the X11R6 contrib tape, under their
+notice:
 
 Copyright 1989 by Sun Microsystems, Inc. Mountain View, CA. Permission
 to use, copy, modify, and distribute this software and its documentation

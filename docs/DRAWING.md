@@ -134,8 +134,8 @@ smaller they blend.
 
 `kits/px.ss` draws pixel art on whole device pixels: `px-bevel` (Motif's
 corners or the Mac's), `px-bits` for small pictures from rows of
-characters, `px-invert`, `px-bitmap-text` (a bitmap font's text, the
-CADR's 5X5 among them) and `px-lozenge`.
+characters, `px-invert` and `px-bitmap-text`, a bitmap font's text (the
+Genera style has one, the CADR's 5X5, `genera-5x5`).
 
 ```scheme
 (open-window "Pixel art" 'size '(300 . 140)
@@ -145,7 +145,7 @@ CADR's 5X5 among them) and `px-lozenge`.
             (px-bevel 2 2 20 10 'text-dim 'bg-0 1)
             (px-bits 28 3 '("..##.." ".#..#." "#....#" ".#..#." "..##..")
                      '((#\# . accent)))
-            (px-bitmap-text 2 18 "HELLO" px-5x5 'text))))
+            (px-bitmap-text 2 18 "HELLO" genera-5x5 'text))))
 ```
 
 ## Paints

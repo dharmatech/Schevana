@@ -81,78 +81,6 @@
 ;;; Bitmap text: a font of cells w × h pixels, one number a character
 ;;; from the first on, row y's pixel x its bit w·y + x.
 
-;; The MIT CADR's 5X5, for the names in lozenges, characters 32 to 96
-;; (its small letters are its capitals): decoded from MIT System 99's
-;; fonts/5x5.qfasl, Copyright (c) 1980 Massachusetts Institute of
-;; Technology, BSD license (see README).
-(define px-5x5
-  (list 32 6 5
-   '#(#x0          ; space
-      #x8008208    ; !
-      #x514        ; "
-      #x12fd2fd2   ; #
-      #x1ea1c2bc   ; $
-      #x32108426   ; %
-      #x2c4ac284   ; &
-      #x108        ; '
-      #x8104108    ; (
-      #x4208204    ; )
-      #x2273e722   ; *
-      #x823e208    ; +
-      #x4200000    ; ,
-      #x3e000      ; -
-      #x8000000    ; .
-      #x2108420    ; /
-      #xc49248c    ; 0
-      #x1c20820c   ; 1
-      #x3e21089c   ; 2
-      #x1c89889c   ; 3
-      #x1043e492   ; 4
-      #x1e81e0be   ; 5
-      #x1e89e09c   ; 6
-      #x841083e    ; 7
-      #x1c89c89c   ; 8
-      #x1e83c89c   ; 9
-      #x8008000    ; :
-      #x4200200    ; ;
-      #x10204210   ; <
-      #x780780     ; =
-      #x4210204    ; >
-      #x410848c    ; ?
-      #x3c09a89c   ; @
-      #x228be89c   ; A
-      #x1e89e89e   ; B
-      #x3c0820bc   ; C
-      #x1e92491e   ; D
-      #x3e09e0be   ; E
-      #x208e0be    ; F
-      #x1c8b20bc   ; G
-      #x228be8a2   ; H
-      #x3e20823e   ; I
-      #xc49043e    ; J
-      #x12286292   ; K
-      #x1e082082   ; L
-      #x228aada2   ; M
-      #x228b2aa6   ; N
-      #x1c8a289c   ; O
-      #x209e89e    ; P
-      #x1429248c   ; Q
-      #x2249e89e   ; R
-      #x1e81c0bc   ; S
-      #x820823e    ; T
-      #x1c8a28a2   ; U
-      #x85228a2    ; V
-      #x22daa8a2   ; W
-      #x22508522   ; X
-      #x8208522    ; Y
-      #x3e10843e   ; Z
-      #xc10410c    ; [
-      #x20408102   ; \
-      #xc20820c    ; ]
-      #x508        ; ^
-      #x3e000000   ; _
-      #x204)))     ; `
-
 ;; str in bitmap font f, (first w h glyphs), its cells' top left at x y;
 ;; a character it lacks is blank. Each run of a row is one box.
 (define (px-bitmap-text x y str f color)
@@ -174,21 +102,3 @@
                                       (run e))))
                          (run (+ c 1)))))))))
          f))
-
-;; The CADR's lozenge: str in capitals of the 5X5 in a box 9 high with
-;; pointed ends, 9 + 6 a character wide (shwarm.lisp:675-700, MIT).
-(define (px-lozenge-width str) (+ 9 (* 6 (string-length str))))
-
-(define (px-lozenge x y str color)
-  (px-bits x y '("....#...."
-                 "...#.#..."
-                 "..#...#.."
-                 ".#.....#."
-                 "#.......#"
-                 ".#.....#."
-                 "..#...#.."
-                 "...#.#..."
-                 "....#....")
-           (list (cons #\# color))
-           'stretch (cons 4 (px-lozenge-width str)))
-  (px-bitmap-text (+ x 4) (+ y 2) (string-upcase str) px-5x5 color))
