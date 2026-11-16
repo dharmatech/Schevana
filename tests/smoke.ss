@@ -49,13 +49,15 @@
                                (* frac (- (ui-region-w r) 16)))))
               (exact (round (+ cy (ui-region-y r) (/ (ui-region-h r) 2))))))))
 
-;; Wheels a scrolling pane (Settings') until the area id is in view.
+;; Wheels a scrolling pane (Settings') until the area id is in view: 41
+;; turns at most as the suite goes, the Theme tab's length at the biggest
+;; fonts, and never more than 200, for an area no wheel brings there.
 (define (scroll-to-ui! win id)
   (let loop ([n 0])
     (let-values ([(x y) (ui-point win id 0.5)]
                  [(cx cy cw ch) (content-rect win)])
       (let ([dy (cond [(> y (+ cy ch -10)) -1] [(< y (+ cy 10)) 1] [else 0])])
-        (unless (or (zero? dy) (= n 40))
+        (unless (or (zero? dy) (= n 200))
           (inject! `(mouse-move ,(+ cx cw -20) ,(+ cy 100)) `(wheel 0 ,dy))
           (steps 2)
           (loop (+ n 1)))))))
