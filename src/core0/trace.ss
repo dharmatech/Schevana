@@ -137,7 +137,8 @@
              (fprintf p "# frames: number, then ms since the first step: \
                          sent, shown by the screen's clock (#f, not; \
                          dropped), refresh ms, the refresh's number, GPU \
-                         done, the screen's stamp~%")
+                         done, the screen's stamp, the last look that \
+                         found its GPU work going~%")
              (core0-trace-frames p t0)))
          path)))
 
@@ -171,7 +172,7 @@
     (do ([frame (max 0 (- newest present-rows -1)) (+ frame 1)])
         ((> frame newest))
       (when (let ([sent (core0-frame-report frame 2)]) (and sent (> sent 0)))
-        (fprintf p "~a ~,3f ~a ~,3f ~a ~a ~a~%" frame
+        (fprintf p "~a ~,3f ~a ~,3f ~a ~a ~a ~a~%" frame
                  (ms (core0-frame-report frame 2))
                  (case (core0-frame-report frame 1)
                    [(1) (format "~,3f" (ms (core0-frame-report frame 3)))]
@@ -182,4 +183,6 @@
                  (let ([g (ms (core0-frame-report frame 6))])
                    (if g (format "~,3f" g) "#f"))
                  (let ([s (ms (core0-frame-report frame 10))])
-                   (if s (format "~,3f" s) "#f")))))))
+                   (if s (format "~,3f" s) "#f"))
+                 (let ([g (ms (core0-frame-report frame 11))])
+                   (if g (format "~,3f" g) "#f")))))))

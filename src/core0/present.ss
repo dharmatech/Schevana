@@ -12,14 +12,16 @@
 ;;; row's kind says so, written after it.
 
 (define present-rows 8192)
-(define present-words 11)
+(define present-words 12)
 ;; A row: the frame's number; its kind (0 sent, 1 shown, 2 dropped); when
 ;; it was sent (now-ns); when the refresh it showed at came, by the
 ;; screen's clock (now-ns); the refresh (ns); that refresh's number; when
 ;; its GPU work was seen done (now-ns; 0, not yet); when core0 took it
 ;; from core1, and when its acquire of a swapchain image began and
-;; returned (now-ns); and the screen's own stamp of its showing (now-ns;
-;; 0, none).
+;; returned (now-ns); the screen's own stamp of its showing (now-ns; 0,
+;; none); and the last look that found its GPU work not done yet
+;; (now-ns; 0, none): seen done tells only when core0 looked, which an
+;; acquire the screen holds puts off; this, that the work was still going.
 (defvar *present-ring* (make-fxvector (* present-rows present-words) 0))
 
 ;; When core0 took the frame it presents now from core1, and when it asked
@@ -51,6 +53,7 @@
     (fxvector-set! r (fx+ at 8) *present-acquiring*)
     (fxvector-set! r (fx+ at 9) *present-acquired*)
     (fxvector-set! r (fx+ at 10) 0)
+    (fxvector-set! r (fx+ at 11) 0)
     (memory-order-release)
     (fxvector-set! r at frame))
   (platform-report-ask! frame))
@@ -250,7 +253,8 @@
 
 ;;; ---- the GPU's times
 ;;; Each frame's fence, kept till core0 sees it signaled at a step of its
-;;; own: when, to the step, its GPU work was done.
+;;; own: when, to the step, its GPU work was done; and each look before
+;;; that, the last time it was still going.
 
 (define present-fence-slots 4)
 (defvar *present-fences* (make-vector present-fence-slots 0))
@@ -283,11 +287,14 @@
     (let ([dev (renderer-device *renderer*)] [fs *present-fences*])
       (do ([i 0 (fx+ i 1)]) ((fx= i present-fence-slots))
         (let ([fence (vector-ref fs i)])
-          (unless (or (eqv? fence 0) (not (sdl-query-gpu-fence dev fence)))
+          (unless (eqv? fence 0)
             (let* ([frame (fxvector-ref *present-fence-frames* i)]
-                   [at (present-at frame)])
+                   [at (present-at frame)]
+                   [done? (sdl-query-gpu-fence dev fence)])
               (when (fx= (fxvector-ref *present-ring* at) frame)
-                (fxvector-set! *present-ring* (fx+ at 6) (now-ns)))
-              (core0-trace! 12 frame))
-            (sdl-release-gpu-fence dev fence)
-            (vector-set! fs i 0)))))))
+                (fxvector-set! *present-ring* (fx+ at (if done? 6 11))
+                               (now-ns)))
+              (when done?
+                (core0-trace! 12 frame)
+                (sdl-release-gpu-fence dev fence)
+                (vector-set! fs i 0)))))))))

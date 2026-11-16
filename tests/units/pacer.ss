@@ -699,17 +699,17 @@
             (= (pacer-margin (core0-frame-ns)) 0)))
 
 ;; Frame n as the pacer reads it: its row in the frame ring, the newest,
-;; its tick (as begun and as planned) and aimed latch; its report sent,
-;; and shown at shown or not reported (#f). Then thunk; the row as it was
-;; after.
+;; its tick (as begun and as planned, and published as it began) and aimed
+;; latch; its report sent, and shown at shown or not reported (#f). Then
+;; thunk; the row as it was after.
 (define (pacer-test-frame n tick aimed sent shown thunk)
   (let* ([row (* frame-ring-words
                  (modulo (- *frame-ring-n* 1) frame-ring-rows))]
          [was (map (lambda (k) (fxvector-ref *frame-ring* (+ row k)))
-                   '(6 8 13 14))]
+                   '(6 8 10 13 14))]
          [at (present-at n)] [ring *present-ring*])
     (for-each (lambda (k v) (fxvector-set! *frame-ring* (+ row k) v))
-              '(6 8 13 14) (list n tick aimed tick))
+              '(6 8 10 13 14) (list n tick tick aimed tick))
     (fxvector-set! ring at n)
     (do ([w 1 (+ w 1)]) ((= w present-words)) (fxvector-set! ring (+ at w) 0))
     (fxvector-set! ring (+ at 2) sent)
@@ -718,7 +718,7 @@
       (fxvector-set! ring (+ at 3) shown))
     (let ([v (thunk)])
       (for-each (lambda (k v) (fxvector-set! *frame-ring* (+ row k) v))
-                '(6 8 13 14) was)
+                '(6 8 10 13 14) was)
       v)))
 
 (check "one frame a latch: with the last tick's frame aimed at the next \
@@ -1121,25 +1121,114 @@
              (and (= first 1000000)
                   (= *pacer-margin* (+ 8000000 (quotient r 8))))))))
 
-(check "a wait for an image past the latch a frame aimed at, the \
-        compositor holding a frame more, is the screen's time, not the \
-        frame's: the lead learns only the rest; a wait up to that latch is \
-        the frame's"
+(check "an acquire the screen held is the screen's time, not the frame's, \
+        whichever latch ends it, and so is the frame's wait for core0 \
+        before it: the lead learns only the rest, its draw and its send; \
+        an acquire that held for no more than a millisecond is the frame's"
        (let* ([r (core0-frame-ns)] [n 1000141] [t (now-ns)] [at (present-at n)]
-              [need (lambda (ended)
+              ;; published 1 ms after its tick, taken 2 ms later
+              [need (lambda (began ended)
                       (pacer-test-frame
                        n t (+ t 5000000) (+ ended 1000000) #f
                        (lambda ()
-                         (fxvector-set! *present-ring* (+ at 8)
-                                        (+ t 3000000))
+                         (frame-ring-set! n 10 (+ t 1000000))
+                         (fxvector-set! *present-ring* (+ at 8) began)
                          (fxvector-set! *present-ring* (+ at 9) ended)
+                         (set! *pacer-lead* 1000000)
                          (pacer-need! n r)
                          *pacer-lead*)))])
          (fluid-let ([*pacer-lead* 1000000] [*pacer-margin* 0])
-           (let ([past (need (+ t 5000000 r))])
-             (set! *pacer-lead* 1000000)
-             (let ([up-to (need (+ t 5000000))])
-               (and (= past 6000000) (= up-to 6000000)))))))
+           (let ([past (need (+ t 3000000) (+ t 5000000 r))]
+                 [up-to (need (+ t 3000000) (+ t 5000000))]
+                 [brief (need (+ t 3000000) (+ t 3900000))])
+             (and (= past 2000000) (= up-to 2000000)
+                  (= brief 4900000))))))
+
+;; Frames as the pacer plans them while the screen's queue is full: each
+;; tick its lead before the latch, the frame published 0.1 ms later and at
+;; its acquire at 0.2 ms, the latch ending the acquire, the frame sent
+;; 0.15 ms after.
+(check "frames that reach their acquire early, the latch ending it, leave \
+        the lead within a millisecond of the frame's own time and the \
+        margin: were the wait the frame's, each would send the next a \
+        little earlier, to the two refreshes"
+       (let* ([r (core0-frame-ns)] [n 1000151] [at (present-at n)]
+              [frame (lambda (aim)       ; => the lead after it
+                       (let ([tick (- aim *pacer-lead*)])
+                         (pacer-test-frame
+                          n tick aim (+ aim 150000) #f
+                          (lambda ()
+                            (frame-ring-set! n 10 (+ tick 100000))
+                            (fxvector-set! *present-ring* (+ at 8)
+                                           (+ tick 200000))
+                            (fxvector-set! *present-ring* (+ at 9) aim)
+                            (pacer-need! n r)
+                            *pacer-lead*))))])
+         (fluid-let ([*pacer-lead* 4000000] [*pacer-margin* 500000])
+           (let loop ([k 0] [aim (+ (now-ns) r)] [most 0])
+             (if (< k 600)
+                 (loop (+ k 1) (+ aim r) (max most (frame aim)))
+                 (and (<= most 4000000)
+                      (< *pacer-lead* (+ 250000 500000 1200000))))))))
+
+;; Frame k after n judged: late if late? (sent a refresh before its latch,
+;; shown two refreshes past the depth's), else in time; its GPU work still
+;; going at going, ns after its send (0, never seen going).
+(define (pacer-test-gpu-frame n k late? going)
+  (let* ([r (core0-frame-ns)] [m (+ n k)] [aim (+ (now-ns) (* 3 r))]
+         [sent (- aim (if late? r 1000000))])
+    (pacer-test-frame m (- aim (* 2 r)) aim sent
+                      (+ aim (* r (+ *pacer-depth* (if late? 2 0))) 4000000)
+                      (lambda ()
+                        (fxvector-set! *present-ring* (+ (present-at m) 11)
+                                       (if (> going 0) (+ sent going) 0))
+                        (pacer-behind! m (core0-frame-ns))))))
+
+(check "what frames whose GPU work was still going a refresh and an eighth \
+        after their send taught, a GPU slow to wake teaching a queue, is \
+        forgotten once 240 frames are judged with none of them so slow: \
+        the pacer learns afresh"
+       (let* ([r (core0-frame-ns)] [n 1000161] [slow (+ r (quotient r 8) 1)])
+         (fluid-let ([*pacer-margin* #f] [*pacer-depth* 0] [*pacer-made* #f]
+                     [*pacer-late-seen* 0] [*pacer-late-run* 0]
+                     [*pacer-late-chain* 0] [*pacer-gpu-taught* #f]
+                     [*pacer-floor* 0] [*pacer-lead* 0])
+           ;; a late run's first, seen; one sent since, a refresh early,
+           ;; teaches a refresh of depth
+           (pacer-test-gpu-frame n 0 #t slow)
+           (pacer-test-gpu-frame n 1 #t slow)
+           (let ([taught *pacer-depth*])
+             (do ([k 2 (+ k 1)]) ((> k 241)) (pacer-test-gpu-frame n k #f 0))
+             (let ([kept *pacer-depth*])
+               (pacer-test-gpu-frame n 242 #f 1000000)
+               (and (= taught 1) (= kept 1) (= *pacer-depth* 0)
+                    (not *pacer-margin*) (not *pacer-gpu-taught*)))))))
+
+(check "an app too heavy for the GPU keeps the queue its frames taught: \
+        each frame still going a refresh and an eighth after its send \
+        starts the count again; and a late frame the GPU kept up with \
+        teaches for good"
+       (let* ([r (core0-frame-ns)] [n 1000501] [slow (+ r (quotient r 8) 1)]
+              [run (lambda (going)       ; => the depth after 600 frames
+                     (set! *pacer-depth* 0)
+                     (set! *pacer-margin* #f)
+                     (set! *pacer-late-seen* 0)
+                     (pacer-test-gpu-frame n 0 #t going)
+                     (pacer-test-gpu-frame n 1 #t going)
+                     (do ([k 2 (+ k 1)]) ((> k 601))
+                       (pacer-test-gpu-frame n k #f
+                                             (if (= 0 (modulo k 100))
+                                                 going
+                                                 0)))
+                     *pacer-depth*)])
+         (fluid-let ([*pacer-margin* #f] [*pacer-depth* 0] [*pacer-made* #f]
+                     [*pacer-late-seen* 0] [*pacer-late-run* 0]
+                     [*pacer-late-chain* 0] [*pacer-gpu-taught* #f]
+                     [*pacer-floor* 0] [*pacer-lead* 0])
+           (let* ([heavy (run slow)]
+                  [kept-up (begin (set! *pacer-gpu-taught* #f)
+                                  (run (- r 1)))])
+             (and (= heavy 1) (= kept-up 1) (not *pacer-gpu-taught*))))))
 
 (check "the pacer's choices are settings, read live: with a step of a \
         quarter refresh, a late frame of its own raises the margin by a \
@@ -1169,16 +1258,16 @@
                 (= (fxvector-ref *pacer-counts* 2) (+ theirs 1))))))
 
 (check "relearning forgets the margin taught, the floor, the depth, the \
-        closest send, the late runs and the lead"
+        closest send, the late runs, what the GPU taught and the lead"
        (let ([r (core0-frame-ns)])
          (fluid-let ([*pacer-margin* 5000000] [*pacer-floor* 123]
                      [*pacer-lead* 9000000] [*pacer-depth* 2]
                      [*pacer-made* 3000000] [*pacer-late-seen* 5]
-                     [*pacer-late-chain* 2])
+                     [*pacer-late-chain* 2] [*pacer-gpu-taught* 7])
            (pacer-relearn!)
            (and (not *pacer-margin*) (= *pacer-floor* 0) (= *pacer-depth* 0)
                 (not *pacer-made*) (= *pacer-late-seen* 0)
-                (= *pacer-late-chain* 0)
+                (= *pacer-late-chain* 0) (not *pacer-gpu-taught*)
                 (= *pacer-lead* (quotient r 4))
                 (= (pacer-margin r) 0)))))
 

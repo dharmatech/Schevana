@@ -189,11 +189,20 @@ Where the screen reports when the compositor latches a frame (Wayland's,
 the Mac's), a tick begins just in time instead, aimed at a latch, and at a
 later one than the tick before it, so the screen's queue never grows. It
 begins its lead before that latch: what frames took lately from their tick
-to core0's sending them, and a margin. A frame that showed late though
-sent about the margin before its latch grows the margin by a step; one
-late though sent well before it was the compositor's, and teaches nothing,
-unless lateness keeps coming in a chain. On a Mac the margin fades over a
-minute. The choices are settings, read live: `pacer-margin-start`,
+to core0's sending them, the screen's time left out (an acquire it held,
+and the wait for core0 held in the frame before's), and a margin. A frame
+that showed late though sent about the margin before its latch grows the
+margin by a step; one late though sent well before it was the
+compositor's, and teaches nothing, unless lateness keeps coming in a
+chain. A margin that reaches a refresh becomes the compositor's depth, a
+refresh more that it keeps frames (WindowServer keeps two). What frames
+whose GPU work was still going a refresh and an eighth after their send
+taught is the GPU's: a GPU slow to wake as an app opens, which ends a
+frame every other refresh for a quarter second and so taught three
+refreshes of depth, or an app too heavy for it, whose frames then queue so
+the GPU is never idle. Once 240 frames are judged with none so slow, the
+pacer learns afresh. On a Mac the margin fades over a minute; elsewhere
+it stays. The choices are settings, read live: `pacer-margin-start`,
 `pacer-margin-step`, `pacer-miss-own`, `pacer-lead-fade`,
 `pacer-margin-fade` and `frames-in-flight`. The Pacer Lab,
 `(pacer-lab)`, tries their values on Schevana itself while it's used,

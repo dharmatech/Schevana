@@ -64,6 +64,10 @@
 ;; how long before its latch the frame sent closest to it was sent, ns,
 ;; among those that made their latch lately (pacer-made!); or #f
 (defvar *pacer-made* #f)
+;; frames judged since the last whose GPU work was still going more than
+;; a refresh and an eighth after its send, once such a frame taught the
+;; pacer (pacer-behind!); or #f
+(defvar *pacer-gpu-taught* #f)
 ;; the first frame of the newest late run, frames judged late one after
 ;; another; when the pacer judged it (now-ns), or 0 once one is in time;
 ;; and how many runs have come in a chain, each within 128 frames of the
@@ -472,6 +476,7 @@
   (set! *pacer-made* #f)
   (set! *pacer-late-seen* 0)
   (set! *pacer-late-chain* 0)
+  (set! *pacer-gpu-taught* #f)
   (set! *pacer-lead* (quotient (core0-frame-ns) 4)))
 
 ;; Frame n, its report in, aimed at a latch: late if it showed a refresh
@@ -490,18 +495,27 @@
 ;; A late frame that teaches is counted the pacer's own, any other the
 ;; compositor's. Sent as the pacer sends them and shown sooner than the
 ;; depth, the compositor keeps frames less long now: the depth falls to
-;; it. In time, the margin fades as pacer-margin-fade has it. => whether
-;; it was late
+;; it. In time, the margin fades as pacer-margin-fade has it. What frames
+;; whose GPU work was still going a refresh and an eighth after their send
+;; taught is the GPU's, not the compositor's (a GPU too slow for the
+;; refresh: one slow to wake as an app opens, three refreshes of queue
+;; taught in a quarter second, or an app too heavy for it): once 240
+;; frames are judged with none of them so slow, the pacer learns afresh
+;; (pacer-relearn!). => whether it was late
 (define (pacer-behind! n r)
   (let ([aimed (pacer-aimed-of n)] [shown (pacer-refresh-seen n)]
-        [sent (core0-frame-report n 2)] [margin (pacer-margin r)])
-    (and aimed shown sent (> aimed 0)
+        [sent (core0-frame-report n 2)] [going (core0-frame-report n 11)]
+        [margin (pacer-margin r)])
+    (and aimed shown sent going (> aimed 0)
          (let ([past (- (div (- shown aimed) r) *pacer-depth*)]
                [ahead (- aimed sent)]
                [usual? (< (- aimed sent)
-                          (+ margin (pacer-of-refresh 'pacer-miss-own r)))])
+                          (+ margin (pacer-of-refresh 'pacer-miss-own r)))]
+               [slow? (> going (+ sent r (quotient r 8)))])
            (when *pacer-made*
              (set! *pacer-made* (+ *pacer-made* (quotient r 1024))))
+           (when *pacer-gpu-taught*
+             (set! *pacer-gpu-taught* (if slow? 0 (+ *pacer-gpu-taught* 1))))
            (if (>= past 1)
                (let ([first? (= *pacer-late-seen* 0)])
                  (when first?
@@ -518,6 +532,7 @@
                          (> sent *pacer-late-seen*))
                      (begin
                        (pacer-count! 1)
+                       (when slow? (set! *pacer-gpu-taught* 0))
                        (pacer-margin!
                         (+ ahead (pacer-of-refresh 'pacer-margin-step r))
                         r))
@@ -532,6 +547,8 @@
                    (set! *pacer-margin*
                      (- *pacer-margin*
                         (quotient (* *pacer-margin* r) fade))))
+                 (when (and *pacer-gpu-taught* (> *pacer-gpu-taught* 240))
+                   (pacer-relearn!))
                  #f))))))
 
 ;; The deepest a compositor is taken to keep frames, refreshes: one more
@@ -585,22 +602,22 @@
 ;; late among it), with the margin, at once when that's more, else fading
 ;; (pacer-lead-fade, a spike's time to fade); two refreshes at most, so
 ;; that a lead longer than a refresh still leaves a tick its time at 120
-;; Hz. A wait for an image past the latch it aimed at, a later latch's,
-;; the compositor holding a frame more (one it missed a refresh with, or
-;; ours queued behind it), is the screen's time, not the frame's: a lead it
-;; grew would send the frames after it early.
+;; Hz. An acquire the screen held (over 1 ms, as pacer-latch! has it),
+;; and the frame's wait for core0 before it, held in the frame before's,
+;; are the screen's time, not the frame's: a lead they grew would send the
+;; frames after it early, into the same full queue, to wait longer still,
+;; till each waited a refresh published and a refresh for its image.
 (define (pacer-need! n r)
-  (let ([tick (pacer-frame-word n 14)] [sent (core0-frame-report n 2)]
-        [aimed (pacer-aimed-of n)]
+  (let ([tick (pacer-frame-word n 14)] [pub (pacer-frame-word n 10)]
+        [sent (core0-frame-report n 2)]
         [began (core0-frame-report n 8)] [ended (core0-frame-report n 9)])
     (when (and tick sent (> tick 0) (> sent 0))
-      (let ([held (if (and aimed began ended (> aimed 0)
-                           (> ended (+ aimed (quotient r 2))))
-                      (- ended (max began aimed))
-                      0)])
+      (let ([own (if (> (- ended began) 1000000)
+                     (+ (- pub tick) (- sent ended))
+                     (- sent tick))])
         (set! *pacer-lead*
           (min (* 2 r)
-               (max (+ (- sent tick held) (pacer-margin r))
+               (max (+ own (pacer-margin r))
                     (- *pacer-lead*
                        (quotient
                         (* *pacer-lead* r)

@@ -47,7 +47,8 @@
 ;; when sent, 3 when the refresh it showed at came, by the screen's clock
 ;; (now-ns), 4 the refresh, 5 that refresh's number, counted from the
 ;; reports' times, 6 when its GPU work was seen done (0, not yet), 10 the
-;; screen's own stamp of its showing; or #f.
+;; screen's own stamp of its showing, 11 the last look that found its GPU
+;; work going (0, none); or #f.
 (define (inspect-frame-report i k)
   (let ([n (inspect-frame-ref i 6)])
     (and n (> n 0) (core0-frame-report n k))))
@@ -1217,8 +1218,9 @@
 ;; compositor's), the trial holding its choices (the pacer lab's), the
 ;; closest to its latch a frame that made its latch was sent lately, the
 ;; newest late run's first frame and how many runs came in a chain, the
-;; first latch the next frame may take, the compositor's depth, and when
-;; the next tick may begin.
+;; frames judged since the last the GPU made late once such a frame taught
+;; it (#f, none), the first latch the next frame may take, the compositor's
+;; depth, and when the next tick may begin.
 (define (inspect-pacer)
   `((period . ,(pacer-period))
     (due . ,*pacer-due*)
@@ -1232,6 +1234,7 @@
     (made . ,*pacer-made*)
     (late . ,*pacer-late-run*)
     (chain . ,*pacer-late-chain*)
+    (gpu-taught . ,*pacer-gpu-taught*)
     (floor . ,*pacer-floor*)
     (depth . ,*pacer-depth*)
     (aimed . ,*pacer-aimed*)

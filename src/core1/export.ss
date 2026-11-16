@@ -95,9 +95,10 @@
     *timers* *input-step?* *pacer-due* *pacer-frame-ns* *pacer-shown?*
     *pacer-latch* *pacer-lead* *pacer-counts* *pacer-aimed* *pacer-floor*
     *pacer-latch-phase* *pacer-depth* *pacer-made* *pacer-late-run*
-    *pacer-late-chain* *pacer-between?* after post-core1! pacer-busy-ms
-    pacer-peak-ms! pacer-rate pacer-ticks pacer-period pacer-start *pacer-trial*
-    pacer-trial! pacer-margin schevana-run! quit! schevana-end! uptime-ms
+    *pacer-late-chain* *pacer-gpu-taught* *pacer-between?* after post-core1!
+    pacer-busy-ms pacer-peak-ms! pacer-rate pacer-ticks pacer-period
+    pacer-start *pacer-trial* pacer-trial! pacer-margin schevana-run! quit!
+    schevana-end! uptime-ms
     load-user-init! user-directory schevana-boot! collector-declining?
     source-path source-files *source-texts* keep-source-text! load-file!
     load-user-folders! reload!
