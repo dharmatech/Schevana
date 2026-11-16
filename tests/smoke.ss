@@ -1136,6 +1136,33 @@
   (close-window! w))
 (reset-theme!)
 
+(check "open-look style draws" (style-scene! 'open-look))
+(let ([w (open-window "Zeta" 'size '(300 . 150) 'pos '(200 . 140))])
+  (let-values ([(l t r b) (frame-insets w)])
+    (check "open-look is olwm's frame at 12 point: arms of 5, the header \
+            and an arm above and below it, 25"
+           (and (= l 5) (= r 5) (= b 5) (= t 25))))
+  (let* ([w0 (window-w w)]
+         [drag (lambda (x y)
+                 (inject! `(mouse-move ,x ,y) `(mouse-down ,x ,y left 1)
+                          `(mouse-move ,(+ x 20) ,y)
+                          `(mouse-up ,(+ x 20) ,y left))
+                 (steps 2))])
+    (drag (+ (window-x w) w0 -3) (+ (window-y w) 70))
+    (let ([side (window-w w)])
+      (drag (+ (window-x w) w0 -3) (+ (window-y w) (window-h w) -3))
+      (check "open-look's sides do not resize it, its corners do"
+             (and (= side w0) (= (window-w w) (+ w0 20))))))
+  (let ([p (open-window "Eta" 'size '(200 . 80) 'pos '(300 . 200)
+                        'above w)])
+    (click-button! p 'close)
+    (check "a pop-up's pushpin pulled out dismisses it, not its owner"
+           (and (not (memq p (windows))) (memq w (windows)) #t)))
+  (click-button! w 'minimize)
+  (check "and the window button closes it to the taskbar" (not (visible? w)))
+  (close-window! w))
+(reset-theme!)
+
 ;; Depth and size gadgets, which no built-in style uses now, still work in
 ;; a style defined at run time.
 (define-style gadgets "Gadgets"

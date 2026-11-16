@@ -943,3 +943,76 @@
                             rows)))))
            '(1.25 1.5 1.75)))
         '(genera cadr)))
+
+;;; OPEN LOOK: olwm's frame and OLGX's shades
+
+(check "OLGX's shades of the window color: #cccccc's BG2, BG3 and \
+        highlight are #b7b7b7, #666666 and #f4f4f4, the workspace's \
+        #3a8fac, #204f5f and #4dc0e6, white's highlight white"
+       (let ([of (lambda (c) (map (lambda (k) (open-look-shade c k))
+                                  '(bg2 bg3 highlight)))])
+         (and (equal? (of #xcccccc) '(#xb7b7b7 #x666666 #xf4f4f4))
+              (equal? (of #x40a0c0) '(#x3a8fac #x204f5f #x4dc0e6))
+              (equal? (of #xffffff) '(#xe5e5e5 #x7f7f7f #xffffff)))))
+
+(check "OPEN LOOK's frame is olwm's at each size: arms of 5, 5, 6 and 6, \
+        23, 25, 29 and 35 above the pane, a footer's 16, 18, 21 and 27 \
+        more below"
+       (begin
+         (set-style! 'open-look)
+         (let ([r (map (lambda (size)
+                         (set-theme! 'ui-font-size size)
+                         (let ([w (open-window "F" 'size '(300 . 200)
+                                               'footer "Left")])
+                           (let-values ([(l t r b) (frame-insets w)])
+                             (close-window! w)
+                             (list size (style-insets 'open-look) b))))
+                       '(10 12 14 19))])
+           (reset-style!)
+           (set-style! 'mac)
+           (equal? r '((10 (5 23 5 5) 21) (12 (5 25 5 5) 23)
+                       (14 (6 29 6 6) 27) (19 (6 35 6 6) 33))))))
+
+(check "an OPEN LOOK window has a window button and four resize corners; \
+        one opened 'above another is a pop-up, with a pushpin and no \
+        corners"
+       (begin
+         (set-style! 'open-look)
+         (let* ([w (open-window "Base" 'size '(300 . 200))]
+                [p (open-window "Pop-up" 'size '(200 . 80) 'above w)]
+                [r (list (map car (frame-regions w))
+                         (map car (frame-regions p)))])
+           (close-window! w)
+           (reset-style!)
+           (set-style! 'mac)
+           (equal? r '((minimize resize-tl resize-tr resize-br resize-bl)
+                       (close))))))
+
+(check "a focused OPEN LOOK window has olwm's 3-pixel outline and its \
+        header's recessed BG2 band in 3D, a band of ink in 2D; an \
+        unfocused one, 2 pixels and BG1"
+       (let ([probe
+              (lambda (depth focus?)
+                (set-style! 'open-look)
+                (set-theme! 'open-look-depth depth)
+                (let ([w (open-window "Probe" 'size '(300 . 200)
+                                      'pos '(100 . 100))]
+                      [other (open-window "Other" 'size '(100 . 80)
+                                          'pos '(600 . 400))])
+                  (focus-window! (if focus? w other))
+                  (steps 2)
+                  (let ([px (lambda (dx dy)
+                              (canvas-pixel (+ (window-x w) dx)
+                                            (+ (window-y w) dy)))])
+                    (let ([r (list (= (px 2 60) (color->pixel 'text))
+                                   (px 200 12))])
+                      (close-window! w)
+                      (close-window! other)
+                      (steps 1)
+                      r))))])
+         (let ([r (list (probe '3d #t) (probe '2d #t) (probe '3d #f))])
+           (reset-style!)
+           (set-style! 'mac)
+           (equal? r (list (list #t (color->pixel #xb7b7b7))
+                           (list #t (color->pixel #x000000))
+                           (list #f (color->pixel #xcccccc)))))))
