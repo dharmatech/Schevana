@@ -412,8 +412,7 @@
                       [(#\s) (boids-scatter! win)]
                       [(#\h) (toggle-rules! win)]
                       [(#\space) (set! running? (not running?))])
-                    (invalidate! win))
-             'close (lambda (win) (when rules-win (close-window! rules-win))))])
+                    (invalidate! win)))])
       ;; the rules show at first, as Niva's panel does. Moved to fit on
       ;; the desktop, they'd cover the flock: it moves left to clear them.
       (toggle-rules! win)
@@ -558,9 +557,9 @@
                      '(hint) "h hides this window · space pauses")
       (+ y gap (font-line-height 'ui-small) pad))))
 
-;; Opens the rules window for the flock in flock-win, beside it, and
-;; returns it; on-close is called when it closes. Its keys are the
-;; flock's.
+;; Opens the rules window for the flock in flock-win, beside it and above
+;; it, the flock's own: raised, minimized and closed with it. Returns it;
+;; on-close is called when it closes. Its keys are the flock's.
 (define (boids-open-rules flock-win on-close)
   (let ([ui (make-ui)]
         [shown #f])   ; the rules, the count and the threads it last drew
@@ -575,6 +574,7 @@
                     'pos (cons (+ (window-x flock-win) (window-w flock-win) 12)
                                (window-y flock-win))
                     'app #f
+                    'above flock-win
                     'draw (lambda (win w h)
                             (set! shown (now-shown))
                             (ui-begin! ui)

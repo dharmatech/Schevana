@@ -7,7 +7,7 @@
 
 (check "Boids 3D runs in its sandbox with the GPU's bundle, allowed by the \
         table, and nothing there waits for the GPU; its names and shaders \
-        stay there; its rules window is no app's"
+        stay there; its rules window is no app's, the flock's own"
        (let* ([held (environment-symbols (env-environment boids3d-box))]
               [world (environment-symbols *world-env*)]
               [win (boids3d)]
@@ -24,7 +24,8 @@
                        (memq 'boids3d-steer held)
                        (not (memq 'boids3d-steer world))
                        (eq? (window-app win) 'boids3d)
-                       (not (window-app rw)))])
+                       (not (window-app rw))
+                       (eq? (window-owner rw) win))])
          (close-window! win)
          ok))
 

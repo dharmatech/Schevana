@@ -554,9 +554,7 @@
                            (when (eq? button 'left) (springies-grab! win x y)))
              'mouse-move (lambda (win x y) (springies-pull! win x y))
              'mouse-up (lambda (win x y button)
-                         (when (eq? button 'left) (springies-let-go! win)))
-             'close (lambda (win)
-                      (when controls-win (close-window! controls-win))))])
+                         (when (eq? button 'left) (springies-let-go! win))))])
       (springies-choose! win 'ball)
       ;; the controls show at first. Moved to fit on the desktop, they'd
       ;; cover the box: it moves left to clear them.
@@ -685,8 +683,9 @@
                      '(hint) "h hides this window · drag a mass to pull it")
       (+ y gap (font-line-height 'ui-small) pad))))
 
-;; Opens the controls window for the model in box-win, beside it, and
-;; returns it; on-close is called when it closes. Its keys are the box's.
+;; Opens the controls window for the model in box-win, beside it and above
+;; it, the box's own: raised, minimized and closed with it. Returns it;
+;; on-close is called when it closes. Its keys are the box's.
 (define (springies-open-controls box-win on-close)
   (let ([ui (make-ui)]
         [shown #f])   ; what it last drew
@@ -700,6 +699,7 @@
                     'pos (cons (+ (window-x box-win) (window-w box-win) 12)
                                (window-y box-win))
                     'app #f
+                    'above box-win
                     'draw (lambda (win w h)
                             (set! shown (now-shown))
                             (ui-begin! ui)

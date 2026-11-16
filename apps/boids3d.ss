@@ -990,7 +990,6 @@
                        (set! closed? #t)
                        (when (eq? *boids3d-flock* win)
                          (set! *boids3d-flock* #f))
-                       (when rules-win (close-window! rules-win))
                        (gpu-buffer-release! (car buffers))
                        (gpu-buffer-release! (cdr buffers))
                        (gpu-buffer-release! (window-ref win 'shapes))
@@ -1144,7 +1143,8 @@
                      '(hint) "h hides this window · space pauses")
       (+ y gap (font-line-height 'ui-small) pad))))
 
-;; Opens the rules window for the flock in flock-win, beside it; on-close is
+;; Opens the rules window for the flock in flock-win, beside it and above
+;; it, the flock's own: raised, minimized and closed with it. on-close is
 ;; called when it closes. Its keys are the flock's.
 (define (boids3d-open-rules flock-win on-close)
   (let ([ui (make-ui)]
@@ -1159,6 +1159,7 @@
                     'pos (cons (+ (window-x flock-win) (window-w flock-win) 12)
                                (window-y flock-win))
                     'app #f
+                    'above flock-win
                     'draw (lambda (win w h)
                             (set! shown (now-shown))
                             (ui-begin! ui)

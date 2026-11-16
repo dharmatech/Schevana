@@ -9,7 +9,7 @@
 
 (check "Boids runs in its sandbox, holding its bundles, allowed by the table, \
         and its names stay there, its worklets too; its rules window is no \
-        app's"
+        app's, the flock's own"
        (let* ([held (environment-symbols (env-environment boids-box))]
               [world (environment-symbols *world-env*)]
               [win (boids)]
@@ -29,7 +29,8 @@
                                   'boids-steer!
                                   (env-environment boids-box)))
                        (eq? (window-app win) 'boids)
-                       (not (window-app rw)))])
+                       (not (window-app rw))
+                       (eq? (window-owner rw) win))])
          (close-window! win)
          ok))
 

@@ -8,7 +8,7 @@
 
 (check "Springies runs in its sandbox, holding its bundles, allowed by the \
         table, and its names stay there: pt is none of the world's; its \
-        controls window is no app's"
+        controls window is no app's, the box's own"
        (let* ([held (environment-symbols (env-environment springies-box))]
               [world (environment-symbols *world-env*)]
               [win (springies)]
@@ -22,7 +22,8 @@
                        (not (memq 'pt world)) (not (memq 'pt+ world))
                        (not (memq 'springies-step world))
                        (eq? (window-app win) 'springies)
-                       (not (window-app cw)))])
+                       (not (window-app cw))
+                       (eq? (window-owner cw) win))])
          (close-window! win)
          ok))
 
